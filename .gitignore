@@ -28,6 +28,10 @@ desktop.ini
 scratch/
 browser_recordings/
 html_artifacts/
+findings.md
+task_plan.md
+progress.md
+antigravity.md
 
 # --- Environment Configurations ---
 .env
@@ -129,7 +133,7 @@ docker-compose.override.yml
 /uploads/
 /media/
 
+
 # --- Documentation and Specifications ---
 docs/
 specs/
-

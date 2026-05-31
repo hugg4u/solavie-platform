@@ -1,0 +1,195 @@
+"""
+generate_kong_config.py
+Generates a declarative configuration file for Kong (kong.yml) dynamically,
+fetching the necessary public keys from Keycloak for JWT signature validation.
+"""
+import os
+import sys
+import logging
+from typing import Dict, Any
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+import yaml
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+# Environment Configuration
+KEYCLOAK_URL: str = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
+TENANT_ID: str = os.environ.get("TENANT_ID", "tenant-test-uuid")
+# Issuer URL that the token will contain (must exactly match Keycloak's generated token 'iss')
+KONG_ISSUER_URL: str = os.environ.get(
+    "KONG_ISSUER_URL", f"http://localhost/realms/{TENANT_ID}"
+)
+KONG_CONFIG_PATH: str = os.environ.get("KONG_CONFIG_PATH", "/etc/kong/kong.yml")
+
+# Rate limiting configuration
+RATE_LIMIT_MINUTE: int = int(os.environ.get("RATE_LIMIT_MINUTE", "200"))
+RATE_LIMIT_HOUR: int = int(os.environ.get("RATE_LIMIT_HOUR", "5000"))
+
+
+class KeycloakConnectionError(Exception):
+    """Exception raised when connection to Keycloak fails after retries."""
+    pass
+
+
+def get_requests_session() -> requests.Session:
+    """Creates a requests Session with retry logic."""
+    session = requests.Session()
+    # Retry on specific status codes and connection errors
+    retry_strategy = Retry(
+        total=15,  # 15 retries
+        backoff_factor=1.0,  # wait 1, 2, 4, 8, 16... seconds between retries
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def get_public_key(session: requests.Session) -> str:
+    """Fetches the realm's public key from Keycloak."""
+    url = f"{KEYCLOAK_URL}/realms/{TENANT_ID}/"
+    logger.info(f"Fetching public key from {url}")
+    
+    try:
+        response = session.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if "public_key" not in data:
+            logger.error("Response JSON does not contain 'public_key'.")
+            raise KeycloakConnectionError("Missing public_key in response")
+            
+        return str(data["public_key"])
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch public key from Keycloak: {e}")
+        raise KeycloakConnectionError(f"Connection failed: {e}") from e
+
+
+def format_public_key(key_string: str) -> str:
+    """Formats a base64 string into a valid PEM format public key."""
+    lines = ["-----BEGIN PUBLIC KEY-----"]
+    # wrap at 64 chars
+    lines.extend(key_string[i:i + 64] for i in range(0, len(key_string), 64))
+    lines.append("-----END PUBLIC KEY-----")
+    return "\n".join(lines) + "\n"
+
+
+def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
+    """Builds the declarative Kong configuration dictionary."""
+    return {
+        "_format_version": "3.0",
+        "_transform": True,
+        "services": [
+            {
+                "name": "auth-service",
+                "url": "http://keycloak:8080",
+                "routes": [
+                    {
+                        "name": "auth-route",
+                        "paths": ["/api/v1/auth"],
+                        "strip_path": True
+                    }
+                ]
+            }
+        ],
+        "plugins": [
+            {
+                "name": "jwt",
+                "config": {
+                    "key_claim_name": "iss",
+                    "claims_to_verify": ["exp"]
+                }
+            },
+            {
+                "name": "rate-limiting",
+                "config": {
+                    "policy": "redis",
+                    "redis": {
+                        "host": "redis",
+                        "port": 6379
+                    },
+                    "limit_by": "header",
+                    "header_name": "X-Tenant-ID",
+                    "minute": RATE_LIMIT_MINUTE,
+                    "hour": RATE_LIMIT_HOUR
+                }
+            },
+            {
+                "name": "cors",
+                "config": {
+                    "origins": ["*"],
+                    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                    "headers": ["Authorization", "Content-Type", "X-Tenant-ID"],
+                    "credentials": True,
+                    "max_age": 3600
+                }
+            },
+            {
+                "name": "prometheus",
+                "config": {
+                    "per_consumer": True,
+                    "status_code_metrics": True,
+                    "latency_metrics": True
+                }
+            }
+        ],
+        "consumers": [
+            {
+                "username": "keycloak_issuer"
+            }
+        ],
+        "jwt_secrets": [
+            {
+                "consumer": "keycloak_issuer",
+                "algorithm": "RS256",
+                "key": KONG_ISSUER_URL,
+                "rsa_public_key": public_key_pem
+            }
+        ]
+    }
+
+
+def generate_kong_yml(public_key_pem: str) -> None:
+    """Writes the generated configuration to the target YAML file."""
+    config = build_kong_config(public_key_pem)
+    
+    try:
+        # Ensure the directory exists
+        config_dir = os.path.dirname(KONG_CONFIG_PATH)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
+        
+        with open(KONG_CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, sort_keys=False)
+            
+        logger.info(f"Kong configuration generated successfully at '{KONG_CONFIG_PATH}'")
+    except IOError as e:
+        logger.error(f"Failed to write Kong config file: {e}")
+        sys.exit(1)
+
+
+def main() -> None:
+    session = get_requests_session()
+    try:
+        pub_key_raw = get_public_key(session)
+    except KeycloakConnectionError:
+        sys.exit(1)
+        
+    pub_key_pem = format_public_key(pub_key_raw)
+    generate_kong_yml(pub_key_pem)
+
+
+if __name__ == "__main__":
+    main()
