@@ -1,0 +1,46 @@
+# Logging & Observability — Content Service
+
+## Log Format: Structured JSON
+```json
+{
+  "timestamp": "2025-01-15T10:30:00.123Z",
+  "level": "info",
+  "service": "content",
+  "trace_id": "abc123",
+  "tenant_id": "tenant-uuid",
+  "message": "Content generated",
+  "context": {
+    "post_id": "post-uuid",
+    "platform": "facebook",
+    "quality_score": 0.82,
+    "generation_time_ms": 3500,
+    "model_used": "claude-sonnet",
+    "status": "draft"
+  }
+}
+```
+
+## Log Levels
+| Level | Khi nào | Ví dụ |
+|-------|---------|-------|
+| ERROR | AI Core fail, KB unreachable, DB write fail | `"Content generation failed: AI Core timeout"` |
+| WARN | Low quality score, regeneration needed | `"Quality score 0.55, needs revision"` |
+| INFO | Content generated, approved, published, rejected | `"Post approved by manager, scheduling..."` |
+| DEBUG | Full generated content, RAG context, quality check details | `"Quality issues: [brand_voice_mismatch]"` |
+
+## Prometheus Metrics
+```python
+content_generated_total: Counter ['platform', 'status'] # draft/approved/rejected/published
+content_generation_duration: Histogram ['platform']
+content_quality_score: Histogram [buckets: 0.0-1.0]
+content_approval_time: Histogram [] # time from draft to approved
+content_regeneration_total: Counter [] # quality < 0.7 → regenerate
+content_published_total: Counter ['platform']
+```
+
+## Alert Rules
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| GenerationFailing | generated{status=error} > 3 in 10m | warning |
+| LowQualityRate | quality_score < 0.7 for > 50% in 1h | info |
+| ApprovalBacklog | pending approvals > 20 | info |

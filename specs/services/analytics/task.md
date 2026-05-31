@@ -1,0 +1,83 @@
+# Task Checklist — ANALYTICS Service
+
+## Overview
+This document tracks the implementation checklist for **ANALYTICS Service** based on the system specifications.
+
+### Technical Stack & Configuration
+- **Language:** Java 21
+- **Framework:** Spring Boot 3
+- **Database:** PostgreSQL 16 + TimescaleDB extension
+- **Queue:** Kafka
+
+### Reference Specifications
+- [Requirements](file:///specs/solavie-system/services/analytics/requirements.md)
+- [Design](file:///specs/solavie-system/services/analytics/design.md)
+- [Logging](file:///specs/solavie-system/services/analytics/logging.md)
+- [Business Logic](file:///specs/solavie-system/services/analytics/business-logic.md)
+
+---
+
+## Tasks Checklist
+
+### Task 1: 1: Metrics Collection
+**Acceptance Criteria Implementation:**
+- [ ] AC 1.1: THE Analytics_Service SHALL thu thập engagement metrics: likes, comments, shares, reach, clicks
+- [ ] AC 1.2: THE Analytics_Service SHALL consume events từ Kafka (messages, posts, campaigns)
+- [ ] AC 1.3: THE Analytics_Service SHALL aggregate metrics per-channel, per-post, per-campaign
+- [ ] AC 1.4: Metrics SHALL cập nhật trong vòng 5 phút
+
+### Task 2: 2: Dashboard Metrics
+**Acceptance Criteria Implementation:**
+- [ ] AC 2.1: THE Analytics_Service SHALL cung cấp realtime metrics API
+- [ ] AC 2.2: THE Analytics_Service SHALL hỗ trợ custom date range filtering
+- [ ] AC 2.3: THE Analytics_Service SHALL hỗ trợ period comparison (this week vs last week)
+- [ ] AC 2.4: THE Analytics_Service SHALL cung cấp per-channel và cross-channel views
+
+### Task 3: 3: AI Insights
+**Acceptance Criteria Implementation:**
+- [ ] AC 3.1: THE Analytics_Service SHALL generate weekly insights report tự động (via AI Core)
+- [ ] AC 3.2: Insights SHALL include: top performing content, best posting times, audience trends
+- [ ] AC 3.3: THE Analytics_Service SHALL detect anomalies (sudden drops/spikes)
+
+### Task 4: 4: Report Export
+**Acceptance Criteria Implementation:**
+- [ ] AC 4.1: THE Analytics_Service SHALL export reports dạng PDF và CSV
+- [ ] AC 4.2: THE Analytics_Service SHALL hỗ trợ scheduled reports (weekly email)
+- [ ] AC 4.3: Reports SHALL customizable per-tenant
+
+### Task 5: Implement Business Logic Rules
+**Business Validations:**
+- [ ] Tổng quan vai trò: Consume events từ Kafka → lưu metrics vào TimescaleDB
+- [ ] Tổng quan vai trò: Aggregate metrics (realtime + daily/weekly)
+- [ ] Tổng quan vai trò: Generate AI insights (weekly report)
+- [ ] Tổng quan vai trò: Export reports (PDF/CSV)
+- [ ] Luồng 3: AI Weekly Insights: Messages received: {messages_received} ({messages_change}% vs last week)
+- [ ] Luồng 3: AI Weekly Insights: Messages sent: {messages_sent}
+- [ ] Luồng 3: AI Weekly Insights: Handoff rate: {handoff_rate}%
+- [ ] Luồng 3: AI Weekly Insights: Posts published: {posts_published}
+- [ ] Luồng 3: AI Weekly Insights: Top post engagement: {top_post_engagement}
+- [ ] Luồng 3: AI Weekly Insights: Average response time: {avg_response_time}ms
+- [ ] Luồng 3: AI Weekly Insights: New leads: {new_leads}
+- [ ] Luồng 3: AI Weekly Insights: Hot leads (score>80): {hot_leads}
+- [ ] Luồng 3: AI Weekly Insights: Key highlights (what went well)
+- [ ] Luồng 3: AI Weekly Insights: Areas of concern (what needs attention)
+- [ ] Luồng 3: AI Weekly Insights: Recommendations (specific actions to take)
+- [ ] Luồng 3: AI Weekly Insights: Best posting times based on engagement data
+
+## Verification & Testing
+
+### Automated Tests
+- [ ] Write unit tests verifying core logic of each Requirement.
+- [ ] Write integration tests for API endpoints.
+- [ ] Verify tenant isolation by querying data across different tenant IDs.
+
+### Manual Verification
+- [ ] Deploy service to local Docker / Kubernetes cluster.
+- [ ] Perform end-to-end tests using the Gateway (Kong) routing.
+
+## Done When
+
+- [ ] All Acceptance Criteria for Requirements are implemented and verified.
+- [ ] Unit test coverage is >80%.
+- [ ] Logs are formatted as structured JSON and trace context is propagated.
+- [ ] Tenant isolation (RLS / metadata filtering) is strictly enforced.

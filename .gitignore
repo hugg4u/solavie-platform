@@ -135,5 +135,4 @@ docker-compose.override.yml
 
 
 # --- Documentation and Specifications ---
-docs/
-specs/
+.codegraph

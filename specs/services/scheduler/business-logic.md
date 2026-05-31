@@ -1,0 +1,299 @@
+# Business Logic — Scheduler Service
+
+## Tổng quan vai trò
+
+Scheduler Service quản lý **thời gian publish** và **automation flows**:
+1. Nhận content đã approved → lên lịch publish
+2. Khi đến giờ → trigger Channel Connector publish
+3. Quản lý automation workflows (trigger → action chains)
+4. Retry logic khi publish fail
+
+## Luồng xử lý chi tiết
+
+### Luồng 1: Schedule Post
+
+```
+Content approved (Kafka: content.approved)
+hoặc User tạo schedule thủ công
+│
+▼
+┌─────────────────────────────────┐
+│ 1. CREATE SCHEDULE              │
+│    - post_id, channel_ids       │
+│    - scheduled_at (UTC)         │
+│    - timezone (tenant config)   │
+│    - status = 'pending'         │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│ 2. REGISTER QUARTZ JOB         │
+│    - Create trigger at          │
+│      scheduled_at time          │
+│    - Job: PublishJob            │
+│    - Store schedule_id in       │
+│      job data                   │
+└────────────┬────────────────────┘
+             │
+             ▼ (khi đến giờ)
+┌─────────────────────────────────┐
+│ 3. QUARTZ FIRES JOB            │
+│    - Load schedule from DB      │
+│    - Verify still pending       │
+│    - Set status = 'publishing'  │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│ 4. PUBLISH TO KAFKA             │
+│    - Topic: scheduler.post.due  │
+│    - Channel Connector consumes │
+│      and publishes to platform  │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│ 5. WAIT FOR CONFIRMATION        │
+│    - Listen for                 │
+│      channel.message.sent event │
+│    - Timeout: 60s              │
+└────────────┬────────────────────┘
+             │
+         ┌───┴───┐
+         ▼       ▼
+      Success   Failure
+         │       │
+         ▼       ▼
+┌──────────┐  ┌──────────────────┐
+│status =  │  │ RETRY LOGIC      │
+│'published'│  │ retry_count++    │
+└──────────┘  │ if < 3 → reschedule│
+              │ if >= 3 → 'failed'│
+              │ + notify user     │
+              └──────────────────┘
+```
+
+**Quartz Job Implementation:**
+
+```java
+@Component
+public class PublishJob implements Job {
+    
+    @Override
+    public void execute(JobExecutionContext context) {
+        String scheduleId = context.getJobDetail()
+            .getJobDataMap().getString("scheduleId");
+        
+        Schedule schedule = scheduleRepo.findById(scheduleId)
+            .orElseThrow(() -> new ScheduleNotFound(scheduleId));
+        
+        // Verify still pending (might have been cancelled)
+        if (!schedule.getStatus().equals("pending")) {
+            return; // Skip
+        }
+        
+        // Update status
+        schedule.setStatus("publishing");
+        scheduleRepo.save(schedule);
+        
+        // Publish Kafka event
+        kafkaTemplate.send("scheduler.post.due", ScheduleEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .tenantId(schedule.getTenantId())
+            .scheduleId(schedule.getId())
+            .postId(schedule.getPostId())
+            .channelIds(schedule.getChannelIds())
+            .action("publish")
+            .build());
+    }
+}
+
+// Polling job (backup): chạy mỗi 30s kiểm tra schedules bị miss
+// TỐI ƯU: chỉ query trong "missed window" (2-5 phút) thay vì TẤT CẢ pending
+// Cần index: CREATE INDEX idx_schedules_pending_time ON schedules(status, scheduled_at) WHERE status='pending'
+@Scheduled(fixedRate = 30000)
+public void checkMissedSchedules() {
+    Instant now = Instant.now();
+    List<Schedule> missed = scheduleRepo.findMissedInWindow(
+        now.minus(Duration.ofMinutes(5)),  // không quá cũ
+        now.minus(Duration.ofMinutes(2)),  // grace period 2 min
+        "pending",
+        1000  // LIMIT 1000 — tránh load toàn bộ
+    );
+
+    for (Schedule s : missed) {
+        publishSchedule(s);
+    }
+}
+// Query: WHERE status='pending' AND scheduled_at BETWEEN (now-5m) AND (now-2m) LIMIT 1000
+// Giảm 80% chi phí query so với quét toàn bộ pending schedules
+```
+
+### Luồng 2: Retry Logic
+
+```java
+@KafkaListener(topics = "channel.publish.result")
+public void handlePublishResult(PublishResultEvent event) {
+    Schedule schedule = scheduleRepo.findById(event.getScheduleId());
+    
+    if (event.getStatus().equals("success")) {
+        schedule.setStatus("published");
+        schedule.setPublishedAt(Instant.now());
+        scheduleRepo.save(schedule);
+        
+        // Notify content service
+        kafkaTemplate.send("content.published", ...);
+        
+    } else {
+        // Failed
+        schedule.setRetryCount(schedule.getRetryCount() + 1);
+        schedule.setLastError(event.getError());
+        
+        if (schedule.getRetryCount() >= schedule.getMaxRetries()) {
+            // All retries exhausted
+            schedule.setStatus("failed");
+            scheduleRepo.save(schedule);
+            
+            // Notify user
+            kafkaTemplate.send("scheduler.post.failed", FailureEvent.builder()
+                .tenantId(schedule.getTenantId())
+                .scheduleId(schedule.getId())
+                .error(event.getError())
+                .retryCount(schedule.getRetryCount())
+                .build());
+        } else {
+            // Retry with exponential backoff
+            Duration delay = Duration.ofSeconds(
+                (long) Math.pow(2, schedule.getRetryCount()) * 30 // 30s, 60s, 120s
+            );
+            Instant retryAt = Instant.now().plus(delay);
+            
+            schedule.setStatus("pending");
+            schedule.setScheduledAt(retryAt);
+            scheduleRepo.save(schedule);
+            
+            // Re-register Quartz job
+            rescheduleQuartzJob(schedule, retryAt);
+        }
+    }
+}
+```
+
+### Luồng 3: Automation Flows
+
+```
+Automation Flow = Trigger + Actions chain
+
+Trigger types:
+- schedule: Cron expression (e.g., "every Monday 9am")
+- event: Kafka event (e.g., "new lead score > 80")
+- condition: Data condition (e.g., "inbox unread > 50")
+
+Action types:
+- generate_content: Call Content Service AI generate
+- publish_post: Schedule a post
+- send_notification: Notify team
+- update_crm: Tag contacts
+```
+
+```java
+@Component
+public class AutomationEngine {
+    
+    // Evaluate automation triggers
+    @Scheduled(fixedRate = 60000) // Every minute
+    public void evaluateScheduleTriggers() {
+        List<AutomationFlow> flows = flowRepo.findEnabled();
+        
+        for (AutomationFlow flow : flows) {
+            if (flow.getTriggerType().equals("schedule")) {
+                CronExpression cron = CronExpression.parse(
+                    flow.getTriggerConfig().get("cron").asText()
+                );
+                if (cron.matches(Instant.now())) {
+                    executeFlow(flow);
+                }
+            }
+        }
+    }
+    
+    // Execute automation flow
+    public void executeFlow(AutomationFlow flow) {
+        AutomationExecution execution = new AutomationExecution();
+        execution.setFlowId(flow.getId());
+        execution.setTenantId(flow.getTenantId());
+        execution.setTriggeredAt(Instant.now());
+        
+        try {
+            JsonNode actions = flow.getActions(); // Ordered list
+            
+            for (JsonNode action : actions) {
+                String type = action.get("type").asText();
+                
+                switch (type) {
+                    case "generate_content":
+                        // Call Content Service
+                        contentClient.generate(
+                            flow.getTenantId(),
+                            action.get("topic").asText(),
+                            action.get("platform").asText()
+                        );
+                        break;
+                        
+                    case "publish_post":
+                        // Create schedule
+                        createSchedule(flow.getTenantId(), action);
+                        break;
+                        
+                    case "send_notification":
+                        kafkaTemplate.send("notification.send", ...);
+                        break;
+                }
+            }
+            
+            execution.setStatus("success");
+        } catch (Exception e) {
+            execution.setStatus("failed");
+            execution.setError(e.getMessage());
+        }
+        
+        executionRepo.save(execution);
+    }
+}
+```
+
+---
+
+## Timezone Handling
+
+```java
+public class TimezoneHelper {
+    /**
+     * Tất cả thời gian trong DB lưu UTC.
+     * Khi hiển thị cho user → convert sang tenant timezone.
+     * Khi user tạo schedule → convert từ tenant timezone sang UTC.
+     */
+    public Instant toUTC(LocalDateTime localTime, String timezone) {
+        ZoneId zone = ZoneId.of(timezone); // e.g., "Asia/Ho_Chi_Minh"
+        return localTime.atZone(zone).toInstant();
+    }
+    
+    public LocalDateTime toLocal(Instant utcTime, String timezone) {
+        ZoneId zone = ZoneId.of(timezone);
+        return utcTime.atZone(zone).toLocalDateTime();
+    }
+}
+```
+
+---
+
+## Error Handling
+
+| Scenario | Xử lý |
+|----------|--------|
+| Quartz job miss (server restart) | Polling job catches missed schedules within 2 min |
+| Channel Connector unavailable | Retry 3x exponential backoff, then fail + notify |
+| Post deleted before publish time | Check post exists before publish, skip if deleted |
+| Timezone invalid | Default to UTC, log warning |
+| Automation flow action fails | Log error, continue next action (partial success) |
+| Concurrent schedule modification | Optimistic locking (version column) |

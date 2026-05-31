@@ -1,0 +1,457 @@
+# Business Logic — Chatbot Service
+
+## Tổng quan vai trò (CẬP NHẬT)
+
+Chatbot Service giờ là **thin orchestrator** — nó quản lý conversation state và delegate AI logic cho AI Core (ReAct Agent):
+1. Nhận message từ Messaging (gRPC)
+2. Load conversation state (checkpoint)
+3. Gọi AI Core agent (use_case="chatbot") — AI Core tự handle: intent, RAG, response, confidence
+4. Nhận kết quả → return cho Messaging
+5. Lưu checkpoint
+
+**AI Core (ReAct Agent) giờ handle:**
+- Intent classification (via reasoning)
+- RAG retrieval (via knowledge_base_search tool)
+- Response generation (via LLM)
+- Confidence evaluation (built into agent loop)
+- Handoff decision (via handoff_to_agent tool)
+- Sentiment analysis (via analyze_sentiment tool)
+
+**Chatbot Service vẫn giữ:**
+- gRPC server interface (Messaging gọi vào)
+- Conversation state management (LangGraph checkpoints)
+- Timeout handling (5s max → auto handoff)
+- Per-tenant chatbot config (confidence threshold, enabled languages)
+- Metrics collection (intent distribution, handoff rate)
+
+> **Lưu ý kiến trúc:** Workflow chi tiết bên dưới là logic mà **AI Core ReAct Agent** thực thi khi nhận `use_case="chatbot"`. Chatbot Service chỉ orchestrate (state + timeout + forward). Phần này document để team hiểu luồng đầy đủ. Tuân theo `shared/standards.md` cho confidence scale (handoff < 0.70) và handoff triggers.
+
+## Tối ưu đã áp dụng (Optimizations)
+
+### Parallel Retrieval (giảm latency)
+Thay vì tuần tự `classify → embed → search`, chạy SONG SONG cả 3 ngay từ đầu:
+
+```python
+# Tối ưu: 3 tasks parallel ngay khi nhận message
+intent_task = asyncio.create_task(classify_intent(msg))
+embed_task = asyncio.create_task(embed_query(msg))
+search_task = asyncio.create_task(retrieve_knowledge(msg))  # embed internally + search
+
+intent, _, docs = await asyncio.gather(intent_task, embed_task, search_task)
+# Tiết kiệm ~50ms (search không chờ embed xong ở bước riêng)
+```
+
+Lưu ý: nếu intent = chitchat/complaint, kết quả search bị bỏ qua (chấp nhận lãng phí 1 search call để đổi lấy latency thấp cho 80% case faq/sales/support).
+
+## LangGraph Workflow Chi Tiết
+
+```
+Message đến (gRPC từ Messaging)
+│
+▼
+┌─────────────────────────────────────────────┐
+│ PARALLEL EXECUTION (giảm 40% latency)       │
+│                                             │
+│  ┌─────────────────┐  ┌─────────────────┐  │
+│  │ Classify Intent │  │  Embed Query    │  │
+│  │ + Detect Lang   │  │  (for RAG)      │  │
+│  │ ~300ms          │  │  ~100ms         │  │
+│  └────────┬────────┘  └────────┬────────┘  │
+│           │                     │           │
+└───────────┼─────────────────────┼───────────┘
+            │                     │
+            ▼                     ▼
+┌─────────────────────────────────────────────┐
+│ ROUTE BY INTENT                             │
+│                                             │
+│  intent=complaint/angry → HANDOFF ngay      │
+│  intent=chitchat → Generate chitchat reply  │
+│  intent=faq/sales/support → RAG pipeline    │
+└────────────┬────────────────────────────────┘
+             │ (faq/sales/support)
+             ▼
+┌─────────────────────────────────┐
+│ RETRIEVE KNOWLEDGE              │
+│  - Call Knowledge Base REST API │
+│  - Hybrid search + rerank      │
+│  - Get top-5 relevant docs     │
+│  ~50ms                          │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│ CHECK RETRIEVAL QUALITY         │
+│  - Top doc score >= 0.5?       │
+│  - If NO docs relevant →       │
+│    HANDOFF (can't answer)      │
+└────────────┬────────────────────┘
+             │ (docs found)
+             ▼
+┌─────────────────────────────────┐
+│ GENERATE RESPONSE               │
+│  - Call AI Core gRPC            │
+│  - Include: system prompt +     │
+│    context docs + history       │
+│  - Request confidence score     │
+│  ~1200ms                        │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│ EVALUATE CONFIDENCE             │
+│  - confidence >= 0.7 → REPLY   │
+│  - confidence < 0.7 → HANDOFF  │
+│  - "không biết" in response    │
+│    → force HANDOFF             │
+└────────────┬────────────────────┘
+             │
+         ┌───┴───┐
+         ▼       ▼
+      REPLY   HANDOFF
+```
+
+## Chi tiết từng Node
+
+### Node 1: Classify Intent (parallel)
+
+```python
+async def classify_intent(state: ChatState) -> dict:
+    """
+    Phân loại ý định khách hàng.
+    Chạy SONG SONG với embed_query để tiết kiệm thời gian.
+    
+    Intents:
+    - faq: Hỏi thông tin (giờ mở cửa, chính sách, etc.)
+    - sales: Quan tâm mua hàng (hỏi giá, so sánh, etc.)
+    - support: Cần hỗ trợ kỹ thuật (lỗi, không hoạt động, etc.)
+    - complaint: Phàn nàn, tức giận → HANDOFF NGAY
+    - chitchat: Chào hỏi, nói chuyện phiếm
+    """
+    last_message = state["messages"][-1]["content"]
+    
+    # Gọi AI Core (model rẻ, nhanh)
+    response = await ai_core_client.complete(
+        tenant_id=state["tenant_id"],
+        use_case="classification",
+        system_prompt=INTENT_CLASSIFICATION_PROMPT,
+        messages=[{"role": "user", "content": last_message}],
+        max_tokens=50,
+        temperature=0.0,
+    )
+    
+    # Parse result
+    result = json.loads(response.content)
+    # {"intent": "faq", "language": "vi", "sentiment": "neutral"}
+    
+    return {
+        "intent": result["intent"],
+        "language": result["language"],
+        "sentiment": result["sentiment"],
+    }
+
+INTENT_CLASSIFICATION_PROMPT = """Classify the customer message.
+Return JSON only: {"intent": "faq|sales|support|complaint|chitchat", "language": "vi|en|...", "sentiment": "positive|neutral|negative|angry"}
+Rules:
+- If customer is angry, frustrated, or complaining → intent=complaint
+- If asking about price, buying, ordering → intent=sales
+- If greeting, small talk → intent=chitchat
+- If reporting a problem, error → intent=support
+- Otherwise → intent=faq"""
+```
+
+### Node 2: Embed Query (parallel)
+
+```python
+async def embed_query(state: ChatState) -> dict:
+    """
+    Embed câu hỏi thành vector để search Knowledge Base.
+    Chạy SONG SONG với classify_intent.
+    Cache embedding nếu câu hỏi giống nhau.
+    """
+    query = state["messages"][-1]["content"]
+    
+    # Check cache first
+    cache_key = f"embed:{hashlib.md5(query.encode()).hexdigest()}"
+    cached = await redis.get(cache_key)
+    if cached:
+        return {"query_embedding": json.loads(cached)}
+    
+    # Call AI Core embed
+    response = await ai_core_client.embed(
+        tenant_id=state["tenant_id"],
+        texts=[query],
+        dimensions=512,
+    )
+    
+    embedding = response.embeddings[0].values
+    
+    # Cache for 1 hour
+    await redis.setex(cache_key, 3600, json.dumps(embedding))
+    
+    return {"query_embedding": embedding}
+```
+
+### Node 3: Route by Intent
+
+```python
+def route_after_intent(state: ChatState) -> str:
+    """
+    Quyết định đi đâu tiếp theo dựa trên intent + sentiment.
+    
+    RULE QUAN TRỌNG:
+    - complaint hoặc angry → HANDOFF NGAY, không cần RAG
+    - chitchat → generate simple reply, không cần RAG
+    - faq/sales/support → cần RAG để trả lời chính xác
+    """
+    if state["intent"] == "complaint" or state["sentiment"] == "angry":
+        return "handoff"  # Không bao giờ để bot trả lời khách đang giận
+    
+    if state["intent"] == "chitchat":
+        return "chitchat"  # Chào hỏi đơn giản, không cần knowledge
+    
+    return "retrieve"  # Cần tìm thông tin từ KB
+```
+
+### Node 4: Retrieve Knowledge
+
+```python
+async def retrieve_knowledge(state: ChatState) -> dict:
+    """
+    Gọi Knowledge Base service để tìm thông tin relevant.
+    
+    Flow:
+    1. Call KB hybrid search API
+    2. KB thực hiện: vector search + BM25 + rerank
+    3. Trả về top-5 documents
+    4. Kiểm tra quality: nếu top score < 0.5 → không có info → handoff
+    """
+    response = await http_client.post(
+        f"{KB_URL}/api/v1/search",
+        json={
+            "query": state["messages"][-1]["content"],
+            "tenant_id": state["tenant_id"],
+            "top_k": 5,
+        }
+    )
+    
+    results = response.json()["results"]
+    
+    # Quality check: nếu không tìm được gì relevant
+    if not results or results[0]["score"] < 0.5:
+        return {
+            "context_docs": [],
+            "retrieval_quality": "no_relevant_docs",
+        }
+    
+    return {
+        "context_docs": results,
+        "retrieval_quality": "good",
+    }
+```
+
+### Node 5: Generate Response
+
+```python
+async def generate_response(state: ChatState) -> dict:
+    """
+    Gọi AI Core để generate response dựa trên context.
+    
+    QUAN TRỌNG:
+    - Chỉ trả lời dựa trên context (không hallucinate)
+    - Yêu cầu LLM trả về confidence score
+    - Nếu context không đủ → LLM phải nói "không biết" → confidence thấp
+    """
+    # Nếu không có docs relevant → handoff ngay
+    if state["retrieval_quality"] == "no_relevant_docs":
+        return {
+            "response": "",
+            "confidence": 0.0,
+            "action": "handoff",
+        }
+    
+    # Build context from retrieved docs
+    context = "\n---\n".join([
+        doc["content"][:500]  # Truncate mỗi doc 500 chars
+        for doc in state["context_docs"][:3]  # Top 3 only
+    ])
+    
+    # Get compressed history
+    history = state["messages"][-10:]  # Last 10 messages
+    
+    # Call AI Core via gRPC
+    response = await ai_core_client.complete(
+        tenant_id=state["tenant_id"],
+        use_case="chatbot",
+        system_prompt=CHATBOT_SYSTEM_PROMPT,
+        messages=[
+            {"role": "system", "content": f"Context:\n{context}"},
+            *history,
+        ],
+        max_tokens=300,
+        temperature=0.3,
+    )
+    
+    # Parse structured response
+    parsed = json.loads(response.content)
+    # {"text": "Sản phẩm A giá 500k ạ.", "confidence": 0.85}
+    
+    return {
+        "response": parsed["text"],
+        "confidence": parsed["confidence"],
+    }
+
+CHATBOT_SYSTEM_PROMPT = """You are a customer service assistant.
+Language: {language}
+
+CRITICAL RULES:
+1. Answer ONLY based on the provided Context
+2. If the Context does not contain the answer, respond with:
+   {{"text": "", "confidence": 0.0}}
+3. NEVER make up information
+4. Be concise (2-3 sentences max)
+5. Match the customer's language
+
+Return JSON: {{"text": "your answer", "confidence": 0.0-1.0}}
+- confidence 0.9-1.0: Answer is directly in context
+- confidence 0.7-0.8: Answer is implied by context
+- confidence 0.0-0.6: Not sure / not in context"""
+```
+
+### Node 6: Evaluate Confidence & Decide Action
+
+```python
+def evaluate_and_decide(state: ChatState) -> dict:
+    """
+    Quyết định cuối cùng: reply hay handoff.
+    
+    NGUYÊN TẮC VÀNG: Thà handoff nhầm còn hơn trả lời sai.
+    Sai 1 câu = mất khách. Handoff = khách vẫn được hỗ trợ.
+    """
+    confidence = state["confidence"]
+    response = state["response"]
+    
+    # Force handoff conditions
+    if confidence < 0.7:
+        return {"action": "handoff"}
+    
+    if not response or len(response.strip()) < 5:
+        return {"action": "handoff"}
+    
+    # Check for "I don't know" patterns
+    dont_know_patterns = [
+        "tôi không biết", "không có thông tin", "i don't know",
+        "i'm not sure", "không rõ", "chưa có thông tin",
+    ]
+    if any(p in response.lower() for p in dont_know_patterns):
+        return {"action": "handoff"}
+    
+    # All checks passed → reply
+    return {"action": "reply"}
+```
+
+### Node 7: Chitchat Response
+
+```python
+async def generate_chitchat(state: ChatState) -> dict:
+    """
+    Trả lời chitchat đơn giản (chào hỏi, cảm ơn, etc.)
+    Không cần RAG, dùng model rẻ nhất.
+    """
+    response = await ai_core_client.complete(
+        tenant_id=state["tenant_id"],
+        use_case="chatbot",
+        system_prompt="You are a friendly assistant. Respond briefly to greetings and small talk. Language: " + state["language"],
+        messages=state["messages"][-3:],  # Only last 3 messages
+        max_tokens=100,
+        temperature=0.5,
+    )
+    
+    return {
+        "response": response.content,
+        "confidence": 0.95,  # Chitchat always high confidence
+        "action": "reply",
+    }
+```
+
+---
+
+## Conversation State (LangGraph Checkpoint)
+
+```python
+class ChatState(TypedDict):
+    # Input
+    tenant_id: str
+    conversation_id: str
+    messages: Annotated[list, operator.add]  # Append-only
+    
+    # Processing
+    intent: str                    # faq/sales/support/complaint/chitchat
+    language: str                  # vi/en/...
+    sentiment: str                 # positive/neutral/negative/angry
+    query_embedding: list[float]   # 512-dim vector
+    context_docs: list[dict]       # RAG results
+    retrieval_quality: str         # good/no_relevant_docs
+    
+    # Output
+    response: str                  # Generated text
+    confidence: float              # 0.0 - 1.0
+    action: str                    # reply/handoff/clarify
+```
+
+**Checkpoint persistence:**
+- Mỗi conversation có 1 checkpoint trong PostgreSQL
+- Khi khách reply tiếp → load checkpoint → resume graph
+- Cho phép multi-turn conversation với context
+
+---
+
+## Timeout & Fallback
+
+```python
+async def process_with_timeout(state: ChatState) -> ChatResponse:
+    """
+    Toàn bộ pipeline phải hoàn thành trong 5s.
+    Nếu timeout → handoff ngay.
+    """
+    try:
+        result = await asyncio.wait_for(
+            self.graph.ainvoke(state),
+            timeout=5.0
+        )
+        return result
+    except asyncio.TimeoutError:
+        # Timeout → handoff
+        return ChatResponse(
+            response_text="",
+            confidence_score=0.0,
+            action=Action.HANDOFF,
+            intent="timeout",
+            sentiment="unknown",
+        )
+    except Exception as e:
+        # Any error → handoff (safe fallback)
+        logger.error(f"Chatbot error: {e}")
+        return ChatResponse(
+            response_text="",
+            confidence_score=0.0,
+            action=Action.HANDOFF,
+            intent="error",
+            sentiment="unknown",
+        )
+```
+
+---
+
+## Performance Budget (< 2000ms total)
+
+| Step | Budget | Actual | Notes |
+|------|--------|--------|-------|
+| gRPC receive | 10ms | ~5ms | Protobuf deserialization |
+| Classify intent | 300ms | ~250ms | GPT-4o-mini, cached prompt |
+| Embed query | 100ms | ~80ms | text-embedding-3-small (parallel with classify) |
+| **Parallel total** | **300ms** | **~250ms** | Max of classify/embed |
+| KB search | 50ms | ~40ms | Hybrid + rerank |
+| Generate response | 1200ms | ~1000ms | GPT-4o-mini, optimized context |
+| Evaluate + decide | 5ms | ~2ms | Local logic |
+| gRPC respond | 10ms | ~5ms | Protobuf serialization |
+| **Total** | **1575ms** | **~1300ms** | Well under 2s |

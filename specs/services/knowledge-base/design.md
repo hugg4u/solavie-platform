@@ -1,0 +1,245 @@
+# Design — Knowledge Base Service
+
+## Overview
+
+Dịch vụ RAG pipeline và embedding — Python 3.12, FastAPI, Port 8004, PostgreSQL (knowledge_db), Qdrant. Ingestion pipeline (parse PDF/DOCX/TXT/MD → semantic chunking 256-512 tokens → embed text-embedding-3-small 512 dims → store Qdrant), hybrid search (dense vector + BM25 sparse + RRF merge), cross-encoder reranking (top-20 → top-5), int8 quantization (< 10ms p95).
+
+## Components and Interfaces
+
+Xem **Architecture**, **API Design**, **Chunking Strategy**, và **Search Pipeline** bên dưới.
+| Component | Technology |
+|-----------|-----------|
+| Runtime | Python 3.12 |
+| Framework | FastAPI |
+| Vector DB | Qdrant |
+| Database | PostgreSQL 16 |
+| ORM | SQLAlchemy 2 + asyncpg |
+| Embedding | OpenAI text-embedding-3-small (512 dims) |
+| Reranker | BAAI/bge-reranker-v2-m3 (local) |
+| Document Parsing | unstructured, PyPDF2, python-docx |
+| Object Storage | MinIO (boto3) |
+| Cache | Redis |
+| Testing | pytest + pytest-asyncio |
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph "Knowledge Base Service"
+        API["FastAPI (port 8004)"]
+        INGEST["Ingestion Pipeline"]
+        SEARCH["Search Engine"]
+        
+        subgraph "Ingestion"
+            PARSE["Document Parser"]
+            CHUNK["Semantic Chunker"]
+            EMBED["Embedding Generator"]
+        end
+        
+        subgraph "Search"
+            DENSE["Dense Search (Vector)"]
+            SPARSE["Sparse Search (BM25)"]
+            MERGE["RRF Merge"]
+            RERANK["Cross-Encoder Reranker"]
+        end
+    end
+
+    subgraph "Storage"
+        PG["PostgreSQL"]
+        QD["Qdrant"]
+        MINIO["MinIO"]
+        REDIS["Redis (embed cache)"]
+    end
+
+    API --> INGEST & SEARCH
+    PARSE --> CHUNK --> EMBED
+    EMBED --> QD & PG
+    PARSE --> MINIO
+    
+    DENSE --> QD
+    SPARSE --> QD
+    DENSE & SPARSE --> MERGE --> RERANK
+    EMBED --> REDIS
+```
+
+## API Design
+
+```
+POST   /api/v1/documents              — Upload document
+GET    /api/v1/documents              — List documents (per tenant)
+GET    /api/v1/documents/:id          — Get document detail + status
+DELETE /api/v1/documents/:id          — Delete document + embeddings
+POST   /api/v1/documents/:id/reindex  — Re-process document
+GET    /api/v1/documents/:id/chunks   — View chunks
+
+POST   /api/v1/search                 — Hybrid search query
+POST   /api/v1/search/embed           — Get embedding for text (internal)
+```
+
+## Data Models
+
+```sql
+CREATE TABLE documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    filename VARCHAR(500) NOT NULL,
+    file_type VARCHAR(20) NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    storage_path TEXT NOT NULL,
+    chunk_count INT DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+    error_message TEXT,
+    metadata JSONB DEFAULT '{}',
+    uploaded_by UUID NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE chunks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    chunk_index INT NOT NULL,
+    content TEXT NOT NULL,
+    token_count INT NOT NULL,
+    qdrant_point_id VARCHAR(255),
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_docs_tenant ON documents(tenant_id, status);
+CREATE INDEX idx_chunks_doc ON chunks(document_id, chunk_index);
+CREATE INDEX idx_chunks_tenant ON chunks(tenant_id);
+```
+
+## Qdrant Collection Config
+
+```python
+COLLECTION_CONFIG = {
+    "vectors": {
+        "size": 512,
+        "distance": "Cosine",
+        "on_disk": False,  # RAM for speed
+    },
+    "sparse_vectors": {
+        "bm25": {}  # For hybrid search
+    },
+    "hnsw_config": {
+        "m": 16,
+        "ef_construct": 128,
+        "full_scan_threshold": 10000,
+    },
+    "quantization_config": {
+        "scalar": {
+            "type": "int8",
+            "quantile": 0.99,
+            "always_ram": True,
+        }
+    }
+}
+# Result: 1M vectors × 512 dims × int8 ≈ 500MB RAM
+# Search latency: p95 < 10ms
+```
+
+## Chunking Strategy
+
+```python
+class ChunkingConfig:
+    CHUNK_SIZE = 400          # tokens
+    CHUNK_OVERLAP = 80        # tokens (20%)
+    SIMILARITY_THRESHOLD = 0.75  # for semantic boundary detection
+    
+    STRATEGIES = {
+        "faq": "chunk_by_qa_pairs",      # Each Q&A = 1 chunk
+        "product": "chunk_by_sections",   # Name, desc, price, specs
+        "general": "semantic_chunk",      # Cosine similarity breakpoints
+    }
+```
+
+## Search Pipeline
+
+```python
+async def hybrid_search(query: str, tenant_id: str, top_k: int = 5):
+    # 1. Embed query (cached)
+    query_vector = await get_cached_embedding(query)
+    
+    # 2. Dense search (vector similarity)
+    dense_results = await qdrant.search(
+        collection=f"kb_{tenant_id}",
+        query_vector=query_vector,
+        limit=20
+    )
+    
+    # 3. Sparse search (BM25)
+    sparse_results = await qdrant.search(
+        collection=f"kb_{tenant_id}",
+        query_vector=sparse_encode(query),
+        using="bm25",
+        limit=20
+    )
+    
+    # 4. Merge with RRF
+    merged = reciprocal_rank_fusion(dense_results, sparse_results, k=60)
+    
+    # 5. Rerank top-20 → top-5
+    reranked = await reranker.rank(
+        query=query,
+        documents=merged[:20],
+        top_k=top_k
+    )
+    
+    return reranked
+```
+
+## Performance Targets
+
+| Metric | Target | How |
+|--------|--------|-----|
+| Vector search | < 10ms p95 | int8 quantization + RAM + 512 dims |
+| Embedding throughput | > 1000 docs/min | Batch 100 + async |
+| RAG accuracy | > 85% | Hybrid + rerank |
+| Reranking | < 30ms | Local model, GPU optional |
+| Embedding cache hit | > 60% | Redis TTL 1h |
+
+
+## Correctness Properties
+
+### Property 1: Tenant Isolation
+**Validates: Requirements 4.1**
+Moi query va operation phai filter theo tenant_id tu JWT claims. Khong co cross-tenant data leakage o bat ky tang nao (DB, Kafka, Redis, Qdrant, MinIO).
+
+### Property 2: Idempotency
+**Validates: Requirements 3.1**
+Moi write operation phai co idempotency key de tranh duplicate processing khi retry. Kafka consumer phai idempotent.
+
+### Property 3: At-least-once Delivery
+**Validates: Requirements 3.1**
+Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
+
+### Property 4: Circuit Breaker Correctness
+**Validates: Requirements 5.1**
+Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
+
+### Property 5: Data Consistency
+**Validates: Requirements 3.1**
+Distributed transactions dung Saga pattern voi compensating actions khi rollback. Moi destructive action ghi audit.events Kafka topic.
+## Error Handling
+
+| Scenario | Strategy |
+|----------|----------|
+| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
+| Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
+| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
+| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
+| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
+| Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
+
+## Testing Strategy
+
+| Layer | Tool | Coverage Target |
+|-------|------|----------------|
+| Unit Tests | Jest (Node.js) / pytest (Python) / JUnit 5 (Java) | > 80% business logic |
+| Integration Tests | Testcontainers (PostgreSQL, Redis, Kafka) | Happy path + error paths |
+| Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
+| Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
+| Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |

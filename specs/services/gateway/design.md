@@ -1,0 +1,387 @@
+# Design — Gateway (Kong)
+
+## Overview
+
+API Gateway tập trung — Kong 3.7+, DB-less mode, Port 8000/8443 (proxy), 8001 (admin). SSL termination, OIDC authentication (Keycloak), rate limiting per-tenant (Redis), request transformation (inject X-Tenant-ID/X-User-ID/X-User-Roles từ JWT claims), WebSocket support, Prometheus metrics. Route tới tất cả 18 services.
+
+## Components and Interfaces
+
+Xem **Route Configuration** (kong.yml) và **Global Plugins** bên dưới.
+| Component | Technology |
+|-----------|-----------|
+| Platform | Kong Gateway OSS 3.7+ |
+| Mode | DB-less (declarative config) cho dev, DB mode cho production |
+| Database | PostgreSQL 16 (kong_db) — production only |
+| Plugins | oidc, rate-limiting, cors, request-transformer, prometheus, opentelemetry |
+| Config | kong.yml (declarative) |
+| Ports | 8000 (proxy HTTP), 8443 (proxy HTTPS), 8001 (admin API), 8444 (admin HTTPS) |
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph "Clients"
+        DASH["Dashboard (Next.js)"]
+        EXT["External Webhooks"]
+    end
+
+    subgraph "Kong Gateway"
+        SSL["SSL Termination"]
+        AUTH["OIDC Plugin (Keycloak)"]
+        RL["Rate Limiting (Redis)"]
+        ROUTE["Router"]
+        PROM["Prometheus Plugin"]
+    end
+
+    subgraph "Upstream Services"
+        CC["Channel Connector :3001"]
+        MSG["Messaging :3002"]
+        CB["Chatbot :8001"]
+        CONTENT["Content :8002"]
+        SCHED["Scheduler :8003"]
+        KB["Knowledge Base :8004"]
+        AI["AI Core :8005"]
+        ANALYTICS["Analytics :8006"]
+        CRM["CRM :3003"]
+        CAMPAIGN["Campaign :8007"]
+        NOTIF["Notification :3004"]
+        COMMENT["Comment Manager :3005"]
+        TCFG["Tenant Config :3006"]
+        DMS["DMS :3007"]
+        LSHORT["Link Shortener :3009"]
+        MPROC["Media Processor :8008"]
+    end
+
+    DASH -->|HTTPS| SSL
+    EXT -->|HTTPS| SSL
+    SSL --> AUTH --> RL --> ROUTE
+    ROUTE --> CC & MSG & CB & CONTENT & SCHED & KB & AI & ANALYTICS & CRM & CAMPAIGN & NOTIF & COMMENT & TCFG & DMS & LSHORT & MPROC
+    PROM -->|/metrics| Prometheus
+```
+
+## Route Configuration
+
+```yaml
+# kong.yml (declarative config)
+_format_version: "3.0"
+
+services:
+  # === Node.js Services ===
+  - name: channel-connector
+    url: http://channel-connector:3001
+    routes:
+      - name: channel-connector-api
+        paths: ["/api/v1/channels"]
+        strip_path: false
+      - name: webhooks
+        paths: ["/webhooks"]
+        strip_path: false
+        plugins:
+          - name: key-auth
+            config:
+              anonymous: true  # Webhooks don't need auth
+
+  - name: messaging
+    url: http://messaging:3002
+    routes:
+      - name: messaging-api
+        paths: ["/api/v1/conversations", "/api/v1/messages"]
+        strip_path: false
+      - name: messaging-ws
+        paths: ["/ws"]
+        strip_path: false
+        protocols: ["http", "https", "ws", "wss"]
+
+  - name: crm
+    url: http://crm:3003
+    routes:
+      - name: crm-api
+        paths: ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets"]
+        strip_path: false
+
+  - name: notification
+    url: http://notification:3004
+    routes:
+      - name: notification-api
+        paths: ["/api/v1/notifications", "/api/v1/preferences"]
+        strip_path: false
+
+  - name: comment-manager
+    url: http://comment-manager:3005
+    routes:
+      - name: comment-api
+        paths: ["/api/v1/comments"]
+        strip_path: false
+
+  # === Python Services ===
+  - name: chatbot
+    url: http://chatbot:8001
+    routes:
+      - name: chatbot-api
+        paths: ["/api/v1/chatbot"]
+        strip_path: false
+
+  - name: content
+    url: http://content:8002
+    routes:
+      - name: content-api
+        paths: ["/api/v1/content", "/api/v1/media"]
+        strip_path: false
+
+  - name: knowledge-base
+    url: http://knowledge-base:8004
+    routes:
+      - name: kb-api
+        paths: ["/api/v1/documents", "/api/v1/search"]
+        strip_path: false
+
+  - name: ai-core
+    url: http://ai-core:8005
+    routes:
+      - name: ai-api
+        paths: ["/api/v1/completions", "/api/v1/embeddings", "/api/v1/models", "/api/v1/prompts", "/api/v1/usage"]
+        strip_path: false
+
+  # === Java Services ===
+  - name: scheduler
+    url: http://scheduler:8003
+    routes:
+      - name: scheduler-api
+        paths: ["/api/v1/schedules", "/api/v1/automations"]
+        strip_path: false
+
+  - name: analytics
+    url: http://analytics:8006
+    routes:
+      - name: analytics-api
+        paths: ["/api/v1/metrics", "/api/v1/reports", "/api/v1/insights"]
+        strip_path: false
+
+  - name: campaign
+    url: http://campaign:8007
+    routes:
+      - name: campaign-api
+        paths: ["/api/v1/campaigns"]
+        strip_path: false
+
+  # === New Services (Phase 5) ===
+  - name: tenant-config
+    url: http://tenant-config:3006
+    routes:
+      - name: tenant-config-api
+        paths: ["/api/v1/config"]
+        strip_path: false
+
+  - name: dms
+    url: http://dms:3007
+    routes:
+      - name: dms-files-api
+        paths: ["/api/v1/files", "/api/v1/folders", "/api/v1/upload", "/api/v1/trash", "/api/v1/quota"]
+        strip_path: false
+
+  - name: link-shortener
+    url: http://link-shortener:3009
+    routes:
+      - name: link-shortener-api
+        paths: ["/api/v1/links"]
+        strip_path: false
+      - name: link-shortener-redirect
+        # Public route — no auth required for redirect
+        paths: ["/r"]
+        strip_path: true
+        plugins:
+          - name: openid-connect
+            config:
+              anonymous: true  # Public redirect, no auth
+
+  - name: media-processor
+    url: http://media-processor:8008
+    routes:
+      - name: media-processor-api
+        paths: ["/api/v1/media/jobs"]
+        strip_path: false
+
+# === Global Plugins ===
+plugins:
+  - name: openid-connect
+    config:
+      issuer: "http://keycloak:8080/realms/master/.well-known/openid-configuration"
+      client_id: "kong-gateway"
+      client_secret: "${KONG_OIDC_SECRET}"
+      redirect_uri: null
+      scopes: ["openid"]
+      auth_methods: ["bearer"]
+      consumer_claim: ["sub"]
+      consumer_by: ["custom_id"]
+    route:
+      # Apply to all routes except webhooks and health
+      exclude:
+        - webhooks
+        - health
+
+  - name: rate-limiting
+    config:
+      policy: redis
+      redis:
+        host: redis
+        port: 6379
+      limit_by: header
+      header_name: X-Tenant-ID
+      minute: 200 # Default fallback limit per minute
+      hour: 5000  # Default fallback limit per hour
+      # Note: Tích hợp custom Lua handler (hoặc plugin wrapper) truy vấn Redis key:
+      # "tenant:{tenant_id}:config:security_comments_notif" để lấy cấu hình rate limit
+      # động "gateway_rate_limit_minute" và "gateway_rate_limit_hour" ghi đè lên cấu hình mặc định.
+
+  - name: cors
+    config:
+      origins: ["*"] # Kiểm tra động Origin header so khớp với list "allowed_cors_origins" lưu trong Redis cache per tenant
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+      headers: ["Authorization", "Content-Type", "X-Tenant-ID"]
+      credentials: true
+      max_age: 3600
+
+  - name: prometheus
+    config:
+      per_consumer: true
+      status_code_metrics: true
+      latency_metrics: true
+
+  - name: request-transformer
+    config:
+      add:
+        headers:
+          - "X-Tenant-ID:$(jwt.claims.tenant_id)"
+          - "X-User-ID:$(jwt.claims.sub)"
+          - "X-User-Roles:$(jwt.claims.roles)"
+```
+
+## Rate Limiting Tiers
+
+| Tier | Requests/min | Requests/hour | Use case |
+|------|-------------|---------------|----------|
+| Free | 60 | 1000 | Trial tenants |
+| Standard | 200 | 5000 | Normal tenants |
+| Enterprise | 1000 | 50000 | High-volume tenants |
+
+## Dynamic Tenant Configuration Sync (CORS & Rate Limiting)
+
+Hệ thống API Gateway (Kong) sử dụng Redis làm cơ sở dữ liệu phân tán (distributed cache) cho các cấu hình động của từng Tenant. Cấu hình được đồng bộ từ **Tenant Config Service** sang **Redis** và được Kong truy vấn theo luồng dưới đây:
+
+```mermaid
+sequenceDiagram
+    participant Admin as Tenant Admin
+    participant TCS as Tenant Config Service
+    participant Redis as Redis Cache
+    participant Client as Web Client
+    participant Kong as Kong Gateway
+    participant Backend as Microservices
+
+    Admin->>TCS: PATCH /api/v1/config/security_comments_notif
+    TCS->>TCS: Save to config_db
+    TCS->>Redis: SETEX tenant:{tenant_id}:config:security_comments_notif 3600 {json}
+    TCS->>Redis: PUBLISH config.updates (tenant_id)
+    TCS-->>Admin: 200 OK
+
+    Client->>Kong: Request API (with X-Tenant-ID / JWT)
+    Kong->>Kong: Authenticate & extract tenant_id
+    Kong->>Redis: GET tenant:{tenant_id}:config:security_comments_notif
+    Redis-->>Kong: Return allowed_cors_origins & rate limits
+    Kong->>Kong: Dynamic CORS Check (Origin header vs allowed_cors_origins)
+    Kong->>Kong: Dynamic Rate Limiting (check current usage against limits)
+    alt Pass Checks
+        Kong->>Backend: Forward Request
+        Backend-->>Kong: Response
+        Kong-->>Client: Response
+    else Fail Checks (429 or CORS blocked)
+        Kong-->>Client: HTTP 429 Too Many Requests / CORS Error
+    end
+```
+
+### Redis Cache Schema for Gateway
+- **Redis Key:** `tenant:{tenant_id}:config:security_comments_notif`
+- **Value (JSON):**
+```json
+{
+  "gateway_rate_limit_minute": 200,
+  "gateway_rate_limit_hour": 5000,
+  "allowed_cors_origins": ["https://mytenant.dashboard.solavie.com", "http://localhost:3000"]
+}
+```
+
+- **Fallback mechanism:** Nếu không tìm thấy key cấu hình của tenant trong Redis (cache miss), Gateway sẽ sử dụng giá trị mặc định của hệ thống (Platform Defaults: 200 req/min, 5000 req/hour, allowed origins `*`).
+
+## Health Check
+
+```
+GET /health → 200 OK (no auth required)
+GET /status → Kong status page (admin only)
+```
+
+## Docker Compose
+
+```yaml
+kong:
+  image: kong:3.7
+  environment:
+    KONG_DATABASE: "off"  # DB-less mode for dev
+    KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+    KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+    KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+    KONG_LOG_LEVEL: info
+  ports:
+    - "8000:8000"
+    - "8443:8443"
+    - "8001:8001"
+  volumes:
+    - ./gateway/kong.yml:/etc/kong/kong.yml
+  depends_on:
+    - redis
+```
+
+
+## Data Models
+
+Service n�y kh�ng c� database ri�ng. Xem data models t?i c�c services li�n quan.
+
+## Correctness Properties
+
+### Property 1: Tenant Isolation
+**Validates: Requirements 4.1**
+Moi query va operation phai filter theo tenant_id tu JWT claims. Khong co cross-tenant data leakage o bat ky tang nao (DB, Kafka, Redis, Qdrant, MinIO).
+
+### Property 2: Idempotency
+**Validates: Requirements 3.1**
+Moi write operation phai co idempotency key de tranh duplicate processing khi retry. Kafka consumer phai idempotent.
+
+### Property 3: At-least-once Delivery
+**Validates: Requirements 3.1**
+Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
+
+### Property 4: Circuit Breaker Correctness
+**Validates: Requirements 5.1**
+Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
+
+### Property 5: Data Consistency
+**Validates: Requirements 3.1**
+Distributed transactions dung Saga pattern voi compensating actions khi rollback. Moi destructive action ghi audit.events Kafka topic.
+## Error Handling
+
+| Scenario | Strategy |
+|----------|----------|
+| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
+| Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
+| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
+| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
+| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
+| Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
+
+## Testing Strategy
+
+| Layer | Tool | Coverage Target |
+|-------|------|----------------|
+| Unit Tests | Jest (Node.js) / pytest (Python) / JUnit 5 (Java) | > 80% business logic |
+| Integration Tests | Testcontainers (PostgreSQL, Redis, Kafka) | Happy path + error paths |
+| Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
+| Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
+| Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
