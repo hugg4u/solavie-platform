@@ -12,7 +12,7 @@ Xem **Route Configuration** (kong.yml) và **Global Plugins** bên dưới.
 | Platform | Kong Gateway OSS 3.7+ |
 | Mode | DB-less (declarative config) cho dev, DB mode cho production |
 | Database | PostgreSQL 16 (kong_db) — production only |
-| Plugins | oidc, rate-limiting, cors, request-transformer, prometheus, opentelemetry |
+| Plugins | oidc, rate-limiting, cors, request-transformer, prometheus, opentelemetry, dynamic-policy (custom) |
 | Config | kong.yml (declarative) |
 | Ports | 8000 (proxy HTTP), 8443 (proxy HTTPS), 8001 (admin API), 8444 (admin HTTPS) |
 
@@ -203,6 +203,11 @@ services:
 
 # === Global Plugins ===
 plugins:
+  - name: dynamic-policy
+    config:
+      redis_host: redis
+      redis_port: 6379
+
   - name: openid-connect
     config:
       issuer: "http://keycloak:8080/realms/master/.well-known/openid-configuration"

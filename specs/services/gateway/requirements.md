@@ -31,6 +31,7 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 3. THE Gateway SHALL inject tenant_id và user_id từ token claims vào request headers
 4. THE Gateway SHALL whitelist webhook endpoints (không cần auth)
 5. THE Gateway SHALL whitelist health check endpoints
+6. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist.
 
 ### Requirement 3: Rate Limiting
 

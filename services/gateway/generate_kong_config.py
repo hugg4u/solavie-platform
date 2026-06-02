@@ -26,13 +26,9 @@ KEYCLOAK_URL: str = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
 TENANT_ID: str = os.environ.get("TENANT_ID", "tenant-test-uuid")
 # Issuer URL that the token will contain (must exactly match Keycloak's generated token 'iss')
 KONG_ISSUER_URL: str = os.environ.get(
-    "KONG_ISSUER_URL", f"http://localhost/realms/{TENANT_ID}"
+    "KONG_ISSUER_URL", f"http://localhost:8081/realms/{TENANT_ID}"
 )
 KONG_CONFIG_PATH: str = os.environ.get("KONG_CONFIG_PATH", "/etc/kong/kong.yml")
-
-# Rate limiting configuration
-RATE_LIMIT_MINUTE: int = int(os.environ.get("RATE_LIMIT_MINUTE", "200"))
-RATE_LIMIT_HOUR: int = int(os.environ.get("RATE_LIMIT_HOUR", "5000"))
 
 
 class KeycloakConnectionError(Exception):
@@ -43,10 +39,9 @@ class KeycloakConnectionError(Exception):
 def get_requests_session() -> requests.Session:
     """Creates a requests Session with retry logic."""
     session = requests.Session()
-    # Retry on specific status codes and connection errors
     retry_strategy = Retry(
-        total=15,  # 15 retries
-        backoff_factor=1.0,  # wait 1, 2, 4, 8, 16... seconds between retries
+        total=15,
+        backoff_factor=1.0,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"]
     )
@@ -80,7 +75,6 @@ def get_public_key(session: requests.Session) -> str:
 def format_public_key(key_string: str) -> str:
     """Formats a base64 string into a valid PEM format public key."""
     lines = ["-----BEGIN PUBLIC KEY-----"]
-    # wrap at 64 chars
     lines.extend(key_string[i:i + 64] for i in range(0, len(key_string), 64))
     lines.append("-----END PUBLIC KEY-----")
     return "\n".join(lines) + "\n"
@@ -88,6 +82,22 @@ def format_public_key(key_string: str) -> str:
 
 def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
     """Builds the declarative Kong configuration dictionary."""
+    jwt_plugin = {
+        "name": "jwt",
+        "config": {
+            "key_claim_name": "iss",
+            "claims_to_verify": ["exp"]
+        }
+    }
+    
+    request_termination_plugin = {
+        "name": "request-termination",
+        "config": {
+            "status_code": 200,
+            "message": "Webhook health check mock OK"
+        }
+    }
+    
     return {
         "_format_version": "3.0",
         "_transform": True,
@@ -99,41 +109,85 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                     {
                         "name": "auth-route",
                         "paths": ["/api/v1/auth"],
-                        "strip_path": True
+                        "strip_path": True,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
+                "name": "ai-core",
+                "url": "http://ai-core:8000",
+                "routes": [
+                    {
+                        "name": "ai-api",
+                        "paths": [
+                            "/api/v1/completions",
+                            "/api/v1/embeddings",
+                            "/api/v1/models",
+                            "/api/v1/configs",
+                            "/api/v1/analytics",
+                            "/api/v1/prompts"
+                        ],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
+                "name": "tenant-config",
+                "url": "http://tenant-config:3006",
+                "routes": [
+                    {
+                        "name": "tenant-config-api",
+                        "paths": ["/api/v1/config"],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
+                "name": "knowledge-base",
+                "url": "http://knowledge-base:8004",
+                "routes": [
+                    {
+                        "name": "kb-api",
+                        "paths": ["/api/v1/documents", "/api/v1/search"],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
+                "name": "chatbot",
+                "url": "http://chatbot:8001",
+                "routes": [
+                    {
+                        "name": "chatbot-api",
+                        "paths": ["/api/v1/chatbot"],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
+                "name": "channel-connector-webhooks",
+                "url": "http://127.0.0.1:3001",
+                "routes": [
+                    {
+                        "name": "webhooks",
+                        "paths": ["/webhooks"],
+                        "strip_path": False,
+                        "plugins": [request_termination_plugin]
                     }
                 ]
             }
         ],
         "plugins": [
             {
-                "name": "jwt",
+                "name": "dynamic-policy",
                 "config": {
-                    "key_claim_name": "iss",
-                    "claims_to_verify": ["exp"]
-                }
-            },
-            {
-                "name": "rate-limiting",
-                "config": {
-                    "policy": "redis",
-                    "redis": {
-                        "host": "redis",
-                        "port": 6379
-                    },
-                    "limit_by": "header",
-                    "header_name": "X-Tenant-ID",
-                    "minute": RATE_LIMIT_MINUTE,
-                    "hour": RATE_LIMIT_HOUR
-                }
-            },
-            {
-                "name": "cors",
-                "config": {
-                    "origins": ["*"],
-                    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                    "headers": ["Authorization", "Content-Type", "X-Tenant-ID"],
-                    "credentials": True,
-                    "max_age": 3600
+                    "redis_host": "redis",
+                    "redis_port": 6379
                 }
             },
             {
@@ -166,7 +220,6 @@ def generate_kong_yml(public_key_pem: str) -> None:
     config = build_kong_config(public_key_pem)
     
     try:
-        # Ensure the directory exists
         config_dir = os.path.dirname(KONG_CONFIG_PATH)
         if config_dir:
             os.makedirs(config_dir, exist_ok=True)

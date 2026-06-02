@@ -196,31 +196,65 @@ postgres-keycloak:
 | Password policy | Dynamic: auth_password_min_length+ chars, complexity | Industry standard (Sync from Tenant Config) |
 | CORS | Restricted to dashboard domain | Prevent CSRF |
 | Admin console | IP-restricted in production | Prevent unauthorized access |
+| PKCE | Enforced `S256` for client `dashboard` | Prevent Authorization Code interception on public clients |
+| Refresh Token Rotation | Enabled (`revokeRefreshToken=true`, `refreshTokenMaxReuse=0`) | Prevent replay attacks of compromised refresh tokens |
+| OTP Policy | Default TOTP (HmacSHA1, 6 digits, 30s period) | Enforce multi-factor authentication (MFA) |
+| JTI Blacklisting | Gateway-level verification check via Redis | Immediate token revocation capability (< 1ms lookup) |
+| Sync Reliability | Redis Streams with Consumer Groups | Ensure 100% delivery of security config changes |
 
 ## Dynamic Security Config Synchronization Flow
 
-Khi Tenant thay đổi cấu hình bảo mật (`auth_password_min_length`, `auth_max_login_attempts`) tại Tenant Config Service, quá trình đồng bộ diễn ra như sau:
+Khi Tenant thay đổi cấu hình bảo mật (`auth_password_min_length`, `auth_max_login_attempts`) tại Tenant Config Service, quá trình đồng bộ qua **Dual-Publishing** (Redis Pub/Sub & Redis Streams) diễn ra như sau:
 
 ```mermaid
 sequenceDiagram
     participant Admin as Tenant Admin
     participant TCS as Tenant Config Service
-    participant Msg as Message Channel (Redis / Kafka)
+    participant Redis as Redis (Streams & Pub/Sub)
     participant AuthWorker as Auth Sync Worker
     participant KC as Keycloak Admin API
 
     Admin->>TCS: PATCH /api/v1/config/security_comments_notif
     TCS->>TCS: Save to config_db
-    TCS->>Msg: PUBLISH config.updates (tenant_id, security_comments_notif)
-    Msg-->>AuthWorker: Deliver config update event
-    AuthWorker->>TCS: Query security config details (gRPC GetConfig)
-    TCS-->>AuthWorker: Return auth_password_min_length & auth_max_login_attempts
+    TCS->>Redis: XADD config.updates.stream * data (JSON config update)
+    TCS->>Redis: PUBLISH config.updates (fallback event)
+    Note over Redis, AuthWorker: Worker reads updates reliably from Stream Consumer Group
+    Redis-->>AuthWorker: XREADGROUP config.updates.stream (worker-1)
     AuthWorker->>KC: PUT /admin/realms/{tenant_id} (update password policy & failureFactor)
     KC-->>AuthWorker: 204 No Content
+    AuthWorker->>Redis: XACK config.updates.stream auth-sync-group {message_id}
     AuthWorker->>AuthWorker: Log successful sync
 ```
 
-Chi tiết gọi Keycloak Admin API:
+## Token Revocation & JTI Blacklisting Flow
+
+Khi người dùng thực hiện đăng xuất (logout) hoặc token bị thu hồi, hệ thống chặn đứng request tại Gateway qua cơ chế:
+
+```mermaid
+sequenceDiagram
+    participant User as User / Admin
+    participant Auth as Keycloak
+    participant Redis as Redis Pub/Sub (token.revoked)
+    participant Worker as Auth Sync Worker
+    participant Cache as Redis Cache (Blacklist)
+    participant GW as Kong API Gateway
+    
+    User->>Auth: POST /protocol/openid-connect/logout
+    Auth->>Auth: Invalidate User Session
+    Auth->>Redis: PUBLISH token.revoked (jti, exp)
+    Redis-->>Worker: Deliver revocation event
+    Worker->>Cache: SETEX blacklist:jti:{jti} TTL=(exp - now) "revoked"
+    Worker->>Worker: Log JTI blacklisted successfully
+    
+    Note over User, GW: Khi User cố gắng gửi request mang token cũ qua Gateway
+    User->>GW: GET /api/v1/documents (Bearer Token)
+    GW->>GW: Parse JWT Claims & Extract `jti` via ngx.decode_base64
+    GW->>Cache: GET blacklist:jti:{jti}
+    Cache-->>GW: Return "revoked"
+    GW-->>User: HTTP 401 Unauthorized {"message": "Token has been revoked"}
+```
+
+Chi tiết gọi Keycloak Admin API để đồng bộ:
 - **Endpoint:** `PUT /admin/realms/{realm_name}`
 - **Headers:** `Authorization: Bearer <admin_token>`
 - **Payload:**
@@ -228,6 +262,7 @@ Chi tiết gọi Keycloak Admin API:
 {
   "passwordPolicy": "length(auth_password_min_length) and upperCase(1) and digits(1) and specialChars(1)",
   "bruteForceProtected": true,
+  "permanentLockout": false,
   "failureFactor": auth_max_login_attempts
 }
 ```

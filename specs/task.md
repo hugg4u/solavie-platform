@@ -5,11 +5,11 @@ This master checklist tracks the development and deployment of the entire Solavi
 
 ## Development & Deployment Phases
 
-### [ ] Phase 1: Core Infrastructure & Gateway (Foundation)
+### [x] Phase 1: Core Infrastructure & Gateway (Foundation) ✅
 *Goal: Set up database clustering, identity management, API Gateway routing, LLM gateway, and vector knowledge base.*
-  - [x] [**AUTH Service**](specs/solavie-system/services/auth/task.md) (5 requirements) - Tech: Keycloak 24+
-  - [x] [**GATEWAY Service**](specs/solavie-system/services/gateway/task.md) (5 requirements) - Tech: Kong Gateway OSS 3.x
-  - [x] [**AI-CORE Service**](specs/solavie-system/services/ai-core/task.md) (10 requirements) - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
+  - [x] [**AUTH Service**](specs/solavie-system/services/auth/task.md) (5 requirements) ✅ — Keycloak 24+, RBAC, Dynamic Password Policy & Brute Force Sync
+  - [x] [**GATEWAY Service**](specs/solavie-system/services/gateway/task.md) (5 requirements) ✅ — Kong OSS 3.x, dynamic-policy plugin, Dynamic CORS & Rate Limit
+  - [ ] [**AI-CORE Service**](specs/solavie-system/services/ai-core/task.md) (10 requirements) - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
   - [ ] [**KNOWLEDGE-BASE Service**](specs/solavie-system/services/knowledge-base/task.md) (6 requirements) - Tech: Python 3.12 (FastAPI)
 
 ### [ ] Phase 2: Core Messaging & Engagement (Interactions)
@@ -41,16 +41,19 @@ This master checklist tracks the development and deployment of the entire Solavi
 
 ## System-Level Infrastructure Tasks
 
-- [ ] **Step 1: Dev Environment Setup**
-  - [ ] Create root `docker-compose.yml` for 6 infrastructure services (Postgres, Redis, Kafka, Qdrant, MinIO, Kong).
-  - [ ] Create root `.env` configuration from `.env.example`.
-  - [ ] Verify local database migrations and OIDC realm config import flows.
+- [x] **Step 1: Dev Environment Setup** ✅
+  - [x] Create root `docker-compose.yml` for 6 infrastructure services (Postgres, Redis, Kafka, Qdrant, MinIO, Kong).
+  - [x] Create root `.env` configuration from `.env.example`.
+  - [x] Verify local database migrations and OIDC realm config import flows.
 - [ ] **Step 2: Shared Library & Protobuf compilation**
   - [ ] Set up compile tasks for shared gRPC Protobuf files (`proto/chatbot.proto`, `proto/ai_core.proto`).
   - [ ] Create shared validation schemas and error handler packages.
-- [ ] **Step 3: Gateway Routing & Plugin verification**
-  - [ ] Route all path prefixes: `/api/v1/auth` to Keycloak, `/api/v1/chatbot` to Chatbot, etc.
-  - [ ] Verify global plugins (OIDC claims extraction, Rate limiting, CORS).
+- [x] **Step 3: Gateway Routing & Plugin verification** ✅
+  - [x] Route all path prefixes: `/api/v1/auth` to Keycloak, `/api/v1/chatbot` to Chatbot, etc.
+    - Implemented in `generate_kong_config.py` — 6 services, 7 routes
+  - [x] Verify global plugins (OIDC claims extraction, Rate limiting, CORS).
+    - JWT plugin: RS256 key validation từ Keycloak
+    - dynamic-policy plugin: Dynamic CORS (403 invalid origin) + Dynamic Rate Limit (429 per-tenant) + X-Tenant-ID injection
 - [ ] **Step 4: Real-time Messaging Inbox & real-time client sync**
   - [ ] Verify WebSockets connection upgrade via Kong API Gateway.
   - [ ] Check Redis pub/sub replication of inbox notifications across Gateway replicas.
