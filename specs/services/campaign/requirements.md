@@ -33,3 +33,9 @@ Dịch vụ quản lý chiến dịch marketing — multi-post campaigns, A/B te
 1. THE Campaign_Service SHALL track: reach, engagement rate, click-through, conversion
 2. THE Campaign_Service SHALL generate performance summary khi campaign kết thúc
 3. THE Campaign_Service SHALL compare performance vs campaign goals
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Campaign Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `campaign`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Campaign Service.
+- **Tenant Isolation:** Dữ liệu Campaign **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

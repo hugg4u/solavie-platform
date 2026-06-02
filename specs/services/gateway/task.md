@@ -51,6 +51,10 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] AC 2.6: THE Gateway SHALL hỗ trợ thu hồi token tức thời qua JTI Blacklisting
   - **Implemented:** handler.lua trích xuất `jti` từ token claims bằng `ngx.decode_base64` và đối chiếu Redis cache
   - **Verified:** `test_gateway_jti_blacklisting()` — trả về 401 Unauthorized khi token nằm trong blacklist
+- [ ] AC 2.7: THE Gateway SHALL thực hiện Scope Validation (xác thực scope) đối với từng API request
+  - Thiết lập mapping path prefix -> required scope trong cấu hình `dynamic-policy` plugin.
+  - Sửa đổi handler.lua để trích xuất claim `scope` từ JWT payload, kiểm tra xem nó có chứa scope yêu cầu của route hay không. Trả về `403 Forbidden` nếu thiếu.
+
 
 ### Task 3: 3: Rate Limiting
 > *User Story: Là admin, tôi muốn giới hạn request rate per-tenant.*

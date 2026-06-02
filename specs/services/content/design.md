@@ -182,11 +182,11 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 
 | Scenario | Strategy |
 |----------|----------|
-| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
+| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
 | Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
-| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
-| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
-| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
+| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
+| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
+| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
 | Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
 
 ## Testing Strategy
@@ -198,3 +198,8 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
+
+## Security & Gateway Integration
+- Dịch vụ được triển khai stateless phía sau Kong API Gateway.
+- Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `content`, và inject header `X-Tenant-ID` vào request.
+- Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.

@@ -74,3 +74,8 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 2. WHEN document bị xóa, THE Knowledge_Base SHALL xóa tất cả chunks và embeddings liên quan
 3. THE Knowledge_Base SHALL hỗ trợ re-index document (update content)
 4. THE Knowledge_Base SHALL track document versions
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Knowledge Base Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `knowledge-base`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Knowledge Base Service.
+- **Tenant Isolation:** Dữ liệu Knowledge Base **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

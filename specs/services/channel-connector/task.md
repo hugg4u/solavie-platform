@@ -93,3 +93,7 @@ This document tracks the implementation checklist for **CHANNEL-CONNECTOR Servic
 - [ ] Unit test coverage is >80%.
 - [ ] Logs are formatted as structured JSON and trace context is propagated.
 - [ ] Tenant isolation (RLS / metadata filtering) is strictly enforced.
+
+### Task: Security Integration (MỚI)
+- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `channel-connector`
+- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`

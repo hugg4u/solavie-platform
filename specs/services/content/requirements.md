@@ -59,3 +59,8 @@ Dịch vụ quản lý bài đăng và tạo nội dung AI — generate content 
 1. THE Content_Service SHALL lưu tất cả versions (draft, edited, approved, published)
 2. THE Content_Service SHALL track who changed what và when
 3. THE Content_Service SHALL hỗ trợ rollback to previous version
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Content Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `content`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Content Service.
+- **Tenant Isolation:** Dữ liệu Content **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

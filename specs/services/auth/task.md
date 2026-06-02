@@ -103,6 +103,15 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 6.5: THE Sync_Worker SHALL đồng bộ tin cậy cấu hình qua Redis Streams
   - **Implemented:** Sửa đổi `sync_worker.py` để kết nối và lắng nghe từ Redis Stream `config.updates.stream` sử dụng Consumer Group `auth-sync-group`
 
+### Task 7: Client Scopes (Least Privilege) (MỚI)
+> *User Story: Là platform security architect, tôi muốn giới hạn quyền hạn truy cập của từng client Dashboard và API Gateway đối với từng dịch vụ backend.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 7.1: Định nghĩa các Client Scopes chuyên biệt cho các services (`campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`) trong Realm template JSON
+- [ ] AC 7.2: Cấu hình các Client Scopes này làm `optionalClientScopes` cho client `dashboard` và `api-gateway`
+- [ ] AC 7.3: Xác minh Access Token phát hành cho client Dashboard chứa claim `scope` phản ánh đúng danh sách scopes được yêu cầu
+
+
 ## Verification & Testing
 
 ### Automated Tests

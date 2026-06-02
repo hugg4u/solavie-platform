@@ -35,6 +35,14 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-02, US-003
 
+### FR-AUTH-009: Phân quyền mức Client (Client Scopes / Least Privilege)
+- **Mô tả:** Hệ thống **PHẢI** định nghĩa và kiểm tra tính hợp lệ của các OAuth2 Client Scopes đối với từng Client (Dashboard, API Gateway) và từng API Route tại Gateway. Mỗi microservice nghiệp vụ (như Campaign, CRM) sẽ tương ứng với một scope cụ thể.
+- **Đầu vào:** JWT Access Token gửi kèm request chứa claim `scope`.
+- **Đầu ra:** Cho phép forward request tới microservice đích nếu token chứa scope hợp lệ, ngược lại trả về `403 Forbidden`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-01, US-001
+
+
 ### FR-AUTH-005: Quản lý Vai trò và Quyền hạn (Role Management)
 - **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng.
 - **Đầu vào:** Tên vai trò, danh sách permissions chọn từ danh mục.

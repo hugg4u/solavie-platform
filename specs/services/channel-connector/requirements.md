@@ -60,3 +60,8 @@ Dịch vụ kết nối các kênh Facebook, Zalo, TikTok — nhận/gửi tin n
 1. THE Channel_Connector SHALL implement circuit breaker cho mỗi external API
 2. WHEN circuit open, THE Channel_Connector SHALL queue messages cho retry sau
 3. THE Channel_Connector SHALL thông báo Notification_Service khi channel bị disconnect
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Channel Connector Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `channel-connector`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Channel Connector Service.
+- **Tenant Isolation:** Dữ liệu Channel Connector **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

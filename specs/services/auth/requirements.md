@@ -76,3 +76,13 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 3. THE Auth_Service SHALL cấu hình chính sách OTP mặc định (TOTP, HmacSHA1, 6 digits, 30s period) cho mọi Tenant Realm được tạo ra.
 4. THE API Gateway (Kong) SHALL thực hiện thu hồi token tức thời thông qua JTI Blacklisting bằng cách trích xuất claim `jti` từ Access Token và truy vấn Redis cache (`blacklist:jti:{jti}`) cho mọi API request.
 5. THE Auth_Sync_Worker SHALL đồng bộ cấu hình bảo mật thông qua hàng đợi tin cậy cao Redis Streams (`config.updates.stream`) sử dụng Consumer Groups để bảo đảm không mất mát cấu hình khi worker gặp sự cố mạng hoặc khởi động lại.
+
+### Requirement 7: Client Scopes (Least Privilege)
+
+**User Story:** Là platform security architect, tôi muốn giới hạn quyền hạn truy cập của từng client Dashboard và API Gateway đối với từng dịch vụ backend cụ thể nhằm giảm thiểu rủi ro khi token bị xâm phạm.
+
+#### Acceptance Criteria
+1. THE Auth_Service SHALL định nghĩa các Client Scopes chuyên biệt tương ứng với các microservices nghiệp vụ của hệ thống, bao gồm: `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, và `tenant-config`.
+2. THE Auth_Service SHALL cấu hình các Client Scopes nghiệp vụ này dưới dạng `optionalClientScopes` cho các OIDC clients bao gồm public client `dashboard` và confidential client `api-gateway`.
+3. JWT Access Token phát hành cho client SHALL chứa claim `scope` (ví dụ: `"scope": "openid email profile campaign crm"`) khớp với danh sách scopes được yêu cầu hợp lệ trong luồng đăng nhập.
+

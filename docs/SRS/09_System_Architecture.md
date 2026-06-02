@@ -184,7 +184,8 @@ graph TD
 
 Hệ thống được thiết kế theo mô hình **SaaS Multi-tenant** với mức độ cô lập dữ liệu cao nhằm đảm bảo tính bảo mật và tuân thủ dữ liệu doanh nghiệp:
 
-1. **Identity & Access Isolation:** Sử dụng tính năng Multi-realm của Keycloak. Mỗi Tenant khi đăng ký sẽ được khởi tạo một Realm riêng biệt chứa danh sách User, Roles và Client Credentials độc lập. Token JWT phát hành sẽ chứa thuộc tính `tenant_id` và `roles` trong payload claim.
+1. **Identity & Access Isolation:** Sử dụng tính năng Multi-realm của Keycloak. Mỗi Tenant khi đăng ký sẽ được khởi tạo một Realm riêng biệt chứa danh sách User, Roles và Client Credentials độc lập. Token JWT phát hành sẽ chứa thuộc tính `tenant_id` và `roles` trong payload claim. Đồng thời, hệ thống áp dụng cơ chế **Client Scopes** để phân tách quyền hạn truy cập của từng client (Dashboard, API Gateway) đối với các microservices nghiệp vụ (ví dụ: scope `campaign` cho Campaign Service, `crm` cho CRM Service) theo nguyên lý Least Privilege. API Gateway sẽ thực thi việc kiểm tra (Scope Validation) trước khi định tuyến API request.
+
 2. **Database Isolation:** Áp dụng mô hình **Shared Database, Shared Schema** để tối ưu hóa chi phí hạ tầng ở giai đoạn đầu. Tuy nhiên, tính bảo mật được đảm bảo bằng cách thiết lập chính sách **PostgreSQL Row-Level Security (RLS)** trên cột `tenant_id` của tất cả các bảng. Mọi kết nối database từ microservices bắt buộc phải set context `tenant_id` và hệ thống DB sẽ tự động filter dữ liệu.
 3. **Event-Driven Isolation:** Mọi tin nhắn truyền qua Apache Kafka bắt buộc chứa thuộc tính `tenant_id` trong Header của Kafka Message. Các Consumer Service khi nhận tin nhắn phải lọc và xử lý theo đúng phân vùng của tenant đó.
 4. **Vector Database Isolation:** Qdrant Vector DB cấu hình metadata filter `tenant_id` trên tất cả các collections và các truy vấn search để đảm bảo Chatbot của Tenant A không thể đọc nhầm tri thức của Tenant B.

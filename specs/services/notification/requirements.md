@@ -32,3 +32,8 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 1. IF primary channel thất bại, THEN fallback sang channel khác
 2. IF tất cả channels thất bại, THEN queue cho retry sau
 3. THE Notification_Service SHALL log delivery status per notification
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Notification Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `notification`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Notification Service.
+- **Tenant Isolation:** Dữ liệu Notification **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

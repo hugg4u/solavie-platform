@@ -48,3 +48,8 @@ Dịch vụ lên lịch đăng bài và automation flows — calendar management
 1. IF publish thất bại, THEN retry max 3 lần với exponential backoff
 2. IF tất cả retries thất bại, THEN notify user qua Notification_Service
 3. THE Scheduler_Service SHALL track retry count và last error per schedule
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Scheduler Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `scheduler`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Scheduler Service.
+- **Tenant Isolation:** Dữ liệu Scheduler **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

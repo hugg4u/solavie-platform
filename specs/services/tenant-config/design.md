@@ -433,3 +433,8 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
+
+## Security & Gateway Integration
+- Dịch vụ được triển khai stateless phía sau Kong API Gateway.
+- Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `tenant-config`, và inject header `X-Tenant-ID` vào request.
+- Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.

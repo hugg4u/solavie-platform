@@ -40,3 +40,8 @@ Dịch vụ thu thập metrics, engagement tracking, AI-powered insights, report
 1. THE Analytics_Service SHALL export reports dạng PDF và CSV
 2. THE Analytics_Service SHALL hỗ trợ scheduled reports (weekly email)
 3. Reports SHALL customizable per-tenant
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Analytics Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `analytics`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Analytics Service.
+- **Tenant Isolation:** Dữ liệu Analytics **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
