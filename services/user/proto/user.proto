@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package solavie.user.v1;
+
+service UserService {
+  rpc GetUserProfile (GetUserProfileRequest) returns (GetUserProfileResponse);
+  rpc ValidateUserAccess (ValidateUserAccessRequest) returns (ValidateUserAccessResponse);
+}
+
+message GetUserProfileRequest {
+  string user_id = 1;
+  string tenant_id = 2;
+}
+
+message GetUserProfileResponse {
+  string user_id = 1;
+  string tenant_id = 2;
+  string phone_number = 3;
+  string avatar_url = 4;
+  string department = 5;
+  string status = 6;
+}
+
+message ValidateUserAccessRequest {
+  string user_id = 1;
+  string tenant_id = 2;
+  string required_role = 3;
+}
+
+message ValidateUserAccessResponse {
+  bool is_allowed = 1;
+}

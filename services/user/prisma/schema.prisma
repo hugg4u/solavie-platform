@@ -1,0 +1,33 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String          @id @db.Uuid
+  tenantId     String          @map("tenant_id") @db.Uuid
+  phoneNumber  String?         @map("phone_number") @db.VarChar(20)
+  avatarUrl    String?         @map("avatar_url") @db.VarChar(255)
+  department   String?         @map("department") @db.VarChar(50)
+  status       String          @default("PENDING") @db.VarChar(20) // PENDING, ACTIVE, SUSPENDED
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  preferences  UserPreference?
+
+  @@map("users")
+}
+
+model UserPreference {
+  userId               String   @id @map("user_id") @db.Uuid
+  theme                String   @default("dark") @db.VarChar(20)
+  language             String   @default("vi") @db.VarChar(10)
+  notificationsEnabled Boolean  @default(true) @map("notifications_enabled") @db.Boolean
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
