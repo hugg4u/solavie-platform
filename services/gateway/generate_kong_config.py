@@ -119,6 +119,13 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                 "url": "http://ai-core:8000",
                 "routes": [
                     {
+                        "name": "ai-jobs-api",
+                        "paths": ["/api/v1/completions/jobs"],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:media-processor"]
+                    },
+                    {
                         "name": "ai-api",
                         "paths": [
                             "/api/v1/completions",
@@ -129,7 +136,8 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                             "/api/v1/prompts"
                         ],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:ai-core"]
                     }
                 ]
             },
@@ -141,7 +149,8 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "name": "tenant-config-api",
                         "paths": ["/api/v1/config"],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:tenant-config"]
                     }
                 ]
             },
@@ -153,7 +162,8 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "name": "kb-api",
                         "paths": ["/api/v1/documents", "/api/v1/search"],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:knowledge-base"]
                     }
                 ]
             },
@@ -165,7 +175,8 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "name": "chatbot-api",
                         "paths": ["/api/v1/chatbot"],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:chatbot"]
                     }
                 ]
             },

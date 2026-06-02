@@ -207,27 +207,8 @@ plugins:
     config:
       redis_host: redis
       redis_port: 6379
-      # Dynamic scope verification mapping (Path Prefix -> Required OAuth2 Scope)
-      route_scopes:
-        "/api/v1/campaigns": "campaign"
-        "/api/v1/contacts": "crm"
-        "/api/v1/segments": "crm"
-        "/api/v1/deals": "crm"
-        "/api/v1/tickets": "crm"
-        "/api/v1/chatbot": "chatbot"
-        "/api/v1/content": "content"
-        "/api/v1/media": "content"
-        "/api/v1/conversations": "messaging"
-        "/api/v1/messages": "messaging"
-        "/api/v1/config": "tenant-config"
-        "/api/v1/files": "dms"
-        "/api/v1/folders": "dms"
-        "/api/v1/links": "link-shortener"
-        "/api/v1/metrics": "analytics"
-        "/api/v1/reports": "analytics"
-        "/api/v1/insights": "analytics"
-        "/api/v1/completions": "ai-core"
-        "/api/v1/embeddings": "ai-core"
+      # Note: Route scopes are resolved dynamically using Kong Route Tags (prefix "scope:<scope_name>")
+      # for maximum flexibility and scalability. All API routes must define appropriate scope tags in kong.yml.
 
 
   - name: openid-connect

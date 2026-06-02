@@ -212,7 +212,7 @@ postgres-keycloak:
 | OTP Policy | Default TOTP (HmacSHA1, 6 digits, 30s period) | Enforce multi-factor authentication (MFA) |
 | JTI Blacklisting | Gateway-level verification check via Redis | Immediate token revocation capability (< 1ms lookup) |
 | Sync Reliability | Redis Streams with Consumer Groups | Ensure 100% delivery of security config changes |
-| Client Scopes | `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config` | Enforce Least Privilege for OIDC Clients, limiting access scope to specific backend microservices |
+| Client Scopes | 18 scopes: `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`, `dms`, `link-shortener`, `scheduler`, `comment-manager`, `notification`, `channel-connector`, `media-processor`, `knowledge-base`, `observability` | Enforce Least Privilege for OIDC Clients, limiting access scope to specific backend microservices |
 
 
 ## Dynamic Security Config Synchronization Flow

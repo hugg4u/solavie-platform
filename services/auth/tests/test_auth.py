@@ -405,7 +405,7 @@ def test_brute_force_protection_sync(provision_tenant):
     for i in range(6):
         r_wrong = requests.post(token_url, data=wrong_payload, timeout=10)
         print(f"\n[DEBUG brute-force] Wrong login attempt {i+1} status: {r_wrong.status_code}, body: {r_wrong.text}")
-        time.sleep(0.2)
+        time.sleep(1.1)
 
     # 4. Thử đăng nhập với mật khẩu đúng - phải bị locked (401 hoặc 400 với error account-locked)
     correct_payload = {

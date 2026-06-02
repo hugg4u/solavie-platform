@@ -107,9 +107,9 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 > *User Story: Là platform security architect, tôi muốn giới hạn quyền hạn truy cập của từng client Dashboard và API Gateway đối với từng dịch vụ backend.*
 
 **Acceptance Criteria Implementation:**
-- [ ] AC 7.1: Định nghĩa các Client Scopes chuyên biệt cho các services (`campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`) trong Realm template JSON
-- [ ] AC 7.2: Cấu hình các Client Scopes này làm `optionalClientScopes` cho client `dashboard` và `api-gateway`
-- [ ] AC 7.3: Xác minh Access Token phát hành cho client Dashboard chứa claim `scope` phản ánh đúng danh sách scopes được yêu cầu
+- [x] AC 7.1: Định nghĩa các Client Scopes chuyên biệt cho các services nghiệp vụ (18 scopes bao gồm `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`, `dms`, `link-shortener`, `scheduler`, `comment-manager`, `notification`, `channel-connector`, `media-processor`, `knowledge-base`, `observability`) khởi tạo động qua `provision_realm.py`
+- [x] AC 7.2: Cấu hình các Client Scopes này làm `optionalClientScopes` cho client `dashboard` và `api-gateway` tự động khi chạy provision
+- [x] AC 7.3: Xác minh Access Token phát hành cho client Dashboard chứa claim `scope` phản ánh đúng danh sách scopes được yêu cầu (Verified qua test suite của Gateway)
 
 
 ## Verification & Testing
