@@ -48,6 +48,9 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
   - **Verified:** `test_gateway_webhook_no_auth()`
 - [x] AC 2.5: THE Gateway SHALL whitelist health check endpoints
   - **Implemented:** handler.lua — path check `/health` và `/ready` skips plugin
+- [x] AC 2.6: THE Gateway SHALL hỗ trợ thu hồi token tức thời qua JTI Blacklisting
+  - **Implemented:** handler.lua trích xuất `jti` từ token claims bằng `ngx.decode_base64` và đối chiếu Redis cache
+  - **Verified:** `test_gateway_jti_blacklisting()` — trả về 401 Unauthorized khi token nằm trong blacklist
 
 ### Task 3: 3: Rate Limiting
 > *User Story: Là admin, tôi muốn giới hạn request rate per-tenant.*
