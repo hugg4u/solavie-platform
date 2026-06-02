@@ -6,19 +6,20 @@ import { getTenantId } from '../common/context/tenant-context';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
-  private static createPrismaOptions() {
+  private readonly pool: Pool;
+
+  constructor() {
     // URL kết nối cơ sở dữ liệu lấy từ biến môi trường
     const connectionString = process.env.DATABASE_URL;
     const pool = new Pool({ connectionString });
     const adapter = new PrismaPg(pool);
-    return {
+    
+    super({
       adapter,
       log: ['error', 'warn'] as any[],
-    };
-  }
-
-  constructor() {
-    super(PrismaService.createPrismaOptions());
+    });
+    
+    this.pool = pool;
   }
 
   async onModuleInit() {
@@ -27,6 +28,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleDestroy() {
     await this.$disconnect();
+    await this.pool.end();
   }
 
   /**

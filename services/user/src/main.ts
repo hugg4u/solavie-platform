@@ -9,6 +9,9 @@ async function bootstrap() {
   // 1. Tạo HTTP application cho REST APIs với tùy chọn rawBody để xác thực Webhook
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // Kích hoạt Graceful Shutdown
+  app.enableShutdownHooks();
+
   // 2. Kích hoạt Validation toàn cục
   app.useGlobalPipes(
     new ValidationPipe({

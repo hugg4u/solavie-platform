@@ -2,6 +2,7 @@ import { Controller } from '@nestjs/common';
 import { GrpcMethod } from '@nestjs/microservices';
 import { UsersService } from './users.service';
 import { Metadata } from '@grpc/grpc-js';
+import { tenantContextStorage } from '../common/context/tenant-context';
 
 interface GetUserProfileRequest {
   userId: string;
@@ -41,15 +42,17 @@ export class UsersGrpcController {
     metadata: Metadata,
     call: any,
   ): Promise<GetUserProfileResponse> {
-    const profile = await this.usersService.getMe(data.userId, data.tenantId);
-    return {
-      userId: profile.id,
-      tenantId: profile.tenantId,
-      phoneNumber: profile.phoneNumber || '',
-      avatarUrl: profile.avatarUrl || '',
-      department: profile.department || '',
-      status: profile.status,
-    };
+    return tenantContextStorage.run({ tenantId: data.tenantId, userId: data.userId }, async () => {
+      const profile = await this.usersService.getMe(data.userId, data.tenantId);
+      return {
+        userId: profile.id,
+        tenantId: profile.tenantId,
+        phoneNumber: profile.phoneNumber || '',
+        avatarUrl: profile.avatarUrl || '',
+        department: profile.department || '',
+        status: profile.status,
+      };
+    });
   }
 
   /**
@@ -62,11 +65,13 @@ export class UsersGrpcController {
     metadata: Metadata,
     call: any,
   ): Promise<ValidateUserAccessResponse> {
-    const isAllowed = await this.usersService.validateUserAccess(
-      data.userId,
-      data.tenantId,
-      data.requiredRole,
-    );
-    return { isAllowed };
+    return tenantContextStorage.run({ tenantId: data.tenantId, userId: data.userId }, async () => {
+      const isAllowed = await this.usersService.validateUserAccess(
+        data.userId,
+        data.tenantId,
+        data.requiredRole,
+      );
+      return { isAllowed };
+    });
   }
 }

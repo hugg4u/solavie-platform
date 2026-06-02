@@ -9,6 +9,7 @@ import * as crypto from 'crypto';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { UserErrorCode, UserSuccessCode } from '../common/constants/user-codes';
+import { tenantContextStorage } from '../common/context/tenant-context';
 
 @Injectable()
 export class UsersService {
@@ -368,50 +369,52 @@ export class UsersService {
   async handleWebhookEvent(payload: { event: string; userId: string; realm: string; email?: string }) {
     const { event, userId, realm, email } = payload;
 
-    // Webhook chạy với quyền toàn cục hệ thống (bypass RLS vì getTenantId() trả về undefined)
-    return this.prisma.runInTenantContext(async (tx) => {
-      switch (event) {
-        case 'user.verified':
-          await tx.user.upsert({
-            where: { id: userId },
-            create: {
-              id: userId,
-              tenantId: realm,
-              status: 'ACTIVE',
-              preferences: {
-                create: {
-                  theme: 'dark',
-                  language: 'vi',
+    // Webhook chạy với tenantId là realm để thỏa mãn chính sách RLS của database
+    return tenantContextStorage.run({ tenantId: realm }, () => {
+      return this.prisma.runInTenantContext(async (tx) => {
+        switch (event) {
+          case 'user.verified':
+            await tx.user.upsert({
+              where: { id: userId },
+              create: {
+                id: userId,
+                tenantId: realm,
+                status: 'ACTIVE',
+                preferences: {
+                  create: {
+                    theme: 'dark',
+                    language: 'vi',
+                  },
                 },
               },
-            },
-            update: { status: 'ACTIVE' },
-          });
-          break;
+              update: { status: 'ACTIVE' },
+            });
+            break;
 
-        case 'user.disabled':
-          await tx.user.updateMany({
-            where: { id: userId },
-            data: { status: 'SUSPENDED' },
-          });
-          break;
+          case 'user.disabled':
+            await tx.user.updateMany({
+              where: { id: userId },
+              data: { status: 'SUSPENDED' },
+            });
+            break;
 
-        case 'user.deleted':
-          // Xóa mềm (Soft Delete) hồ sơ nghiệp vụ bằng cách đổi trạng thái sang DELETED
-          await tx.user.updateMany({
-            where: { id: userId },
-            data: { status: 'DELETED' },
-          });
-          break;
+          case 'user.deleted':
+            // Xóa mềm (Soft Delete) hồ sơ nghiệp vụ bằng cách đổi trạng thái sang DELETED
+            await tx.user.updateMany({
+              where: { id: userId },
+              data: { status: 'DELETED' },
+            });
+            break;
 
-        case 'user.email_updated':
-          // Cục bộ DB chỉ cache thông tin nghiệp vụ, thông tin email được lưu trên Keycloak
-          console.log(`User ${userId} in realm ${realm} updated email to ${email}`);
-          break;
+          case 'user.email_updated':
+            // Cục bộ DB chỉ cache thông tin nghiệp vụ, thông tin email được lưu trên Keycloak
+            console.log(`User ${userId} in realm ${realm} updated email to ${email}`);
+            break;
 
-        default:
-          console.log(`Unhandled Keycloak event: ${event}`);
-      }
+          default:
+            console.log(`Unhandled Keycloak event: ${event}`);
+        }
+      });
     });
   }
 
