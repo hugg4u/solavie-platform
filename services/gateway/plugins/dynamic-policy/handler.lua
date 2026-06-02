@@ -1,6 +1,8 @@
 local cjson = require "cjson"
 local redis = require "resty.redis"
 
+-- Route scopes are resolved dynamically from Kong Route tags (e.g. tag "scope:ai-core")
+
 local DynamicPolicyHandler = {
   PRIORITY = 2000,
   VERSION = "0.1.0",
@@ -24,10 +26,12 @@ function DynamicPolicyHandler:access(conf)
 
   local tenant_id = kong.request.get_header("X-Tenant-ID")
   local jti = nil
+  local claims = nil
 
   local auth_header = kong.request.get_header("Authorization")
   if auth_header and string.sub(auth_header, 1, 7):lower() == "bearer " then
       local token = string.sub(auth_header, 8)
+
       local parts = {}
       for part in string.gmatch(token, "[^%.]+") do
           table.insert(parts, part)
@@ -42,8 +46,9 @@ function DynamicPolicyHandler:access(conf)
           
           local decoded = ngx.decode_base64(payload_b64)
           if decoded then
-              local success, claims = pcall(function() return cjson.decode(decoded) end)
-              if success and claims then
+              local success, parsed_claims = pcall(function() return cjson.decode(decoded) end)
+              if success and parsed_claims then
+                  claims = parsed_claims
                   if not tenant_id and claims.tenant_id then
                       tenant_id = claims.tenant_id
                   end
@@ -54,6 +59,7 @@ function DynamicPolicyHandler:access(conf)
               else
                   kong.log.err("Failed to decode JSON payload: ", tostring(success))
               end
+
           else
               kong.log.err("Failed to decode base64 payload: ", tostring(payload_b64))
           end
@@ -70,7 +76,36 @@ function DynamicPolicyHandler:access(conf)
 
   kong.service.request.set_header("X-Tenant-ID", tenant_id)
 
+  -- Scope Validation via Route Tags
+  local required_scope = nil
+  local route = kong.router.get_route()
+  if route and route.tags then
+      for _, tag in ipairs(route.tags) do
+          if string.sub(tag, 1, 6) == "scope:" then
+              required_scope = string.sub(tag, 7)
+              break
+          end
+      end
+  end
+
+  if required_scope then
+      local has_scope = false
+      if claims and claims.scope then
+          for s in string.gmatch(claims.scope, "%S+") do
+              if s == required_scope then
+                  has_scope = true
+                  break
+              end
+          end
+      end
+      if not has_scope then
+          kong.log.warn("Missing required scope '", required_scope, "' for path: ", path)
+          return kong.response.exit(403, { message = "Forbidden: missing required scope" })
+      end
+  end
+
   local red = redis:new()
+
   red:set_timeouts(1000, 1000, 1000)
   local ok, err = red:connect(conf.redis_host, conf.redis_port)
   if not ok then

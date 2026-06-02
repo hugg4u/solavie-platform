@@ -52,3 +52,8 @@ Dịch vụ quản lý hộp thư hợp nhất (unified inbox), conversation lif
 2. THE Messaging_Service SHALL hỗ trợ conversation status: open, pending, closed
 3. THE Messaging_Service SHALL auto-close conversations sau 24h không hoạt động
 4. WHEN conversation được assign, THE Messaging_Service SHALL notify agent qua Notification_Service
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Messaging Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `messaging`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Messaging Service.
+- **Tenant Isolation:** Dữ liệu Messaging **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

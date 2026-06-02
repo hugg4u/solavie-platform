@@ -112,3 +112,9 @@ Dịch vụ quản lý khách hàng đa kênh của Solavie — auto-create cont
 5. THE CRM_Service SHALL cho phép Kỹ thuật viên upload ảnh nghiệm thu (thiết bị hoạt động bình thường) và cập nhật resolution_notes
 6. WHEN Ticket chuyển sang trạng thái closed, THE CRM_Service SHALL tự động gửi tin nhắn cảm ơn kèm CSAT survey link qua kênh nguồn của khách hàng (Zalo OA hoặc Facebook)
 7. THE CRM_Service SHALL theo dõi trạng thái Ticket: open → assigned → in_progress → closed
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của CRM Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `crm`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến CRM Service.
+- **Tenant Isolation:** Dữ liệu CRM **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

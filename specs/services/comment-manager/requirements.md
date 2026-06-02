@@ -34,3 +34,8 @@ Dịch vụ quản lý bình luận trên bài đăng — auto-classify (spam/ne
 1. THE Comment_Manager SHALL list comments per post (filterable by classification)
 2. THE Comment_Manager SHALL hỗ trợ manual reply, hide, unhide
 3. THE Comment_Manager SHALL show classification stats (accuracy, volume)
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Comment Manager Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `comment-manager`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Comment Manager Service.
+- **Tenant Isolation:** Dữ liệu Comment Manager **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

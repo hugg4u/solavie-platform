@@ -63,6 +63,16 @@ Keycloak Instance
 │   │   ├── dashboard (public, Authorization Code + PKCE)
 │   │   └── api-gateway (confidential, for Kong OIDC)
 │   │
+│   ├── Client Scopes (Optional):
+│   │   ├── campaign (for Campaign Service APIs)
+│   │   ├── crm (for CRM Service APIs)
+│   │   ├── chatbot (for Chatbot Service APIs)
+│   │   ├── content (for Content Service APIs)
+│   │   ├── messaging (for Messaging Service APIs)
+│   │   ├── analytics (for Analytics Service APIs)
+│   │   ├── ai-core (for AI Core Service APIs)
+│   │   └── tenant-config (for Tenant Config Service APIs)
+│   │
 │   ├── Realm Roles:
 │   │   ├── admin
 │   │   ├── manager
@@ -104,7 +114,8 @@ Keycloak Instance
   "tenant_id": "tenant-abc-uuid",
   "email": "user@company.com",
   "name": "Nguyen Van A",
-  "preferred_username": "nguyenvana"
+  "preferred_username": "nguyenvana",
+  "scope": "openid email profile campaign crm chatbot"
 }
 ```
 
@@ -201,6 +212,8 @@ postgres-keycloak:
 | OTP Policy | Default TOTP (HmacSHA1, 6 digits, 30s period) | Enforce multi-factor authentication (MFA) |
 | JTI Blacklisting | Gateway-level verification check via Redis | Immediate token revocation capability (< 1ms lookup) |
 | Sync Reliability | Redis Streams with Consumer Groups | Ensure 100% delivery of security config changes |
+| Client Scopes | 18 scopes: `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`, `dms`, `link-shortener`, `scheduler`, `comment-manager`, `notification`, `channel-connector`, `media-processor`, `knowledge-base`, `observability` | Enforce Least Privilege for OIDC Clients, limiting access scope to specific backend microservices |
+
 
 ## Dynamic Security Config Synchronization Flow
 

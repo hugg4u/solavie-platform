@@ -75,3 +75,8 @@ Dịch vụ rút gọn URL và theo dõi click cho chiến dịch marketing củ
 3. THE Link_Shortener SHALL áp dụng tenant isolation: mọi analytics query phải filter theo tenant_id từ JWT; query không có tenant_id hợp lệ SHALL bị reject với HTTP 403
 4. THE Link_Shortener SHALL trả về kết quả analytics trong vòng 2 giây cho khoảng thời gian tối đa 90 ngày
 5. IF campaign_id không tồn tại hoặc không thuộc tenant hiện tại, THEN THE Link_Shortener SHALL trả về HTTP 404
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Link Shortener Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `link-shortener`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Link Shortener Service.
+- **Tenant Isolation:** Dữ liệu Link Shortener **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

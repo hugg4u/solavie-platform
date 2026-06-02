@@ -314,3 +314,83 @@ def test_gateway_jti_blacklisting(access_token, redis_client):
     finally:
         # Cleanup
         redis_client.delete(blacklist_key)
+
+
+def get_token_with_scopes(scopes_str):
+    """Helper to request a token from Keycloak with specific optional scopes."""
+    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    payload = {
+        "client_id": "dashboard",
+        "username": "admin",
+        "password": ADMIN_PASSWORD,
+        "grant_type": "password",
+        "scope": f"openid email profile {scopes_str}"
+    }
+    response = requests.post(token_url, data=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
+def test_gateway_scope_validation_blocking(access_token):
+    """
+    Xác minh Gateway chặn các request thiếu scope thích hợp (trả về 403 Forbidden).
+    """
+    # Gọi endpoint /api/v1/completions với token mặc định (chỉ có openid email profile, không có ai-core scope)
+    url = f"{GATEWAY_URL}/api/v1/completions"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, headers=headers, timeout=10)
+    assert response.status_code == 403, f"Expected 403 Forbidden for missing ai-core scope, got {response.status_code}"
+    assert "missing required scope" in response.text.lower()
+
+
+def test_gateway_scope_validation_allowing():
+    """
+    Xác minh Gateway cho phép request đi qua khi token mang scope thích hợp.
+    """
+    # 1. Lấy token có ai-core scope
+    token = get_token_with_scopes("ai-core")
+    
+    # 2. Gọi endpoint /api/v1/completions
+    url = f"{GATEWAY_URL}/api/v1/completions"
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(url, headers=headers, timeout=10)
+    
+    # Vì ai-core service đang chạy, nó sẽ trả về kết quả thành công hoặc 404/405 từ upstream,
+    # nhưng quan trọng là KHÔNG phải 403 Forbidden!
+    assert response.status_code != 403, f"Expected request to pass gateway scope validation, but got 403: {response.text}"
+    assert response.status_code in [200, 404, 405, 502], f"Unexpected status code: {response.status_code}"
+
+
+def test_gateway_scope_nested_path_matching():
+    """
+    Kiểm tra thuật toán so khớp prefix (longest match) và tính phân tách segment của Gateway.
+    """
+    # 1. Lấy token chỉ có ai-core scope (cho phép /api/v1/completions nhưng không cho /api/v1/completions/jobs)
+    token_ai = get_token_with_scopes("ai-core")
+    
+    # 2. Gọi /api/v1/completions/jobs -> yêu cầu scope media-processor (phải bị chặn 403)
+    url_jobs = f"{GATEWAY_URL}/api/v1/completions/jobs"
+    headers_jobs = {"Authorization": f"Bearer {token_ai}"}
+    resp_jobs = requests.get(url_jobs, headers=headers_jobs, timeout=10)
+    assert resp_jobs.status_code == 403, f"Expected 403 for /api/v1/completions/jobs with only ai-core scope, got {resp_jobs.status_code}"
+    
+    # 3. Gọi /api/v1/completions/configs -> yêu cầu scope ai-core (phải đi qua -> 200/404/405/502)
+    url_completions_sub = f"{GATEWAY_URL}/api/v1/completions/configs"
+    headers_completions_sub = {"Authorization": f"Bearer {token_ai}"}
+    resp_completions_sub = requests.get(url_completions_sub, headers=headers_completions_sub, timeout=10)
+    assert resp_completions_sub.status_code != 403, f"Expected /api/v1/completions/configs to pass scope check, got 403"
+
+    # 4. Kiểm tra phân tách segment:
+    # Lấy token chỉ có tenant-config scope (cho phép /api/v1/config)
+    token_config = get_token_with_scopes("tenant-config")
+    
+    # Gọi /api/v1/configs -> yêu cầu scope ai-core. 
+    # Nếu so khớp prefix sai (config là prefix của configs), nó sẽ nhầm sang tenant-config scope và cho qua.
+    # Nhưng vì có kiểm tra phân tách segment, nó sẽ nhận diện đúng là yêu cầu ai-core scope, 
+    # do đó token chỉ có tenant-config scope sẽ bị chặn 403.
+    url_configs = f"{GATEWAY_URL}/api/v1/configs"
+    headers_configs = {"Authorization": f"Bearer {token_config}"}
+    resp_configs = requests.get(url_configs, headers=headers_configs, timeout=10)
+    assert resp_configs.status_code == 403, f"Expected 403 for /api/v1/configs with only tenant-config scope, got {resp_configs.status_code}"
+
+

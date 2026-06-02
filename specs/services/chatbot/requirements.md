@@ -163,3 +163,8 @@ Dịch vụ chatbot AI "nhân sự số" 24/7 của Solavie — sử dụng Lang
 3. THE Chatbot_Service SHALL nén conversation history (qua Summarization) trước khi gửi lên LLM để giảm token
 4. THE Chatbot_Service SHALL đạt token cost trung bình < $0.005 per message
 5. THE Chatbot_Service SHALL log token usage (input/output/cached) cho mỗi LLM call để Analytics theo dõi chi phí
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Chatbot Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `chatbot`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Chatbot Service.
+- **Tenant Isolation:** Dữ liệu Chatbot **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

@@ -207,6 +207,9 @@ plugins:
     config:
       redis_host: redis
       redis_port: 6379
+      # Note: Route scopes are resolved dynamically using Kong Route Tags (prefix "scope:<scope_name>")
+      # for maximum flexibility and scalability. All API routes must define appropriate scope tags in kong.yml.
+
 
   - name: openid-connect
     config:

@@ -207,3 +207,34 @@ Java services dùng Spring Actuator: `/actuator/health`, `/actuator/prometheus`
 - **Quy định:** Mỗi microservice sở hữu cơ sở dữ liệu riêng (schema/database riêng). Tuyệt đối cấm hành vi chọc chéo vào DB của service khác (ví dụ: CRM service cấm query trực tiếp vào bảng `user` của Keycloak DB hay bảng `config` của Tenant Config DB).
 - **Giải pháp:** Mọi việc đọc/ghi dữ liệu liên quan đến service khác bắt buộc phải thông qua API REST, gRPC client, hoặc truyền nhận tin nhắn bất đồng bộ qua Kafka.
 
+## 11. API Scope Protection Standard (Tiêu chuẩn Bảo mật Client Scope)
+
+Để giảm thiểu rủi ro khi token bị đánh cắp hoặc bị lạm dụng bởi các ứng dụng client khác nhau (ví dụ: Dashboard của nhân viên vs Ứng dụng tích hợp bên thứ ba), hệ thống bắt buộc áp dụng cơ chế xác thực phân quyền ở mức Client (OAuth2 Scope Validation) tại Gateway:
+
+1. **Trách nhiệm của API Gateway (Kong):**
+   - API Gateway chịu trách nhiệm đối chiếu đường dẫn của API request với cấu hình Route Scopes trong plugin `dynamic-policy`.
+   - Gateway **PHẢI** kiểm tra xem access token đính kèm trong Authorization header có chứa Client Scope tương ứng với dịch vụ đích hay không.
+   - Nếu thiếu scope hợp lệ, Gateway **PHẢI** từ chối request ngay lập tức với mã lỗi `403 Forbidden` và log lại cảnh báo bảo mật.
+
+2. **Trách nhiệm của Downstream Microservices:**
+   - Các microservices nghiệp vụ chạy stateless phía sau Gateway có thể hoàn toàn tin tưởng vào các header được Gateway inject (như `X-Tenant-ID`, `X-User-ID`, `X-User-Roles`).
+   - Tài liệu đặc tả của mỗi microservice **PHẢI** chỉ rõ Client Scope bảo vệ các API của nó để làm cơ sở cấu hình Gateway và client.
+
+3. **Danh mục OAuth2 Scopes mặc định per-service:**
+   - Campaign Service: `campaign`
+   - CRM Service: `crm`
+   - Chatbot Service: `chatbot`
+   - Content Service: `content`
+   - Messaging Service: `messaging`
+   - Knowledge Base Service: `knowledge-base`
+   - AI Core Service: `ai-core`
+   - Tenant Config Service: `tenant-config`
+   - DMS Service: `dms`
+   - Link Shortener Service: `link-shortener`
+   - Analytics Service: `analytics`
+   - Scheduler Service: `scheduler`
+   - Comment Manager Service: `comment-manager`
+   - Notification Service: `notification`
+   - Channel Connector Service: `channel-connector`
+
+

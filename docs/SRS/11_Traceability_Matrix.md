@@ -16,6 +16,8 @@
 | **FR-AUTH-006** | Invalidate cache Redis tức thì | UC-02 | US-004 | BRD §4 | TC-AUTH-006 | 🔴 Hoạt động |
 | **FR-AUTH-007** | Khởi tạo Realm & Admin Tenant mới | UC-03 | US-005 | BRD §1 | TC-AUTH-007 | 🔴 Hoạt động |
 | **FR-AUTH-008** | Gửi email kích hoạt tài khoản | UC-03 | US-005 | BRD §1 | TC-AUTH-008 | 🔴 Hoạt động |
+| **FR-AUTH-009** | Phân quyền mức Client (Scopes) | UC-01 | US-001 | BRD §4 | TC-AUTH-009 | 🟡 Đang dev |
+
 | **FR-CH-001** | Kết nối Facebook Page qua OAuth | UC-04 | US-006 | BRD §5 | TC-CH-001 | 🔴 Hoạt động |
 | **FR-CH-002** | Đăng ký Webhook Page Facebook | UC-04 | US-006 | BRD §5 | TC-CH-002 | 🔴 Hoạt động |
 | **FR-CH-003** | Kết nối Zalo OA qua OAuth | UC-04 | US-007 | BRD §5 | TC-CH-003 | 🔴 Hoạt động |
@@ -136,7 +138,8 @@
 | §1 | Mục tiêu & Đặc thù nghiệp vụ | AUTH (Onboarding Tenant) | FR-AUTH-007~008 |
 | §2 | 3 Quy trình Solar cốt lõi | CRM (Deal, Survey, ROI, O&M) | FR-CRM-008~014 |
 | §3 | Trợ lý ảo AI (Chatbot) | CB, KB, AI, CNT | FR-CB-001~013, FR-KB-*, FR-AI-*, FR-CNT-* |
-| §4 | Phân quyền RBAC | AUTH | FR-AUTH-001~006 |
+| §4 | Phân quyền RBAC & Scopes | AUTH | FR-AUTH-001~006, 009 |
+
 | §5 | Tích hợp Kênh MXH | CH, SCH, CMT | FR-CH-001~008, FR-SCH-*, FR-CMT-* |
 | §6 | Điều phối Tin nhắn & Ngoài giờ | MSG, NOT | FR-MSG-001~013, FR-NOT-* |
 | §7 | Gộp Hồ sơ KH (Contact Merge) | CRM | FR-CRM-001~007 |

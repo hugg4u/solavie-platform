@@ -160,3 +160,8 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 6. THE Tenant_Config SHALL cho phép cấu hình giới hạn tốc độ truy cập Gateway (gateway_rate_limit_minute trong khoảng [10, 1000], gateway_rate_limit_hour trong khoảng [100, 50000]) để chống DDOS và kiểm soát hạn mức sử dụng API của từng tenant
 7. THE Tenant_Config SHALL cho phép cấu hình danh sách domain được phép gọi API (allowed_cors_origins dạng array string) để thiết lập CORS an toàn cho chatbot widget
 8. THE Tenant_Config SHALL cho phép cấu hình chính sách bảo mật xác thực (auth_password_min_length trong khoảng [6, 30] và auth_max_login_attempts trong khoảng [3, 20] lần nhập sai trước khi khóa tài khoản) để đồng bộ chính sách bảo mật tài khoản cho Keycloak
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của Tenant Config Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `tenant-config`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Tenant Config Service.
+- **Tenant Isolation:** Dữ liệu Tenant Config **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

@@ -119,3 +119,8 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 3. THE AI_Core SHALL enforce tenant isolation (agent chỉ access data của tenant mình)
 4. THE AI_Core SHALL cap total tokens per session (10000 tokens max)
 5. THE AI_Core SHALL log tất cả agent decisions cho audit trail
+
+## Security & Access Control
+- **Authentication & Authorization:** APIs của AI Core Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `ai-core`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến AI Core Service.
+- **Tenant Isolation:** Dữ liệu AI Core **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.

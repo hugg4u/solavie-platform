@@ -167,6 +167,91 @@ def assign_role_to_user(keycloak_url, admin_token, realm_name, user_id, role_nam
     assign_response.raise_for_status()
     logger.info(f"Assigned role '{role_name}' to user ID '{user_id}' in realm: {realm_name}")
 
+def create_custom_client_scopes(keycloak_url, admin_token, realm_name):
+    scopes = [
+        "campaign", "crm", "chatbot", "content", "messaging", "analytics", 
+        "ai-core", "tenant-config", "dms", "link-shortener", "scheduler", 
+        "comment-manager", "notification", "channel-connector", 
+        "media-processor", "knowledge-base", "observability"
+    ]
+    
+    headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get Client UUIDs for dashboard and api-gateway
+    clients_url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/clients"
+    try:
+        clients_resp = requests.get(clients_url, headers=headers, timeout=10)
+        clients_resp.raise_for_status()
+        clients_list = clients_resp.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch clients from realm {realm_name}: {e}")
+        return
+    
+    dashboard_uuid = None
+    api_gateway_uuid = None
+    for c in clients_list:
+        if c["clientId"] == "dashboard":
+            dashboard_uuid = c["id"]
+        elif c["clientId"] == "api-gateway":
+            api_gateway_uuid = c["id"]
+            
+    if not dashboard_uuid or not api_gateway_uuid:
+        logger.error(f"Failed to find dashboard or api-gateway clients in realm: {realm_name}")
+        return
+        
+    for scope_name in scopes:
+        # Create client scope
+        scope_url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/client-scopes"
+        scope_payload = {
+            "name": scope_name,
+            "description": f"Access to {scope_name.capitalize()} Service APIs",
+            "protocol": "openid-connect",
+            "attributes": {
+                "display.on.consent.screen": "true",
+                "include.in.token.scope": "true"
+            }
+        }
+        try:
+            resp = requests.post(scope_url, headers=headers, json=scope_payload, timeout=10)
+            if resp.status_code == 201:
+                logger.info(f"Created custom client scope: {scope_name}")
+            elif resp.status_code == 409:
+                logger.info(f"Client scope already exists: {scope_name}")
+            else:
+                logger.warning(f"Failed to create client scope {scope_name}: {resp.text}")
+                continue
+        except Exception as e:
+            logger.error(f"Error creating client scope {scope_name}: {e}")
+            continue
+            
+        # Get client scope ID
+        try:
+            get_scope_url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/client-scopes"
+            scopes_resp = requests.get(get_scope_url, headers=headers, timeout=10)
+            scopes_resp.raise_for_status()
+            scope_id = None
+            for s in scopes_resp.json():
+                if s["name"] == scope_name:
+                    scope_id = s["id"]
+                    break
+            if not scope_id:
+                logger.error(f"Scope {scope_name} not found after creation.")
+                continue
+                
+            # Assign as optional client scope to dashboard and api-gateway
+            for client_uuid in [dashboard_uuid, api_gateway_uuid]:
+                assoc_url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/clients/{client_uuid}/optional-client-scopes/{scope_id}"
+                assoc_resp = requests.put(assoc_url, headers=headers, timeout=10)
+                if assoc_resp.status_code in [204, 201, 200]:
+                    logger.info(f"Assigned scope {scope_name} to client UUID {client_uuid}")
+                else:
+                    logger.warning(f"Failed to assign scope {scope_name} to client UUID {client_uuid}: {assoc_resp.text}")
+        except Exception as e:
+            logger.error(f"Error assigning client scope {scope_name}: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Provision a new Keycloak realm for Solavie multi-tenancy.")
     parser.add_argument("--keycloak-url", default=os.getenv("KEYCLOAK_URL", "http://localhost:8081"), help="Keycloak server URL")
@@ -178,6 +263,7 @@ def main():
     parser.add_argument("--admin-email", required=True, help="Tenant admin email address")
     parser.add_argument("--admin-password-user", default="SolavieSecurePass123!", help="Tenant admin user password")
     parser.add_argument("--api-gateway-secret", help="Secret key for api-gateway confidential client (auto-generated if empty)")
+    parser.add_argument("--force", action="store_true", help="Delete and recreate realm if it already exists")
     
     args = parser.parse_args()
     
@@ -196,8 +282,15 @@ def main():
         
         # 2. Check if realm already exists
         if check_realm_exists(args.keycloak_url, admin_token, tenant_id):
-            logger.warning(f"Realm '{tenant_id}' already exists. Skipping realm creation.")
-            sys.exit(0)
+            if args.force:
+                logger.info(f"Realm '{tenant_id}' already exists. Deleting it due to --force flag...")
+                delete_url = f"{args.keycloak_url.rstrip('/')}/admin/realms/{tenant_id}"
+                del_resp = requests.delete(delete_url, headers={"Authorization": f"Bearer {admin_token}"}, timeout=10)
+                del_resp.raise_for_status()
+                logger.info(f"Deleted realm '{tenant_id}'. Proceeding with fresh creation.")
+            else:
+                logger.warning(f"Realm '{tenant_id}' already exists. Skipping realm creation.")
+                sys.exit(0)
             
         # 3. Create realm using template
         logger.info(f"Creating realm '{tenant_id}' from template...")
@@ -211,6 +304,10 @@ def main():
         logger.info("Resolving user ID and mapping 'Admin' realm role...")
         user_id = get_user_id_by_username(args.keycloak_url, admin_token, tenant_id, "admin")
         assign_role_to_user(args.keycloak_url, admin_token, tenant_id, user_id, "Admin")
+        
+        # 5.5 Create and assign custom client scopes
+        logger.info("Creating and assigning custom business client scopes...")
+        create_custom_client_scopes(args.keycloak_url, admin_token, tenant_id)
         
         # 6. Complete provisioning output
         logger.info(f"Realm provisioning successfully completed for: {tenant_id}")
