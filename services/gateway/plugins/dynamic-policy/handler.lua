@@ -8,6 +8,12 @@ local DynamicPolicyHandler = {
   VERSION = "0.1.0",
 }
 
+local function close_redis(red, ok)
+  if ok and red then
+      red:set_keepalive(10000, 100)
+  end
+end
+
 function DynamicPolicyHandler:access(conf)
   local path = kong.request.get_path()
   if string.find(path, "^/webhooks") or string.find(path, "^/health") or string.find(path, "^/ready") then
@@ -105,7 +111,6 @@ function DynamicPolicyHandler:access(conf)
   end
 
   local red = redis:new()
-
   red:set_timeouts(1000, 1000, 1000)
   local ok, err = red:connect(conf.redis_host, conf.redis_port)
   if not ok then
@@ -117,7 +122,7 @@ function DynamicPolicyHandler:access(conf)
       local is_blacklisted, err = red:get(redis_key)
       kong.log.notice("Checking Redis key: ", redis_key, " Result: ", tostring(is_blacklisted))
       if is_blacklisted and is_blacklisted ~= ngx.null then
-          red:set_keepalive(10000, 100)
+          close_redis(red, ok)
           kong.log.warn("Blocking request due to blacklisted JTI: ", jti)
           return kong.response.exit(401, { message = "Token has been revoked" })
       end
@@ -153,6 +158,7 @@ function DynamicPolicyHandler:access(conf)
       end
       
       if not origin_allowed then
+          close_redis(red, ok)
           return kong.response.exit(403, { message = "CORS origin not allowed" })
       end
       
@@ -163,6 +169,7 @@ function DynamicPolicyHandler:access(conf)
       
       local method = kong.request.get_method()
       if method == "OPTIONS" then
+          close_redis(red, ok)
           return kong.response.exit(204)
       end
   else
@@ -177,24 +184,28 @@ function DynamicPolicyHandler:access(conf)
       local key_min = "rate:" .. tenant_id .. ":min:" .. min_bucket
       local key_hour = "rate:" .. tenant_id .. ":hour:" .. hour_bucket
       
-      local current_min, err = red:incr(key_min)
-      if current_min == 1 then
+      local current_min, err_min = red:incr(key_min)
+      if current_min and current_min == 1 then
           red:expire(key_min, 60)
       end
       
-      local current_hour, err = red:incr(key_hour)
-      if current_hour == 1 then
+      local current_hour, err_hour = red:incr(key_hour)
+      if current_hour and current_hour == 1 then
           red:expire(key_hour, 3600)
       end
       
-      red:set_keepalive(10000, 100)
+      close_redis(red, ok)
       
-      kong.response.set_header("X-RateLimit-Limit-Minute", limit_min)
-      kong.response.set_header("X-RateLimit-Remaining-Minute", math.max(0, limit_min - current_min))
-      
-      if current_min > limit_min or current_hour > limit_hour then
-          return kong.response.exit(429, { message = "API rate limit exceeded" })
+      if current_min then
+          kong.response.set_header("X-RateLimit-Limit-Minute", limit_min)
+          kong.response.set_header("X-RateLimit-Remaining-Minute", math.max(0, limit_min - current_min))
+          
+          if current_min > limit_min or (current_hour and current_hour > limit_hour) then
+              return kong.response.exit(429, { message = "API rate limit exceeded" })
+          end
       end
+  else
+      close_redis(red, ok)
   end
 end
 

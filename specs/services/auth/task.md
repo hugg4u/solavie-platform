@@ -60,6 +60,9 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 4.4: THE Auth_Service SHALL hỗ trợ disable/enable user accounts
 - [x] AC 4.5: THE Auth_Service SHALL áp dụng chính sách mật khẩu (`auth_password_min_length`) được đồng bộ từ Tenant Config Service
     - [x] AC 4.5.1: Xây dựng sync subscriber/worker lắng nghe event `config.updates` từ Tenant Config Service
+- [x] AC 4.6: Phân tách dữ liệu hồ sơ User nghiệp vụ (Hybrid User Profiles) sang User Service và liên kết qua User UUID (`sub` claim)
+- [ ] AC 4.7: Triển khai cấu hình Client Credentials để cấp quyền cho User Service gọi đến Keycloak Admin API
+- [ ] AC 4.8: Phát triển & Tích hợp Custom Event Listener SPI trên Keycloak để xuất bản sự kiện sang Redis/Kafka channel `auth.user.events`
       - **Implemented:** `services/auth/scripts/sync_worker.py`
       - Worker subscribe Redis channel `config.updates`, nhận event `category=security_comments_notif`
     - [x] Call Keycloak Admin API để đồng bộ `passwordPolicy` (minLength, upperCase, digit, specialChars)

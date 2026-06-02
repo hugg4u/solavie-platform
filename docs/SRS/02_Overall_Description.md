@@ -56,7 +56,7 @@ Hệ thống được xây dựng trên kiến trúc **Microservices** với cá
 | **Mô hình dữ liệu** | Database-per-Service (mỗi service có database riêng) |
 | **Multi-tenancy** | Shared Database + Row-Level Security (RLS) trên `tenant_id` |
 | **API Gateway** | Kong API Gateway với OIDC plugin kết nối Keycloak |
-| **Xác thực** | OAuth2 / OpenID Connect thông qua Keycloak Multi-Realm |
+| **Xác thực** | OAuth2 / OpenID Connect thông qua Keycloak Multi-Realm kết hợp kiến trúc lai Hybrid User Architecture phân tách với User Service |
 
 ### 2.1.3. Phụ thuộc hệ thống bên ngoài
 
