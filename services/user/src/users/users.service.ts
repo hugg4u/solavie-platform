@@ -8,6 +8,7 @@ import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import * as crypto from 'crypto';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { UserErrorCode, UserSuccessCode } from '../common/constants/user-codes';
 
 @Injectable()
 export class UsersService {
@@ -47,7 +48,7 @@ export class UsersService {
           keycloakUser = response.data;
         } catch (e) {
           // Nếu không tìm thấy trên Keycloak, ta ném lỗi
-          throw new NotFoundException('Không tìm thấy tài khoản tương ứng trên máy chủ xác thực.');
+          throw new NotFoundException({ errorCode: UserErrorCode.AUTH_ACCOUNT_NOT_FOUND, message: 'Auth account not found on Keycloak' });
         }
 
         if (!user) {
@@ -120,7 +121,7 @@ export class UsersService {
       // 1. Kiểm tra sự tồn tại của User cục bộ
       const user = await tx.user.findUnique({ where: { id: userId } });
       if (!user) {
-        throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
+        throw new NotFoundException({ errorCode: UserErrorCode.USER_NOT_FOUND, message: 'User not found locally' });
       }
 
       // 2. Nếu có đổi email, kiểm tra chéo tính duy nhất trên Keycloak
@@ -139,7 +140,7 @@ export class UsersService {
           if (usersWithEmail && usersWithEmail.length > 0) {
             const existingUser = usersWithEmail[0];
             if (existingUser.id !== userId) {
-              throw new ConflictException('Email này đã được sử dụng bởi tài khoản khác.');
+              throw new ConflictException({ errorCode: UserErrorCode.EMAIL_ALREADY_IN_USE, message: 'Email is already in use by another account' });
             }
           }
         } catch (e: any) {
@@ -178,7 +179,7 @@ export class UsersService {
     return this.prisma.runInTenantContext(async (tx) => {
       const preferences = await tx.userPreference.findUnique({ where: { userId } });
       if (!preferences) {
-        throw new NotFoundException('Không tìm thấy cấu hình cá nhân của người dùng.');
+        throw new NotFoundException({ errorCode: UserErrorCode.USER_PREFERENCES_NOT_FOUND, message: 'User preferences not found' });
       }
 
       const updatedPrefs = await tx.userPreference.update({
@@ -211,7 +212,7 @@ export class UsersService {
         ),
       );
       if (response.data && response.data.length > 0) {
-        throw new ConflictException('Nhân viên có email này đã tồn tại trong hệ thống.');
+        throw new ConflictException({ errorCode: UserErrorCode.EMAIL_ALREADY_IN_USE, message: 'User email already in use' });
       }
     } catch (e: any) {
       if (e instanceof ConflictException) throw e;
@@ -268,7 +269,9 @@ export class UsersService {
     await this.redis.publish('user.invited', JSON.stringify(inviteEvent));
 
     return {
-      message: 'Gửi lời mời thành công.',
+      success: true,
+      code: UserSuccessCode.INVITE_SUCCESS,
+      message: 'User invited successfully',
       userId: keycloakUserId,
       activationLink,
     };
@@ -282,10 +285,10 @@ export class UsersService {
     return this.prisma.runInTenantContext(async (tx) => {
       const user = await tx.user.findUnique({ where: { id: targetUserId } });
       if (!user) {
-        throw new NotFoundException('Không tìm thấy nhân viên cần khóa.');
+        throw new NotFoundException({ errorCode: UserErrorCode.USER_NOT_FOUND, message: 'User to suspend not found' });
       }
       if (user.tenantId !== adminTenantId) {
-        throw new ForbiddenException('Bạn không có quyền quản lý nhân viên của doanh nghiệp khác.');
+        throw new ForbiddenException({ errorCode: UserErrorCode.TENANT_ACCESS_DENIED, message: 'Access denied: Target user belongs to a different tenant' });
       }
 
       // 1. Gọi Keycloak Admin API đặt enabled=false và Force Logout sessions
@@ -312,10 +315,10 @@ export class UsersService {
     return this.prisma.runInTenantContext(async (tx) => {
       const user = await tx.user.findUnique({ where: { id: targetUserId } });
       if (!user) {
-        throw new NotFoundException('Không tìm thấy nhân viên cần mở khóa.');
+        throw new NotFoundException({ errorCode: UserErrorCode.USER_NOT_FOUND, message: 'User to unsuspend not found' });
       }
       if (user.tenantId !== adminTenantId) {
-        throw new ForbiddenException('Bạn không có quyền quản lý nhân viên của doanh nghiệp khác.');
+        throw new ForbiddenException({ errorCode: UserErrorCode.TENANT_ACCESS_DENIED, message: 'Access denied: Target user belongs to a different tenant' });
       }
 
       // 1. Kích hoạt lại trên Keycloak
