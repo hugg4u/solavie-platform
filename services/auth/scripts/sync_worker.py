@@ -4,6 +4,8 @@ import logging
 import os
 import sys
 import time
+import hmac
+import hashlib
 import redis
 import requests
 
@@ -20,6 +22,11 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
 KC_ADMIN = os.getenv("KC_ADMIN", "admin")
 KC_ADMIN_PASSWORD = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
+
+# AC 4.8: User Service Webhook for event forwarding
+USER_SERVICE_WEBHOOK_URL = os.getenv("USER_SERVICE_WEBHOOK_URL", "http://user-service:3008/api/v1/users/events")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
 
 def wait_for_keycloak(keycloak_url, timeout=120):
     url = f"{keycloak_url.rstrip('/')}/health/ready"
@@ -75,6 +82,58 @@ def update_realm_security(keycloak_url, admin_token, realm_name, min_length, max
         logger.info(f"Successfully updated realm '{realm_name}' security policy.")
     else:
         logger.error(f"Failed to update realm '{realm_name}' security policy. Status: {response.status_code}, Body: {response.text}")
+
+def forward_user_event_to_service(event_payload: dict):
+    """
+    AC 4.8: Forward Keycloak user events sang User Service webhook.
+    Ký HMAC-SHA256 dựa trên WEBHOOK_SECRET để User Service có thể xác thực chữ ký.
+    Map từ event type của Keycloak sang chuẩn event của User Service.
+    """
+    # Map Keycloak event types -> User Service event schema
+    kc_event_map = {
+        "VERIFY_EMAIL": "user.verified",
+        "REGISTER": "user.verified",
+        "UPDATE_EMAIL": "user.email_updated",
+        "DISABLE_USER": "user.disabled",
+        "DELETE_USER": "user.deleted",
+    }
+
+    raw_event = event_payload.get("event") or event_payload.get("type", "")
+    mapped_event = kc_event_map.get(raw_event, raw_event)
+
+    webhook_payload = {
+        "event": mapped_event,
+        "userId": event_payload.get("user_id") or event_payload.get("userId"),
+        "realm": event_payload.get("realm") or event_payload.get("realmId"),
+        "email": event_payload.get("email"),
+    }
+
+    payload_str = json.dumps(webhook_payload, separators=(",", ":"))
+
+    # Sign payload with HMAC-SHA256
+    signature = ""
+    if WEBHOOK_SECRET:
+        mac = hmac.new(
+            WEBHOOK_SECRET.encode("utf-8"),
+            payload_str.encode("utf-8"),
+            hashlib.sha256
+        )
+        signature = mac.hexdigest()
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Webhook-Signature": signature,
+    }
+
+    try:
+        resp = requests.post(USER_SERVICE_WEBHOOK_URL, data=payload_str, headers=headers, timeout=5)
+        if resp.status_code in [200, 201, 204]:
+            logger.info(f"[ac4.8] Forwarded user event '{mapped_event}' for userId={webhook_payload['userId']} to User Service. Status: {resp.status_code}")
+        else:
+            logger.error(f"[ac4.8] Failed to forward user event '{mapped_event}' to User Service. Status: {resp.status_code}, Body: {resp.text}")
+    except Exception as e:
+        logger.error(f"[ac4.8] Error forwarding user event to User Service: {e}")
+
 
 def sync_realm_security(r, tenant_id):
     keys = [
@@ -144,8 +203,8 @@ def main():
 
         # Setup Pub/Sub listener
         pubsub = r.pubsub()
-        pubsub.subscribe(["config.updates", "token.revoked"])
-        logger.info("Subscribed to Redis channels 'config.updates' and 'token.revoked'.")
+        pubsub.subscribe(["config.updates", "token.revoked", "auth.user.events"])
+        logger.info("Subscribed to Redis channels: 'config.updates', 'token.revoked', 'auth.user.events'.")
         
         while True:
             # 1. Check Pub/Sub messages (non-blocking check with timeout)
@@ -172,6 +231,10 @@ def main():
                             if ttl > 0:
                                 r.setex(f"blacklist:jti:{jti}", ttl, "revoked")
                                 logger.info(f"Successfully blacklisted token JTI '{jti}' for {ttl} seconds.")
+                    elif channel == "auth.user.events":
+                        # AC 4.8: Forward Keycloak user lifecycle events to User Service
+                        logger.info(f"[ac4.8] Received user event from Keycloak: {data}")
+                        forward_user_event_to_service(data)
             except Exception as e:
                 logger.error(f"Error processing pub/sub message: {str(e)}")
 

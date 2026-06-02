@@ -93,6 +93,20 @@
       ]
     },
     {
+      "clientId": "user-service-client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "{{user_service_secret}}",
+      "redirectUris": [],
+      "webOrigins": [],
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "description": "Confidential client for User Service to call Keycloak Admin API (Client Credentials Flow, Least Privilege: manage-users only)"
+    },
+    {
       "clientId": "api-gateway",
       "enabled": true,
       "publicClient": false,

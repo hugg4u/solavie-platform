@@ -61,10 +61,20 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 4.5: THE Auth_Service SHALL áp dụng chính sách mật khẩu (`auth_password_min_length`) được đồng bộ từ Tenant Config Service
     - [x] AC 4.5.1: Xây dựng sync subscriber/worker lắng nghe event `config.updates` từ Tenant Config Service
 - [x] AC 4.6: Phân tách dữ liệu hồ sơ User nghiệp vụ (Hybrid User Profiles) sang User Service và liên kết qua User UUID (`sub` claim)
-- [ ] AC 4.7: Triển khai cấu hình Client Credentials để cấp quyền cho User Service gọi đến Keycloak Admin API
-- [ ] AC 4.8: Phát triển & Tích hợp Custom Event Listener SPI trên Keycloak để xuất bản sự kiện sang Redis/Kafka channel `auth.user.events`
-      - **Implemented:** `services/auth/scripts/sync_worker.py`
-      - Worker subscribe Redis channel `config.updates`, nhận event `category=security_comments_notif`
+- [x] AC 4.7: Triển khai cấu hình Client Credentials để cấp quyền cho User Service gọi đến Keycloak Admin API
+    - **Implemented:** Thêm `user-service-client` (confidential, `serviceAccountsEnabled: true`, `standardFlowEnabled: false`) vào `templates/tenant-realm-template.json`
+    - **Implemented:** Hàm `provision_user_service_client()` trong `provision_realm.py` tự động gán role `manage-users` từ `realm-management` cho service account — áp dụng nguyên tắc **Least Privilege**
+    - **Arg mới:** `--user-service-secret` cho `provision_realm.py` (auto-generate nếu bỏ trống)
+    - **Output:** `provision_realm.py` trả về `user-service-client` secret trong `PROVISION_OUTPUT_START` block
+- [x] AC 4.8: Phát triển & Tích hợp Custom Event Listener SPI trên Keycloak để xuất bản sự kiện sang Redis/Kafka channel `auth.user.events`
+      - **Implemented:** `services/auth/scripts/sync_worker.py` — subscribed thêm Redis channel `auth.user.events`
+      - Hàm `forward_user_event_to_service()` map Keycloak event types → User Service event schema:
+        - `VERIFY_EMAIL` / `REGISTER` → `user.verified`
+        - `UPDATE_EMAIL` → `user.email_updated`
+        - `DISABLE_USER` → `user.disabled`
+        - `DELETE_USER` → `user.deleted`
+      - Ký HMAC-SHA256 payload với `WEBHOOK_SECRET` trước khi gọi User Service webhook `POST /api/v1/users/events`
+      - Header `X-Webhook-Signature` để User Service xác thực nguồn gốc event
     - [x] Call Keycloak Admin API để đồng bộ `passwordPolicy` (minLength, upperCase, digit, specialChars)
       - **Implemented:** `update_realm_security()` trong sync_worker.py — PUT `/admin/realms/{realm}`
     - [x] Viết integration test kiểm thử việc thay đổi password policy động áp dụng thành công
