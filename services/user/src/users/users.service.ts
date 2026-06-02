@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
 import { RedisService } from '../redis/redis.service';
@@ -13,6 +13,7 @@ import { tenantContextStorage } from '../common/context/tenant-context';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   private readonly keycloakUrl: string;
 
   constructor(
@@ -408,11 +409,11 @@ export class UsersService {
 
           case 'user.email_updated':
             // Cục bộ DB chỉ cache thông tin nghiệp vụ, thông tin email được lưu trên Keycloak
-            console.log(`User ${userId} in realm ${realm} updated email to ${email}`);
+            this.logger.log(`User ${userId} in realm ${realm} updated email to ${email}`);
             break;
 
           default:
-            console.log(`Unhandled Keycloak event: ${event}`);
+            this.logger.warn(`Unhandled Keycloak event: ${event}`);
         }
       });
     });

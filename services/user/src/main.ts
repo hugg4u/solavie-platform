@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { join } from 'path';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { existsSync } from 'fs';
 
 async function bootstrap() {
@@ -41,7 +41,8 @@ async function bootstrap() {
   const port = process.env.PORT || 3008;
   await app.listen(port);
   
-  console.log(`[User Service] REST API listening on port ${port}`);
-  console.log(`[User Service] gRPC Server listening on port 50058`);
+  const logger = new Logger('Bootstrap');
+  logger.log(`REST API listening on port ${port}`);
+  logger.log(`gRPC Server listening on port 50058`);
 }
 bootstrap();
