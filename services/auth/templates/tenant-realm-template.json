@@ -8,6 +8,13 @@
   "resetPasswordAllowed": true,
   "rememberMe": true,
   "verifyEmail": true,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyLookAheadWindow": 1,
+  "otpPolicyPeriod": 30,
   "passwordPolicy": "length(8) and upperCase(1) and digits(1) and specialChars(1)",
   "bruteForceProtected": true,
   "failureFactor": 5,
@@ -39,6 +46,9 @@
       "clientId": "dashboard",
       "enabled": true,
       "publicClient": true,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
       "redirectUris": [
         "http://localhost:*",
         "https://*.solavie.com/*"
