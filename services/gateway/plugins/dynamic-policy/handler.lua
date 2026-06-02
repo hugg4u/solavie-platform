@@ -128,6 +128,18 @@ function DynamicPolicyHandler:access(conf)
       end
   end
 
+  -- Check User Blacklist (for suspended users)
+  if ok and claims and claims.sub then
+      local user_key = "blacklist:user:" .. claims.sub
+      local is_blacklisted, err = red:get(user_key)
+      kong.log.notice("Checking Redis key: ", user_key, " Result: ", tostring(is_blacklisted))
+      if is_blacklisted and is_blacklisted ~= ngx.null then
+          close_redis(red, ok)
+          kong.log.warn("Blocking request due to suspended user: ", claims.sub)
+          return kong.response.exit(401, { message = "User has been suspended" })
+      end
+  end
+
   local config = nil
   if ok then
       local res, err = red:get("tenant:" .. tenant_id .. ":config:security_comments_notif")

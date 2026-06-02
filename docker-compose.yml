@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
@@ -139,6 +139,33 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  user-service:
+    build:
+      context: ./services/user
+      dockerfile: Dockerfile
+    container_name: solavie-user-service
+    environment:
+      - PORT=3008
+      - DATABASE_URL=postgresql://solavie_user:solavie_user_password@postgres-keycloak:5432/solavie_user_db?schema=public
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KEYCLOAK_URL=http://keycloak:8080
+      - KC_ADMIN=${KC_ADMIN}
+      - KC_ADMIN_PASSWORD=${KC_ADMIN_PASSWORD}
+      - KEYCLOAK_WEBHOOK_SECRET=webhook_shared_secret
+      - DASHBOARD_URL=http://localhost:3000
+    ports:
+      - "3008:3008"
+      - "50058:50058"
+    depends_on:
+      postgres-keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
   pgadmin:
     image: dpage/pgadmin4:8.9
     container_name: solavie-pgadmin
