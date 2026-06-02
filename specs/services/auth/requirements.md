@@ -54,6 +54,9 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 3. THE Auth_Service SHALL hỗ trợ password reset flow
 4. THE Auth_Service SHALL hỗ trợ disable/enable user accounts
 5. THE Auth_Service SHALL áp dụng chính sách mật khẩu (độ dài tối thiểu `auth_password_min_length` từ 6-30 ký tự, độ phức tạp) được đồng bộ từ cấu hình bảo mật của Tenant Config Service
+6. THE Auth_Service (Keycloak) SHALL chỉ quản lý các thông tin xác thực cốt lõi (UUID, Email, Password, Active Status), trong khi các thông tin nghiệp vụ phong phú của User (SĐT, avatar, phòng ban) SHALL được lưu trữ và quản lý độc lập tại **User Service**, liên kết 1:1 qua User UUID (`sub` claim).
+7. THE Auth_Service (Keycloak) SHALL cung cấp các REST API quản trị (Keycloak Admin APIs) để cho phép **User Service** cập nhật thông tin (khóa/mở khóa tài khoản, cập nhật email/họ tên) từ Dashboard ngược lên.
+8. THE Auth_Service (Keycloak) SHALL được cấu hình Custom Event Listener SPI để tự động xuất bản (publish) sự kiện thay đổi trạng thái người dùng (Verify Email, Lock Account, Update Profile) sang Redis channel/Kafka topic `auth.user.events` phục vụ đồng bộ dữ liệu xuống Backend.
 
 ### Requirement 5: Token Security
 
@@ -63,8 +66,9 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 1. THE Auth_Service SHALL sign tokens với RS256 (asymmetric keys)
 2. THE Auth_Service SHALL hỗ trợ token revocation
 3. THE Auth_Service SHALL giới hạn số lần đăng nhập sai (brute force protection) theo cấu hình `auth_max_login_attempts` (3-20 lần) được đồng bộ từ Tenant Config Service
-4. THE Auth_Service SHALL log tất cả authentication events (login, logout, failed attempts)
-5. THE Auth_Service SHALL hỗ trợ session management (list active sessions, force logout)
+4. THE Auth_Service SHALL cấp quyền truy cập Admin APIs cho các Backend Services nội bộ bằng Client Credentials Flow qua các client chuyên dụng (như `user-service-client`), áp dụng nguyên tắc Least Privilege (chỉ gán vai trò `manage-users` thuộc realm-management của realm tương ứng, không được gán admin của master realm).
+5. THE Auth_Service SHALL log tất cả authentication events (login, logout, failed attempts)
+6. THE Auth_Service SHALL hỗ trợ session management (list active sessions, force logout)
 
 ### Requirement 6: Advanced Security & Token Revocation (Hardened)
 

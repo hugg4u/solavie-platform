@@ -10,7 +10,30 @@ Xem **Architecture**, **Realm Structure**, và **Key Endpoints** bên dưới.
 
 ## Data Models
 
-Keycloak quản lý data nội bộ trong `keycloak_db` (PostgreSQL). Không có custom tables — tất cả user, role, realm data được quản lý bởi Keycloak schema. Xem **Realm Structure** và **JWT Token Structure** bên dưới.
+### 🛡️ Identity Authentication (Keycloak)
+Keycloak quản lý dữ liệu xác thực nội bộ trong `keycloak_db` (PostgreSQL). Không có custom tables — tất cả user, role, realm data được quản lý bởi Keycloak schema. Xem **Realm Structure** và **JWT Token Structure** bên dưới.
+
+### 👤 Business User Profile (User Service DB)
+Để phục vụ thông tin nghiệp vụ đa dạng mà không làm phình to hoặc ảnh hưởng hiệu năng của Identity Provider, hệ thống áp dụng kiến trúc tách rời (Decoupled Hybrid Architecture). Thông tin nghiệp vụ của người dùng hệ thống (User) được lưu tại cơ sở dữ liệu nghiệp vụ riêng của **User Service** (`solavie_user_db`):
+
+#### Bảng `users` (Hồ sơ User nghiệp vụ)
+| Tên trường (Column) | Kiểu dữ liệu | Ràng buộc | Ý nghĩa nghiệp vụ |
+|:---|:---|:---|:---|
+| `id` | UUID | PRIMARY KEY | Khóa chính (Trùng khớp 100% với `User UUID` - claim `sub` trong Keycloak JWT) |
+| `tenant_id` | UUID | NOT NULL | Định danh doanh nghiệp sở hữu nhân viên này (Multi-tenant) |
+| `phone_number` | VARCHAR(20) | NULL | Số điện thoại liên hệ nội bộ |
+| `avatar_url` | VARCHAR(255) | NULL | Đường dẫn ảnh đại diện nhân viên |
+| `department` | VARCHAR(50) | NULL | Phòng ban làm việc (Marketing, Sales, IT...) |
+| `status` | VARCHAR(20) | DEFAULT 'PENDING' | Trạng thái: `PENDING` (chờ kích hoạt), `ACTIVE`, `SUSPENDED` |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | Thời gian tạo tài khoản |
+
+### 🛠️ Database Management (pgAdmin 4)
+Để phục vụ quản trị dữ liệu cơ sở dữ liệu PostgreSQL (`solavie-postgres`) trực quan, hệ thống tích hợp container `pgadmin` (port `5050` trên host) kết nối chung mạng Docker nội bộ.
+* **Tự động nạp cấu hình (Auto-provisioning):** Danh sách server kết nối (ví dụ: `Solavie DB`) được tự động nạp từ file `./scripts/pgadmin-servers.json` vào container tại `/pgadmin4/servers.json` khi container khởi dựng.
+* **Đăng nhập mặc định:**
+  * Email: `admin@solavie.com`
+  * Password: `admin_secret_pass`
+
 | Component | Technology |
 |-----------|-----------|
 | Platform | Keycloak 24+ |
@@ -61,7 +84,8 @@ Keycloak Instance
 ├── tenant-{uuid} realm
 │   ├── Clients:
 │   │   ├── dashboard (public, Authorization Code + PKCE)
-│   │   └── api-gateway (confidential, for Kong OIDC)
+│   │   ├── api-gateway (confidential, for Kong OIDC)
+│   │   └── user-service-client (confidential, Client Credentials, roles: realm-management/manage-users)
 │   │
 │   ├── Client Scopes (Optional):
 │   │   ├── campaign (for Campaign Service APIs)
@@ -279,6 +303,36 @@ Chi tiết gọi Keycloak Admin API để đồng bộ:
   "failureFactor": auth_max_login_attempts
 }
 ```
+
+## User Events & Backend Synchronization (Keycloak Events)
+
+Để đảm bảo thông tin nghiệp vụ tại **User Service** luôn đồng bộ với trạng thái danh tính tại Keycloak, hệ thống cấu hình **Keycloak Event Listener (HTTP Webhook / Redis Event Publisher)** để tự động đẩy sự kiện khi có thay đổi liên quan đến User:
+
+### 🔄 Quy trình đồng bộ:
+1. Khi xảy ra các sự kiện User nhạy cảm trên Keycloak, một Custom Event Listener SPI sẽ bắn sự kiện sang Redis channel `auth.user.events` (hoặc Kafka topic `auth.user.events`).
+2. **User Service** lắng nghe channel/topic này để cập nhật trạng thái tương ứng trong cơ sở dữ liệu `solavie_user_db`.
+
+```mermaid
+sequenceDiagram
+    participant KC as Keycloak (Auth)
+    participant Redis as Redis (auth.user.events)
+    participant US as User Service (Backend)
+
+    KC->>KC: Trigger User Event (e.g. VERIFY_EMAIL)
+    KC->>Redis: PUBLISH auth.user.events {event_type, user_id, details}
+    Redis-->>US: Nhận event thời gian thực
+    US->>US: Cập nhật bảng users (status='ACTIVE' hoặc 'SUSPENDED')
+```
+
+### 📋 Danh sách sự kiện và Hành động đồng bộ:
+
+| Sự kiện trên Keycloak (Event Type) | Payload gửi đi | Hành động tại User Service |
+|:---|:---|:---|
+| **`VERIFY_EMAIL`** / **`REGISTER`** | `{"event": "user.verified", "user_id": "uuid", "email": "..."}` | Cập nhật `status = 'ACTIVE'` |
+| **`UPDATE_EMAIL`** | `{"event": "user.email_updated", "user_id": "uuid", "new_email": "..."}` | Cập nhật email trong hồ sơ |
+| **`DISABLE_USER`** | `{"event": "user.disabled", "user_id": "uuid"}` | Cập nhật `status = 'SUSPENDED'` |
+| **`DELETE_USER`** | `{"event": "user.deleted", "user_id": "uuid"}` | Xóa mềm (Soft Delete) hồ sơ User |
+
 
 ## Monitoring
 

@@ -181,6 +181,18 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                 ]
             },
             {
+                "name": "user-service",
+                "url": "http://user-service:3008",
+                "routes": [
+                    {
+                        "name": "user-api",
+                        "paths": ["/api/v1/users"],
+                        "strip_path": False,
+                        "plugins": [jwt_plugin]
+                    }
+                ]
+            },
+            {
                 "name": "channel-connector-webhooks",
                 "url": "http://127.0.0.1:3001",
                 "routes": [

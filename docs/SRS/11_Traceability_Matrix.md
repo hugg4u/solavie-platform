@@ -17,6 +17,10 @@
 | **FR-AUTH-007** | Khởi tạo Realm & Admin Tenant mới | UC-03 | US-005 | BRD §1 | TC-AUTH-007 | 🔴 Hoạt động |
 | **FR-AUTH-008** | Gửi email kích hoạt tài khoản | UC-03 | US-005 | BRD §1 | TC-AUTH-008 | 🔴 Hoạt động |
 | **FR-AUTH-009** | Phân quyền mức Client (Scopes) | UC-01 | US-001 | BRD §4 | TC-AUTH-009 | 🟡 Đang dev |
+| **FR-AUTH-010** | Phân tách Danh tính & Hồ sơ User | UC-01 | US-001 | BRD §4 | TC-AUTH-010 | 🔴 Hoạt động |
+| **FR-AUTH-011** | Thu hồi Token và Session tức thời | UC-01 | US-002 | BRD §4 | TC-AUTH-011 | 🟢 Lên kế hoạch |
+| **FR-AUTH-012** | Tự kích hoạt User (Lazy Sync) | UC-01 | US-001 | BRD §4 | TC-AUTH-012 | 🟢 Lên kế hoạch |
+| **FR-AUTH-013** | Xác thực chữ ký Webhook (HMAC) | UC-02 | US-003 | BRD §4 | TC-AUTH-013 | 🟢 Lên kế hoạch |
 
 | **FR-CH-001** | Kết nối Facebook Page qua OAuth | UC-04 | US-006 | BRD §5 | TC-CH-001 | 🔴 Hoạt động |
 | **FR-CH-002** | Đăng ký Webhook Page Facebook | UC-04 | US-006 | BRD §5 | TC-CH-002 | 🔴 Hoạt động |

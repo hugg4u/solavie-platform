@@ -43,6 +43,36 @@
 - **Truy vết:** UC-01, US-001
 
 
+### FR-AUTH-010: Phân tách Danh tính và Hồ sơ Nghiệp vụ Người dùng (Hybrid User Profiles)
+- **Mô tả:** Hệ thống **PHẢI** tách biệt dữ liệu xác thực cơ bản (do Keycloak quản lý) và hồ sơ nghiệp vụ người dùng nội bộ (do User Service phía Backend quản lý). Khi người dùng đăng ký hoặc được tạo mới, hệ thống **PHẢI** lưu thông tin nghiệp vụ mở rộng (số điện thoại, phòng ban, ảnh đại diện, trạng thái kích hoạt) vào database nghiệp vụ riêng biệt, liên kết 1:1 qua User UUID nhận được từ Keycloak.
+- **Đầu vào:** User UUID từ Keycloak, thông tin nghiệp vụ gửi từ dashboard hoặc API mời nhân viên.
+- **Đầu ra:** Bản ghi User nghiệp vụ được tạo thành công trong database `solavie_user_db`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-01, US-001
+
+
+### FR-AUTH-011: Thu hồi Session và Access Token tức thời
+- **Mô tả:** Khi một người dùng bị khóa tài khoản hoặc buộc đăng xuất bởi Admin, hệ thống **PHẢI** lập tức gọi API hủy toàn bộ session trên Keycloak và gửi sự kiện thu hồi `token.revoked` (kèm theo `jti` của các token liên quan) để API Gateway từ chối quyền truy cập ngay lập tức (< 1ms).
+- **Đầu vào:** Sự kiện khóa tài khoản / force logout.
+- **Đầu ra:** Phiên làm việc bị vô hiệu hóa trên cả Keycloak và API Gateway.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-01, US-002
+
+### FR-AUTH-012: Tự phục hồi đồng bộ User (Lazy Synchronization)
+- **Mô tả:** Nhằm dự phòng sự cố mất Webhook kích hoạt từ Keycloak, khi người dùng đăng nhập lần đầu tiên thành công và gửi JWT Token hợp lệ, nếu trạng thái DB local của User Service vẫn là `PENDING` thì hệ thống **PHẢI** tự động kích hoạt tài khoản thành `ACTIVE`.
+- **Đầu vào:** Request mang JWT Token hợp lệ lần đầu của User.
+- **Đầu ra:** Trạng thái tài khoản được tự động chuyển sang `ACTIVE` trên DB.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-01, US-001
+
+### FR-AUTH-013: Bảo mật Webhook Endpoint (Signature Verification)
+- **Mô tả:** Mọi Webhook API tiếp nhận sự kiện cập nhật trạng thái User từ Keycloak sang Backend **PHẢI** được bảo mật bằng cơ chế xác thực chữ ký (Signature Verification) sử dụng thuật toán HMAC-SHA256 với Shared Secret.
+- **Đầu vào:** Request Header chứa chữ ký số (Signature).
+- **Đầu ra:** Chấp nhận xử lý sự kiện hoặc từ chối trả về lỗi `401 Unauthorized` nếu chữ ký không hợp lệ.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-02, US-003
+
+
 ### FR-AUTH-005: Quản lý Vai trò và Quyền hạn (Role Management)
 - **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng.
 - **Đầu vào:** Tên vai trò, danh sách permissions chọn từ danh mục.
