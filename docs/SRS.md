@@ -191,15 +191,18 @@ graph TD
 
 
 ### 2.5. Cơ chế đồng bộ cấu hình (Configuration Sync Flow)
-Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, việc thay đổi cấu hình định tuyến (routing), các API keys và feature gates được đồng bộ qua cơ chế **Publish-Subscribe** bằng Redis Pub/Sub:
+Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, việc thay đổi cấu hình định tuyến (routing), các API keys và feature gates được đồng bộ qua cơ chế **Dual-Publishing** (kết hợp giữa Redis Pub/Sub và Redis Streams) để đảm bảo cả tốc độ lẫn độ tin cậy cao:
 
 1. **Quản trị tập trung (Centralized Management)**: Admin thay đổi cấu hình model routing hoặc cập nhật API Keys (được mã hóa đối xứng AES-256) trên Dashboard, gửi yêu cầu tới `Tenant Config Service` (NestJS) và lưu vào `config_db`.
-2. **Kích hoạt sự kiện (Event Trigger)**: `Tenant Config Service` ghi nhận thay đổi, cập nhật Redis cache key `{tenant_id}:config:ai_kb` và đồng thời publish một thông điệp cập nhật lên kênh Redis Pub/Sub `config.updates`.
-3. **Nhận thông điệp (Event Consumption)**: `AI Core Service` (FastAPI) đang chạy một tiến trình con (Background Listener) lắng nghe kênh `config.updates`.
+2. **Kích hoạt sự kiện (Event Trigger)**: `Tenant Config Service` ghi nhận thay đổi, cập nhật Redis cache và đồng thời đẩy sự kiện cập nhật vào:
+   * **Redis Stream** (`config.updates.stream`): Dành cho các worker đồng bộ tin cậy cần cơ chế ACK (như `Auth Sync Worker`).
+   * **Redis Pub/Sub Channel** (`config.updates`): Dành cho các API service nhận dạng invalidation cache tức thời (như `AI Core Service`).
+3. **Nhận thông điệp (Event Consumption)**:
+   * `AI Core Service` (FastAPI) chạy background thread subscribe kênh Pub/Sub `config.updates` để thực hiện invalidate in-memory cache tức thì.
+   * `Auth Sync Worker` (Python) lắng nghe từ Redis Stream `config.updates.stream` thông qua **Consumer Group** (`auth-sync-group`). Cơ chế ACK bảo đảm rằng nếu worker sập nguồn, tin nhắn cấu hình sẽ được lưu vết và xử lý lại ngay khi worker online trở lại.
 4. **Đồng bộ và Invalidate Cache**:
-   - Khi phát hiện sự kiện thuộc category `ai_kb`, `AI Core Service` gọi gRPC `GetConfig` (hoặc REST fallback) sang `Tenant Config Service` để truy vấn cấu hình mới nhất.
-   - `AI Core Service` lưu cấu hình này vào cơ sở dữ liệu cục bộ `ai_core_db` (các bảng `llm_route_configs` và `api_key_configs`) để làm backup dự phòng khi xảy ra sự cố network.
-   - `AI Core Service` làm trống (invalidate) các cache keys cũ trong Redis gồm `{tenant_id}:config:llm_model_routing` và `{tenant_id}:config:api_keys` để buộc các yêu cầu gọi AI tiếp theo phải nạp lại dữ liệu cấu hình mới nhất.
+   * Khi nhận được sự kiện, các services gọi gRPC `GetConfig` (hoặc REST fallback) sang `Tenant Config Service` để truy vấn và ghi nhận cấu hình bảo mật/model mới nhất vào local DB để backup.
+   * Keycloak Realm settings (Password Policy, Brute force) được cập nhật đồng bộ qua Keycloak Admin API `/admin/realms/{realm}`.
 
 ---
 
@@ -213,6 +216,7 @@ graph TD
 2.  **Tích hợp OIDC:** Xác thực tự động các Request mang Authorization Header (Bearer JWT) thông qua kết nối với Keycloak. Trả về `401 Unauthorized` nếu token không hợp lệ hoặc hết hạn.
 3.  **Request Transformation:** Trích xuất các claims từ JWT đã được xác minh (gồm `tenant_id`, `sub` làm `user_id`, `roles`) để inject thành các Header nội bộ: `X-Tenant-ID`, `X-User-ID`, `X-User-Roles` trước khi forward tới downstream microservices.
 4.  **Rate Limiting:** Giới hạn tần suất gọi API ở tầng Gateway dựa trên giá trị của Header `X-Tenant-ID` và Redis lưu trữ trạng thái.
+5.  **JTI Blacklisting (Thu hồi Token):** Trích xuất claim `jti` từ Access Token sử dụng API giải mã base64 hiệu năng cao của OpenResty (`ngx.decode_base64`), thực hiện đối chiếu thời gian thực với Redis blacklist cache (`blacklist:jti:{jti}`) để chặn đứng và từ chối các token đã bị đăng xuất/thu hồi với HTTP code `401 Unauthorized` trong chưa đầy 1ms.
 
 #### Auth Service (Keycloak)
 1.  **Cấp phát Token:** Hỗ trợ luồng OAuth2 Authorization Code Flow đối với Dashboard và Client Credentials Flow đối với service-to-service.
@@ -222,6 +226,7 @@ graph TD
     *   `Agent`: Truy cập hộp thư hợp nhất, tương tác chat, xử lý danh bạ khách hàng.
     *   `Viewer`: Chỉ xem báo cáo analytics và lịch đăng bài, không có quyền tương tác hay cấu hình.
 3.  **Tenant Realm Management:** API cho phép tự động khởi tạo Realm mới độc lập cùng cấu hình bảo mật mặc định khi một Tenant mới onboard trên hệ thống.
+4.  **Bảo mật nâng cao (Advanced Hardening):** Ép buộc PKCE chuẩn `S256` cho public client (`dashboard`) để bảo vệ Authorization Code Flow, áp dụng cơ chế Refresh Token Rotation (RTR) vô hiệu hóa tức thì refresh token cũ ngay sau khi sử dụng, và cấu hình chính sách OTP (MFA) mặc định sử dụng TOTP.
 
 ### 3.2. Phân hệ Tương tác Khách hàng & Kênh
 

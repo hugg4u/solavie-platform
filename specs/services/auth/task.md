@@ -88,6 +88,21 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 5.5: THE Auth_Service SHALL hỗ trợ session management (list active sessions, force logout)
   - Keycloak Admin API `/admin/realms/{realm}/users/{id}/sessions` hỗ trợ đầy đủ
 
+### Task 6: Advanced Security Hardening (MỚI)
+> *User Story: Là platform security architect, tôi muốn thắt chặt bảo mật session và hỗ trợ thu hồi token tức thời.*
+
+**Acceptance Criteria Implementation:**
+- [x] AC 6.1: THE Auth_Service SHALL bắt buộc PKCE cho client dashboard
+  - **Implemented:** Thuộc tính `pkce.code.challenge.method` được cấu hình là `"S256"` trong `tenant-realm-template.json`
+- [x] AC 6.2: THE Auth_Service SHALL áp dụng Refresh Token Rotation (RTR)
+  - **Implemented:** Cấu hình `revokeRefreshToken: true` và `refreshTokenMaxReuse: 0` trong `tenant-realm-template.json`
+- [x] AC 6.3: THE Auth_Service SHALL thiết lập chính sách OTP mặc định cho Realm
+  - **Implemented:** Cấu hình TOTP Policy mặc định trong `tenant-realm-template.json`
+- [x] AC 6.4: THE API Gateway SHALL hỗ trợ thu hồi token qua JTI Blacklisting
+  - **Implemented:** Kong plugin `dynamic-policy` trích xuất `jti` qua `ngx.decode_base64` và kiểm tra blacklist trong Redis
+- [x] AC 6.5: THE Sync_Worker SHALL đồng bộ tin cậy cấu hình qua Redis Streams
+  - **Implemented:** Sửa đổi `sync_worker.py` để kết nối và lắng nghe từ Redis Stream `config.updates.stream` sử dụng Consumer Group `auth-sync-group`
+
 ## Verification & Testing
 
 ### Automated Tests

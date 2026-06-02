@@ -65,3 +65,14 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 3. THE Auth_Service SHALL giới hạn số lần đăng nhập sai (brute force protection) theo cấu hình `auth_max_login_attempts` (3-20 lần) được đồng bộ từ Tenant Config Service
 4. THE Auth_Service SHALL log tất cả authentication events (login, logout, failed attempts)
 5. THE Auth_Service SHALL hỗ trợ session management (list active sessions, force logout)
+
+### Requirement 6: Advanced Security & Token Revocation (Hardened)
+
+**User Story:** Là platform security architect, tôi muốn thắt chặt bảo mật session và hỗ trợ thu hồi token tức thời tại Gateway.
+
+#### Acceptance Criteria
+1. THE Auth_Service SHALL bắt buộc PKCE (Proof Key for Code Exchange) sử dụng mã hóa `S256` đối với client public (`dashboard`) để chống lại Authorization Code Interception.
+2. THE Auth_Service SHALL áp dụng cơ chế Refresh Token Rotation (RTR) - vô hiệu hóa Refresh Token cũ ngay sau khi được sử dụng (`revokeRefreshToken = true`, `refreshTokenMaxReuse = 0`) để chống replay attack.
+3. THE Auth_Service SHALL cấu hình chính sách OTP mặc định (TOTP, HmacSHA1, 6 digits, 30s period) cho mọi Tenant Realm được tạo ra.
+4. THE API Gateway (Kong) SHALL thực hiện thu hồi token tức thời thông qua JTI Blacklisting bằng cách trích xuất claim `jti` từ Access Token và truy vấn Redis cache (`blacklist:jti:{jti}`) cho mọi API request.
+5. THE Auth_Sync_Worker SHALL đồng bộ cấu hình bảo mật thông qua hàng đợi tin cậy cao Redis Streams (`config.updates.stream`) sử dụng Consumer Groups để bảo đảm không mất mát cấu hình khi worker gặp sự cố mạng hoặc khởi động lại.
