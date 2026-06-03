@@ -461,6 +461,12 @@ Hệ thống bắt buộc phải tự động chuyển từ Bot sang Human Agent
 ### 4.3. Chuẩn Giới hạn Tần suất (Rate Limiting Standard)
 Sử dụng thuật toán **Token Bucket** lưu trữ tại Redis tập trung. Giới hạn được cấu hình và kiểm soát theo các Tier đăng ký của Tenant:
 
+*   **Cơ chế phân hạng gói cước động (Dynamic Tiers & Limits):** 
+    *   Hạng gói cước của Tenant (`free`, `standard`, `enterprise`, `custom_vip`,...) được quản lý bởi System Admin và cache tại Redis dưới key `tenant:{tenant_id}:tier`.
+    *   Hạn mức tài nguyên chi tiết cho mỗi hạng gói cước được System Admin cấu hình trong bảng `system_tier_limits` và lưu cache tại Redis key `tier:{tier_name}:limits` (nếu cache miss sẽ tự động truy vấn từ Tenant Config Service).
+    *   Mọi thay đổi về hạn mức của gói sẽ được truyền nhận tức thì (< 5 giây) thông qua sự kiện Redis Pub/Sub kênh `system.limits.updates` để các service xóa cache cũ và tải lại.
+*   **Bảng hạn mức chuẩn hệ thống mặc định (Baseline Defaults):**
+
 | Resource API | Free Tier | Standard Tier | Enterprise Tier |
 |--------------|-----------|---------------|-----------------|
 | **API Requests** (lên Kong) | 60 req/phút | 200 req/phút | 1000 req/phút |
@@ -471,6 +477,7 @@ Sử dụng thuật toán **Token Bucket** lưu trữ tại Redis tập trung. G
 
 *   Khi vượt hạn mức: Trả về HTTP Status `429 Too Many Requests` kèm Header `Retry-After: {seconds}`.
 *   Đối với AI Core Agents: Khi nhận lỗi 429 từ một tool, agent phải nhận về một JSON error có cấu trúc để đưa ra quyết định thông báo cho người dùng hoặc bỏ qua tool đó, không được ném exception làm crash agent loop.
+
 
 ### 4.4. Định dạng Lỗi Hệ thống (Structured Error Standard)
 Tất cả các Microservices bắt buộc phải trả về format JSON chung cho các lỗi giao tiếp nội bộ:

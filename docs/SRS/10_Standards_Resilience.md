@@ -34,6 +34,12 @@ Hệ thống **PHẢI** chuyển đổi trạng thái hội thoại từ `Auto` 
 
 Để bảo vệ hệ thống khỏi bị quá tải hoặc tấn công từ chối dịch vụ (DDoS), hệ thống áp dụng thuật toán **Token Bucket** lưu trữ trạng thái tại Redis Cluster, phân cấp giới hạn theo các gói dịch vụ đăng ký của Tenant:
 
+*   **Cơ chế phân hạng gói cước động (Dynamic Tiers & Limits):** 
+    *   Hạng gói cước của Tenant (`free`, `standard`, `enterprise`, `custom_vip`,...) được quản lý bởi System Admin và cache tại Redis dưới key `tenant:{tenant_id}:tier`.
+    *   Hạn mức tài nguyên chi tiết cho mỗi hạng gói cước được System Admin cấu hình trong bảng `system_tier_limits` và lưu cache tại Redis key `tier:{tier_name}:limits` (nếu cache miss sẽ tự động truy vấn từ Tenant Config Service). 
+    *   Mọi thay đổi về hạn mức của gói sẽ được truyền nhận tức thì (< 5 giây) thông qua sự kiện Redis Pub/Sub kênh `system.limits.updates` để các service xóa cache cũ và tải lại.
+*   **Bảng hạn mức chuẩn hệ thống mặc định (Baseline Defaults):**
+
 | Resource API | Free Tier | Standard Tier | Enterprise Tier |
 |--------------|-----------|---------------|-----------------|
 | **API Requests** (lên Kong) | 60 req/phút | 200 req/phút | 1000 req/phút |
@@ -43,6 +49,7 @@ Hệ thống **PHẢI** chuyển đổi trạng thái hội thoại từ `Auto` 
 | **Channel Message Delivery** | 200 msg/giờ | 200 msg/giờ | 200 msg/giờ (Cố định theo giới hạn API ngoại vi) |
 
 - **Xử lý khi vượt giới hạn:** Hệ thống trả về HTTP Status `429 Too Many Requests` kèm Header `Retry-After: {seconds}`.
+
 - **Xử lý lỗi 429 từ AI Core Agent:** Khi Agent nhận lỗi 429 từ một tool bên ngoài, Agent **PHẢI** bọc lỗi dưới dạng JSON có cấu trúc để đưa ra quyết định thông báo cho người dùng hoặc bỏ qua tool đó, không được ném exception làm crash Agent loop.
 
 ---

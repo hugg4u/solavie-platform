@@ -161,7 +161,31 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 7. THE Tenant_Config SHALL cho phép cấu hình danh sách domain được phép gọi API (allowed_cors_origins dạng array string) để thiết lập CORS an toàn cho chatbot widget
 8. THE Tenant_Config SHALL cho phép cấu hình chính sách bảo mật xác thực (auth_password_min_length trong khoảng [6, 30] và auth_max_login_attempts trong khoảng [3, 20] lần nhập sai trước khi khóa tài khoản) để đồng bộ chính sách bảo mật tài khoản cho Keycloak
 
+### Requirement 10: Phân tách vai trò cấu hình (System Admin vs Tenant Admin)
+
+**User Story:** Là một System Admin, tôi muốn cấu hình gói cước và gán hạng mức sử dụng cho từng Tenant, đồng thời đảm bảo Admin của các Tenant chỉ có thể chỉnh sửa cấu hình riêng biệt của họ mà không ảnh hưởng đến hạn mức gói.
+
+#### Acceptance Criteria
+1. THE Tenant_Config SHALL KHÔNG cho phép Admin Tenant sửa đổi hạng gói cước (Subscription Tier) hay hạn mức API thô của gói cước từ trang Dashboard của Tenant.
+2. THE Tenant_Config/Keycloak DB SHALL lưu trữ hạng gói cước (`free`, `standard`, `enterprise`) của Tenant độc lập và chỉ cho phép System Admin sửa đổi qua trang quản trị hệ thống (System Admin Panel).
+3. WHEN System Admin cập nhật hạng gói của Tenant, sự thay đổi đó SHALL được lưu vào Redis dưới dạng key `tenant:{tenant_id}:tier` để các service downstream thực hiện kiểm tra hạn mức tần suất gọi API (Rate Limiting) ngay lập tức.
+4. THE Tenant_Config SHALL cho phép Tenant Admin tự do cấu hình các tham số nội bộ (như API Keys riêng - BYOK, System Prompt riêng, confidence thresholds) thông qua REST API, các thông số này được mã hóa bảo mật và cách ly tuyệt đối giữa các tenant.
+
+### Requirement 11: REST API Quản lý Gói cước và Hạn mức (System Admin Only)
+
+**User Story:** Là một System Admin, tôi muốn cấu hình động các gói cước và hạn mức tài nguyên đi kèm từ hệ thống để thay đổi chính sách kinh doanh SaaS mà không cần thay đổi mã nguồn.
+
+#### Acceptance Criteria
+1. THE Tenant_Config SHALL cung cấp các REST API cho System Admin để thực hiện CRUD các gói cước và hạn mức:
+   - `GET /api/v1/system/tiers`: Xem danh sách tất cả các gói cước và hạn mức tài nguyên đang được định nghĩa.
+   - `POST /api/v1/system/tiers`: Khởi tạo một hạng gói cước mới hoặc cập nhật hạn mức của gói cước hiện tại.
+   - `DELETE /api/v1/system/tiers/:tier`: Xóa một hạng gói cước (chỉ cho phép nếu không còn tenant nào sử dụng).
+2. IF request không mang JWT token hợp lệ của System Admin (role `system_admin`), THEN THE Tenant_Config SHALL từ chối và trả về HTTP 403.
+3. WHEN hạn mức gói cước (Tier Limits) được lưu thành công vào DB, THE Tenant_Config SHALL cập nhật Redis cache key `tier:{tier_name}:limits` và publish một thông điệp thông báo lên kênh Redis Pub/Sub `system.limits.updates`.
+4. THE Tenant_Config SHALL đảm bảo các microservices liên quan tự động lắng nghe kênh `system.limits.updates` và tải lại hạn mức cước mới vào bộ nhớ trong vòng < 5 giây.
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của Tenant Config Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `tenant-config`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Tenant Config Service.
 - **Tenant Isolation:** Dữ liệu Tenant Config **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+
