@@ -168,15 +168,29 @@ graph TD
 
 ## 9.4. Cơ chế đồng bộ cấu hình (Configuration Sync Flow)
 
-Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, việc thay đổi cấu hình định tuyến (routing), các API keys và feature gates được đồng bộ qua cơ chế **Publish-Subscribe** bằng Redis Pub/Sub:
+Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, hệ thống phân tách cấu hình thành 2 cấp độ và thực hiện cơ chế đồng bộ qua **Publish-Subscribe** bằng Redis Pub/Sub:
 
-1. **Quản trị tập trung (Centralized Management)**: Admin thay đổi cấu hình model routing hoặc cập nhật API Keys (được mã hóa đối xứng AES-256) trên Dashboard, gửi yêu cầu tới `Tenant Config Service` (NestJS) và lưu vào `config_db`.
-2. **Kích hoạt sự kiện (Event Trigger)**: `Tenant Config Service` ghi nhận thay đổi, cập nhật Redis cache key `{tenant_id}:config:ai_kb` và đồng thời publish một thông điệp cập nhật lên kênh Redis Pub/Sub `config.updates`.
-3. **Nhận thông điệp (Event Consumption)**: `AI Core Service` (FastAPI) đang chạy một tiến trình con (Background Listener) lắng nghe kênh `config.updates`.
-4. **Đồng bộ và Invalidate Cache**:
-   - Khi phát hiện sự kiện thuộc category `ai_kb`, `AI Core Service` gọi gRPC `GetConfig` (hoặc REST fallback) sang `Tenant Config Service` để truy vấn cấu hình mới nhất.
-   - `AI Core Service` lưu cấu hình này vào cơ sở dữ liệu cục bộ `ai_core_db` (các bảng `llm_route_configs` và `api_key_configs`) để làm backup dự phòng khi xảy ra sự cố network.
-   - `AI Core Service` làm trống (invalidate) các cache keys cũ trong Redis gồm `{tenant_id}:config:llm_model_routing` và `{tenant_id}:config:api_keys` để buộc các yêu cầu gọi AI tiếp theo phải nạp lại dữ liệu cấu hình mới nhất.
+### 9.4.1. Phân cấp & Vai trò Quản lý Cấu hình:
+1.  **Cấu hình do System Admin quản lý (Gói cước & Master Keys):**
+    *   **Phân hạng gói (Tiers):** Gán gói cước cho Tenant (`free`, `standard`, `enterprise`) được quản lý bởi System Admin và lưu tại Redis dưới key `tenant:{tenant_id}:tier`.
+    *   **Master Keys (Khóa hệ thống fallback):** Lưu trong database `api_key_configs` cục bộ dưới Tenant ID hệ thống (`00000000-0000-0000-0000-000000000000`) để rotate động mà không cần restart server.
+2.  **Cấu hình do Tenant Admin quản lý (BYOK & Custom Routing):**
+    *   Tenant tự cấu hình khóa API riêng (BYOK), custom prompts, confidence thresholds qua Dashboard của Tenant. Thông tin lưu tại bảng `tenant_configs` của `config_db` (Tenant Config Service) dưới dạng mã hóa AES-256.
+
+### 9.4.2. Độ ưu tiên phân giải Khóa API (API Key Lookup Hierarchy):
+Khi thực hiện gọi LLM, `AI Core Service` sẽ lấy khóa API theo thứ tự ưu tiên:
+1.  **Tenant Custom API Key (BYOK):** Khóa API được Tenant cấu hình riêng trong DB cục bộ `api_key_configs` với `tenant_id == tenant_uuid`.
+2.  **System Config DB Key (Dynamic Master Key):** Khóa dùng chung toàn hệ thống trong DB cục bộ với `tenant_id == 00000000-0000-0000-0000-000000000000`.
+3.  **Environment Variable:** Khóa tĩnh trong biến môi trường `.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+
+### 9.4.3. Quy trình Đồng bộ và Invalidate Cache:
+1. **Thay đổi cấu hình**: Tenant Admin sửa đổi cấu hình model routing hoặc API Keys trên Dashboard, gửi yêu cầu tới `Tenant Config Service` (NestJS) và lưu vào `config_db`.
+2. **Kích hoạt sự kiện**: `Tenant Config Service` ghi nhận, cập nhật Redis cache key `{tenant_id}:config:ai_kb` và publish một thông điệp lên kênh Redis Pub/Sub `config.updates`.
+3. **Nhận thông điệp**: `AI Core Service` (FastAPI) lắng nghe kênh `config.updates` thông qua một tiến trình con (Background Listener).
+4. **Đồng bộ cục bộ**:
+   * Khi phát hiện sự kiện thuộc category `ai_kb`, `AI Core Service` gọi REST API/gRPC sang `Tenant Config Service` để truy vấn cấu hình mới nhất của tenant đó (đính kèm `X-Tenant-ID` header).
+   * `AI Core Service` lưu cấu hình này vào cơ sở dữ liệu cục bộ `ai_core_db` (các bảng `llm_route_configs` và `api_key_configs`) để làm backup dự phòng.
+   * `AI Core Service` làm trống (invalidate) các cache keys cũ trong Redis gồm `{tenant_id}:config:llm_model_routing` và `{tenant_id}:config:api_keys` để buộc các cuộc gọi tiếp theo phải nạp lại cấu hình mới.
 
 ---
 

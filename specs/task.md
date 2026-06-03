@@ -33,7 +33,7 @@ This master checklist tracks the development and deployment of the entire Solavi
 *Goal: Complete supporting features: comments integration, multi-channel notifications, tenant config reload, DMS files, link shortener, and media workers.*
   - [ ] [**COMMENT-MANAGER Service**](specs/solavie-system/services/comment-manager/task.md) (3 requirements) - Tech: Node.js 20 (NestJS)
   - [ ] [**NOTIFICATION Service**](specs/solavie-system/services/notification/task.md) (3 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**TENANT-CONFIG Service**](specs/solavie-system/services/tenant-config/task.md) (9 requirements) - Tech: Node.js 20 (NestJS)
+  - [ ] [**TENANT-CONFIG Service**](specs/solavie-system/services/tenant-config/task.md) (10 requirements) - Tech: Node.js 20 (NestJS)
   - [ ] [**DMS Service**](specs/solavie-system/services/dms/task.md) (9 requirements) - Tech: Node.js 20 (NestJS)
   - [ ] [**LINK-SHORTENER Service**](specs/solavie-system/services/link-shortener/task.md) (5 requirements) - Tech: Node.js 20 (Fastify)
   - [ ] [**MEDIA-PROCESSOR Service**](specs/solavie-system/services/media-processor/task.md) (5 requirements) - Tech: Python 3.12 (FastAPI)

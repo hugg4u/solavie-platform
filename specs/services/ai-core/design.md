@@ -158,6 +158,20 @@ POST   /api/v1/analytics/simulate-cost - Simulate financial impact of switching 
 
 The `LLMGateway` dynamically queries model routing configurations and API keys from PostgreSQL instead of hardcoded maps, with Redis caching (TTL 5 minutes) to ensure hot-path performance. All API keys stored in database are encrypted using Fernet (AES-256) where the key is derived from the SHA-256 hash of the `ENCRYPTION_SECRET_KEY` environment variable. Decryption is performed dynamically in-memory when making provider completions calls.
 
+### API Key Lookup Precedence & Fallbacks:
+Khi dịch vụ cần gọi API của các LLM Provider, `LLMGateway` sẽ giải quyết thông tin xác thực (Credentials/API keys) theo thứ tự ưu tiên giảm dần:
+1.  **Tenant Custom Key (BYOK):** Tìm khóa API của riêng Tenant trong DB cục bộ `api_key_configs` với `tenant_id == tenant_uuid`.
+2.  **System Config DB Key (Dynamic Global Key):** Nếu Tenant không thiết lập BYOK, hệ thống tìm khóa tổng do System Admin cấu hình trong bảng `api_key_configs` với `tenant_id == 00000000-0000-0000-0000-000000000000`.
+3.  **Environment Fallback:** Nếu cả hai không có, hệ thống sử dụng khóa được khai báo tĩnh trong biến môi trường `.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+
+### Dynamic Tier Rate Limiting Check:
+Khi chạy các Agent Tools (như Web Search, Knowledge Base Search, Content Generation):
+1.  Hệ thống kiểm tra phân hạng gói cước (Tier) của Tenant bằng cách đọc trực tiếp từ Redis key `tenant:{tenant_id}:tier` (các giá trị: `free`, `standard`, `enterprise`, `custom_vip`,...). Nếu key không tồn tại, mặc định gán hạng `standard`.
+2.  Hệ thống tiếp tục truy vấn hạn mức tài nguyên chi tiết cho hạng cước này từ Redis key `tier:{tier_name}:limits`. Nếu cache miss, hệ thống tải dữ liệu hạn mức từ database qua REST API của Tenant Config Service và ghi lại vào cache Redis.
+3.  AI Core lắng nghe kênh Redis Pub/Sub `system.limits.updates`. Khi nhận được thông báo cập nhật hạn mức gói cước, nó sẽ xóa cache cũ trên Redis để lần gọi tiếp theo nạp lại động hạn mức mới.
+4.  Tiến trình rate limiter thực hiện đếm lượt gọi và kiểm tra hạn mức bằng Redis token bucket `ratelimit:{tenant_id}:{tool_name}:{window}`.
+
+
 ### Configuration Sync Mechanism (Hot Reload)
 
 To ensure database isolation and local autonomy while maintaining centralized control:
@@ -165,8 +179,9 @@ To ensure database isolation and local autonomy while maintaining centralized co
 2. Upon saving to `config_db`, Tenant Config Service publishes a sync event payload to the Redis Pub/Sub channel `config.updates`.
 3. AI Core Service runs a background subscriber loop listening to `config.updates`. When a change in category `ai_kb` is captured:
    - AI Core queries the Tenant Config Service via gRPC `GetConfig` (or REST fallback) to fetch the updated routing configurations and encrypted keys.
-   - AI Core stores the configs locally in `llm_route_configs` and `api_key_configs`.
+   - AI Core stores the configs locally in `llm_route_configs` and `api_key_configs` (với trường `tenant_id` tương ứng để cô lập).
    - AI Core invalidates the local Redis cache for keys `{tenant_id}:config:llm_model_routing` and `{tenant_id}:config:api_keys`, forcing a refresh on the next request.
+
 
 ```python
 # Cached dynamic routing struct format:

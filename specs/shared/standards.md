@@ -47,18 +47,22 @@ Mọi handoff/escalation đều publish Kafka event → Notification Service.
 
 ## 3. Rate Limiting Standard
 
-**Algorithm:** Token Bucket (per tenant + per resource)
+**Algorithm:** Token Bucket (per tenant + per resource/tool)
 
-**Implementation:**
-- Backend: Redis (atomic INCR + TTL)
-- Key format: `ratelimit:{tenant_id}:{resource}:{window}`
-- Khi exceed → return HTTP 429 + header `Retry-After: {seconds}`
+**Implementation & Storage Segregation (Dynamic Tier Limits System):**
+- **System Admin Configuration:** 
+  - **Phân hạng gói (Tier assignment):** Gán gói cước cho Tenant (`free`, `standard`, `enterprise`, `custom_vip`) được System Admin lưu tại Redis: `tenant:{tenant_id}:tier`.
+  - **Định nghĩa hạn mức gói (Dynamic Tier Limits):** Lưu tại database `config_db` (bảng `system_tier_limits`) và cache tại Redis dưới key: `tier:{tier_name}:limits` (JSON format chứa hạn mức các tài nguyên). Khi System Admin chỉnh sửa hạn mức gói trên Dashboard, sự kiện Pub/Sub `system.limits.updates` sẽ kích hoạt các service tự động tải lại hạn mức mới trong < 5 giây.
+- **Tenant Admin Configuration:** 
+  - Khóa API riêng (BYOK), custom prompts, thresholds của từng tenant được lưu tại bảng `tenant_configs` của `Tenant Config Service`.
+- **Rate Limit Check Key format:** `ratelimit:{tenant_id}:{resource_or_tool}:{window}` (tần suất gọi tool của tenant) lưu trạng thái đếm tại Redis (atomic INCR + TTL).
+- Khi exceed → return HTTP 429 + header `Retry-After: {seconds}`.
 
-**Limits per tier:**
+**Default Baseline limits per tier (Có thể tùy chỉnh động qua DB/Redis):**
 
 | Resource | Free | Standard | Enterprise |
 |----------|------|----------|------------|
-| API requests/min | 60 | 200 | 1000 |
+| API requests/min (Gateway/Kong) | 60 | 200 | 1000 |
 | AI Core: web_search/hour | 20 | 50 | 200 |
 | AI Core: generate_content/hour | 5 | 20 | 100 |
 | AI Core: knowledge_base_search/hour | 100 | 500 | 5000 |

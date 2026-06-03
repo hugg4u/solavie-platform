@@ -152,6 +152,15 @@ This document tracks the implementation checklist for **TENANT-CONFIG Service** 
 - [ ] AC 9.7: THE Tenant_Config SHALL cho phép cấu hình danh sách domain được phép gọi API (allowed_cors_origins dạng array string) để thiết lập CORS an toàn cho chatbot widget
 - [ ] AC 9.8: THE Tenant_Config SHALL cho phép cấu hình chính sách bảo mật xác thực (auth_password_min_length trong khoảng [6, 30] và auth_max_login_attempts trong khoảng [3, 20] lần nhập sai trước khi khóa tài khoản) để đồng bộ chính sách bảo mật tài khoản cho Keycloak
 
+### Task 10: 10: Phân tách vai trò cấu hình (System Admin vs Tenant Admin)
+> *User Story: Là một System Admin, tôi muốn cấu hình gói cước và gán hạng mức sử dụng cho từng Tenant, đồng thời đảm bảo Admin của các Tenant chỉ có thể chỉnh sửa cấu hình riêng biệt của họ mà không ảnh hưởng đến hạn mức gói.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 10.1: THE Tenant_Config SHALL KHÔNG cho phép Admin Tenant sửa đổi hạng gói cước (Subscription Tier) hay hạn mức API thô của gói cước từ trang Dashboard của Tenant
+- [ ] AC 10.2: THE Tenant_Config/Keycloak DB SHALL lưu trữ hạng gói cước (`free`, `standard`, `enterprise`) của Tenant độc lập và chỉ cho phép System Admin sửa đổi qua trang quản trị hệ thống (System Admin Panel)
+- [ ] AC 10.3: WHEN System Admin cập nhật hạng gói của Tenant, sự thay đổi đó SHALL được lưu vào Redis dưới dạng key `tenant:{tenant_id}:tier` để các service downstream thực hiện kiểm tra hạn mức tần suất gọi API (Rate Limiting) ngay lập tức
+- [ ] AC 10.4: THE Tenant_Config SHALL cho phép Tenant Admin tự do cấu hình các tham số nội bộ (như API Keys riêng - BYOK, System Prompt riêng, confidence thresholds) thông qua REST API, các thông số này được mã hóa bảo mật và cách ly tuyệt đối giữa các tenant
+
 ## Verification & Testing
 
 ### Automated Tests

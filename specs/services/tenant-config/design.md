@@ -4,6 +4,17 @@
 
 Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Solavie Marketing Platform — Node.js 20, NestJS, Port 3006 (REST) / 50053 (gRPC), PostgreSQL (config_db), Redis. Cung cấp REST API CRUD cho Dashboard, hot-reload qua Redis Pub/Sub (< 5 giây), gRPC Config Reader cho services truy vấn khi cache miss, validation schema, audit log, và default config khi Tenant mới được tạo.
 
+### Phân cấp & Lưu trữ Cấu hình (System Admin vs Tenant Admin)
+
+1. **Cấu hình do System Admin kiểm soát (Gói cước & Phân hạng):**
+   - **Định nghĩa Tiers/Plans:** Quy chuẩn hạn mức các gói cước được định nghĩa chung trên toàn hệ thống.
+   - **Gán hạng gói cho Tenant:** Được lưu trữ tập trung tại Redis dưới khóa `tenant:{tenant_id}:tier` (các giá trị: `free`, `standard`, `enterprise`) và trong DB quản lý tài khoản hệ thống của Admin.
+   - **System Master Keys:** Các khóa API dùng chung của hệ thống (fallback) được lưu trong cơ sở dữ liệu `api_key_configs` cục bộ của AI Core dưới dạng Tenant UUID mặc định (`00000000-0000-0000-0000-000000000000`) để dễ dàng rotate qua bảng điều khiển của Admin hệ thống thay vì restart app.
+
+2. **Cấu hình do Tenant Admin kiểm soát (BYOK, Prompts, Thresholds):**
+   - **Vị trí lưu trữ:** Nằm hoàn toàn trong bảng `tenant_configs` của `config_db` (phân chia theo `tenant_id`). Các trường nhạy cảm như API Keys của riêng Tenant (BYOK) được mã hóa đối xứng (AES-256) trước khi lưu.
+   - **Cách thức hoạt động:** Chỉ có tài khoản Admin của chính Tenant đó mới có quyền sửa đổi cấu hình của mình thông qua API Dashboard. Cấu hình mới được sync tự động đến các downstream services (như AI Core) thông qua sự kiện Redis Pub/Sub `config.updates` để cập nhật database local.
+
 ## Components and Interfaces
 
 Xem **REST API Design**, **gRPC Interface**, và **Hot Reload Flow** bên dưới.
@@ -130,6 +141,19 @@ CREATE TABLE tenant_configs (
     content_config JSONB NOT NULL,
     crm_config JSONB NOT NULL,
     security_config JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- SYSTEM TIER LIMITS (Cấu hình hạn mức gói cước động của hệ thống)
+-- ============================================================
+CREATE TABLE system_tier_limits (
+    tier VARCHAR(50) PRIMARY KEY, -- 'free', 'standard', 'enterprise', 'custom_vip', etc.
+    api_requests_per_min INT NOT NULL DEFAULT 200,
+    ai_web_search_per_hour INT NOT NULL DEFAULT 50,
+    ai_generate_content_per_hour INT NOT NULL DEFAULT 20,
+    ai_kb_search_per_hour INT NOT NULL DEFAULT 500,
+    channel_send_per_hour INT NOT NULL DEFAULT 200,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -346,14 +370,26 @@ const DEFAULT_CONFIG = {
 ## Redis Key Format
 
 ```
-Config cache:    {tenant_id}:config:{category}     TTL: 3600s (1 hour)
-Pub/Sub channel: config.updates
+Config cache:           {tenant_id}:config:{category}     TTL: 3600s (1 hour)
+Tenant subscription:    tenant:{tenant_id}:tier
+Dynamic Tier Limits:    tier:{tier_name}:limits           TTL: 86400s (24 hours)
+
+Pub/Sub channels: 
+- config.updates (được các service subscribe để reload cấu hình tenant)
+- system.limits.updates (được các service subscribe để reload hạn mức gói cước)
 
 Event payload (config.updates):
 {
   "tenant_id": "solavie-001",
   "category": "ai_kb",
   "updated_fields": ["confidence_threshold", "chatbot_enabled"],
+  "updated_at": "2026-06-01T10:00:00Z"
+}
+
+Event payload (system.limits.updates):
+{
+  "tier": "standard",
+  "updated_fields": ["ai_web_search_per_hour"],
   "updated_at": "2026-06-01T10:00:00Z"
 }
 ```
