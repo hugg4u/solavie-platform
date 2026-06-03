@@ -52,33 +52,33 @@ User upload file (PDF/DOCX/TXT/MD)
 └────────────┬────────────────────┘
              │
              ▼
-┌─────────────────────────────────┐
-│ 5. BATCH EMBEDDING              │
-│    - Batch 100 chunks at a time │
-│    - Call AI Core embed API     │
-│    - Model: text-embedding-3-small│
-│    - Dimensions: 512            │
-└────────────┬────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ 5. BATCH EMBEDDING (Dual-Vector Generation)            │
+│    - Batch 100 chunks at a time                        │
+│    - Vector 1: Call AI Core embed API                  │
+│      (text-embedding-3-small, 512 dimensions)          │
+│    - Vector 2: Local FastEmbed generator               │
+│      (multilingual-e5-small, 384 dimensions)           │
+└────────────┬───────────────────────────────────────────┘
              │
              ▼
-┌─────────────────────────────────┐
-│ 6. STORE IN QDRANT              │
-│    - Upsert vectors + metadata  │
-│    - Collection: kb_{tenant_id} │
-│    - Payload: chunk_id, doc_id, │
-│      content, position          │
-│    - Also store sparse vector   │
-│      (BM25/SPLADE) for hybrid  │
-└────────────┬────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ 6. STORE IN QDRANT                                     │
+│    - Upsert both vectors to named vectors:             │
+│      'openai' & 'local_fastembed'                      │
+│    - Also generate and store sparse vector (BM25)      │
+│    - Collection: knowledge_base (shared with RLS filtering)│
+│    - Payload: chunk_id, doc_id, parent_chunk_id,       │
+│      content, position                                 │
+└────────────┬───────────────────────────────────────────┘
              │
              ▼
-┌─────────────────────────────────┐
-│ 7. UPDATE STATUS                │
-│    - Document status = 'ready'  │
-│    - chunk_count = N            │
-│    - If any step fails →        │
-│      status = 'failed' + error  │
-└─────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ 7. UPDATE STATUS                                       │
+│    - Document status = 'ready'                         │
+│    - chunk_count = N                                   │
+│    - If any step fails → status = 'failed' + error     │
+└────────────────────────────────────────────────────────┘
 ```
 
 **Chi tiết Semantic Chunking:**
@@ -161,13 +161,15 @@ class SemanticChunker:
 Search query đến (từ Chatbot hoặc Content)
 │
 ▼
-┌─────────────────────────────────┐
-│ 1. EMBED QUERY                  │
-│    - Check Redis cache first    │
-│    - If miss → call AI Core     │
-│    - Cache result (TTL 1h)      │
-│    ~1ms (cache) / ~100ms (miss) │
-└────────────┬────────────────────┘
+┌─────────────────────────────────────────────┐
+│ 1. EMBED QUERY                              │
+│    - Check Redis cache first                │
+│    - Try OpenAI via AI Core (512 dims)      │
+│      → set vector_field = "openai"          │
+│    - Fallback: Local FastEmbed (384 dims)   │
+│      → set vector_field = "local_fastembed" │
+│    - Cache query vector (TTL 1h)            │
+└────────────┬────────────────────────────────┘
              │
              ▼
 ┌─────────────────────────────────────────────┐
@@ -175,8 +177,8 @@ Search query đến (từ Chatbot hoặc Content)
 │                                             │
 │  ┌─────────────────┐  ┌─────────────────┐  │
 │  │ Dense Search    │  │ Sparse Search   │  │
-│  │ (Vector/Cosine) │  │ (BM25)          │  │
-│  │ top-20          │  │ top-20          │  │
+│  │ (on vector_field│  │ (BM25)          │  │
+│  │  top-20)        │  │ top-20          │  │
 │  │ ~5ms            │  │ ~5ms            │  │
 │  └────────┬────────┘  └────────┬────────┘  │
 │           │                     │           │
@@ -193,22 +195,21 @@ Search query đến (từ Chatbot hoặc Content)
 └────────────┬────────────────────┘
              │
              ▼
-┌─────────────────────────────────┐
-│ 4. RERANK (Cross-Encoder)       │
-│    - Take top-20 from RRF       │
-│    - Score each (query, doc)    │
-│    - Model: bge-reranker-v2-m3  │
-│    - Return top-5               │
-│    ~20ms                         │
-└────────────┬────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│ 4. RERANK (Cross-Encoder)                           │
+│    - Bypass Rerank IF dense similarity score >= 0.92│
+│      (skip reranker immediately)                    │
+│    - Else, rerank top-20 using bge-reranker-v2-m3   │
+│    ~20ms                                            │
+└────────────┬────────────────────────────────────────┘
              │
              ▼
-┌─────────────────────────────────┐
-│ 5. RETURN RESULTS               │
-│    - Top-5 with scores          │
-│    - Include: content, doc_id,  │
-│      chunk_id, score            │
-└─────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│ 5. DEDUPLICATE & RETURN                             │
+│    - Deduplicate results by parent_chunk_id         │
+│    - Query parent chunks content from PostgreSQL    │
+│    - Return top-5 unique parent chunks with scores  │
+└─────────────────────────────────────────────────────┘
 ```
 
 **Chi tiết RRF:**
@@ -316,26 +317,48 @@ Ngoài việc cache query embedding (TTL 1h), cache luôn **search results** đ�
 ```python
 async def search_with_cache(query: str, tenant_id: str, top_k: int = 5):
     """
-    2-layer cache:
+    2-layer cache with Cache Versioning:
     1. Query embedding cache (TTL 1h)
-    2. Search results cache (TTL 30min) — MỚI
+    2. Search results cache (TTL 30min) using tenant-specific cache version.
 
     Tại sao: nhiều khách hỏi cùng câu ("giá bao nhiêu?", "ship không?").
     Cache results giảm 50-70% lượng search thực tế.
+    
+    Cơ chế Cache Invalidation (Cache Versioning):
+    - Đọc version hiện tại của tenant: {tenant_id}:kb_version (ví dụ: '1').
+    - Nếu không có, mặc định set = 1.
+    - Cấu trúc cache_key: {tenant_id}:kb_search:{kb_version}:{hash(query)}
+    - Khi có bất kỳ tài liệu nào của tenant được thêm/sửa/xoá:
+      Chỉ cần tăng version (INCR {tenant_id}:kb_version). Toàn bộ cache cũ của tenant
+      sẽ tự động bị vô hiệu hoá trên hot-path mà không gây block Redis bằng lệnh SCAN + DEL.
     """
-    cache_key = f"{tenant_id}:kb_search:{hashlib.md5(f'{query}:{top_k}'.encode()).hexdigest()}"
+    # 1. Lấy phiên bản cache của tenant
+    version_key = f"{tenant_id}:kb_version"
+    kb_version = await redis.get(version_key)
+    if not kb_version:
+        kb_version = "1"
+        await redis.set(version_key, "1")
+        
+    # 2. Xây dựng cache key chứa version
+    query_hash = hashlib.md5(f'{query}:{top_k}'.encode()).hexdigest()
+    cache_key = f"{tenant_id}:kb_search:{kb_version}:{query_hash}"
+    
+    # 3. Đọc cache
     cached = await redis.get(cache_key)
     if cached:
         return json.loads(cached)  # Cache hit: ~1ms thay vì ~30ms
 
     results = await hybrid_search(query, tenant_id, top_k)
 
-    # Cache 30min. Invalidate khi document của tenant thay đổi.
+    # 4. Lưu cache
     await redis.setex(cache_key, 1800, json.dumps(results))
     return results
-```
 
-**Cache invalidation:** Khi document upload/delete/reindex → xóa toàn bộ key `{tenant_id}:kb_search:*` của tenant đó (dùng Redis SCAN + DEL, hoặc cache version bump).
+async def invalidate_tenant_cache(tenant_id: str):
+    """Tăng số version để vô hiệu hoá toàn bộ cache tìm kiếm của tenant ngay lập tức."""
+    version_key = f"{tenant_id}:kb_version"
+    await redis.incr(version_key)
+```
 
 ## Qdrant Collection Management
 
@@ -343,25 +366,28 @@ async def search_with_cache(query: str, tenant_id: str, top_k: int = 5):
 class QdrantManager:
     async def ensure_collection(self, tenant_id: str):
         """
-        Mỗi tenant có thể dùng:
-        - Option A: 1 collection per tenant (simple, good isolation)
-        - Option B: 1 shared collection + metadata filter (efficient)
-        
-        Chọn Option B cho hệ thống này:
-        - Ít collections = ít overhead
-        - Filter by tenant_id trong metadata
-        - Qdrant handles filtering efficiently
+        Chọn Option B: 1 shared collection + metadata filter (efficient)
+        - Ít collections = ít overhead.
+        - Phân cấp vector đặt tên (openai và local_fastembed) để hỗ trợ fallback.
+        - Qdrant handles filtering efficiently.
         """
         collection_name = "knowledge_base"  # Shared
         
         if not await self.client.collection_exists(collection_name):
             await self.client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=512,
-                    distance=Distance.COSINE,
-                    on_disk=False,
-                ),
+                vectors_config={
+                    "openai": VectorParams(
+                        size=512,
+                        distance=Distance.COSINE,
+                        on_disk=False,
+                    ),
+                    "local_fastembed": VectorParams(
+                        size=384,
+                        distance=Distance.COSINE,
+                        on_disk=False,
+                    )
+                },
                 sparse_vectors_config={"bm25": SparseVectorParams()},
                 hnsw_config=HnswConfigDiff(m=16, ef_construct=128),
                 quantization_config=ScalarQuantization(
@@ -373,11 +399,12 @@ class QdrantManager:
                 ),
             )
 
-    async def search(self, tenant_id: str, query_vector: list, top_k: int = 20):
-        """Search with tenant isolation via filter."""
+    async def search(self, tenant_id: str, query_vector: list, vector_name: str = "openai", top_k: int = 20):
+        """Search with tenant isolation via filter and routed vector field."""
         return await self.client.search(
             collection_name="knowledge_base",
             query_vector=query_vector,
+            vector_name=vector_name,
             query_filter=Filter(
                 must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
             ),

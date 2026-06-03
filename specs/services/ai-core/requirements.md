@@ -31,9 +31,10 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 1. THE AI_Core SHALL route requests theo use case (chatbot → GPT-4o-mini, content → Claude Sonnet).
 2. THE AI_Core SHALL hỗ trợ override model per-request qua tham số API.
 3. THE AI_Core SHALL lưu trữ cấu hình định tuyến động (models, temperature, max_tokens) trong bảng cơ sở dữ liệu `llm_route_configs` per-tenant và use case.
-4. THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL (như vLLM/Ollama local) trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256).
+4. THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL (như vLLM/Ollama local) trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256). Thuật toán mã hóa sử dụng `cryptography.fernet` với Fernet Key được sinh bằng cách băm SHA-256 chuỗi cấu hình `ENCRYPTION_SECRET_KEY` nhằm đảm bảo tính chịu lỗi cao.
 5. THE AI_Core SHALL áp dụng caching (Redis TTL 5 phút) cho các cấu hình định tuyến động để tránh độ trễ truy vấn database trên hot-path.
 6. THE AI_Core SHALL lắng nghe sự kiện cập nhật cấu hình từ Tenant Config Service qua kênh Redis Pub/Sub `config.updates` để tự động đồng bộ (hot-reload) cấu hình định tuyến và API keys mới về database cục bộ và làm trống (invalidate) cache hiện tại.
+
 
 ### Requirement 3: Token Optimization
 
@@ -84,7 +85,7 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 1. THE AI_Core SHALL implement ReAct agent loop (Reason → Act → Observe → Repeat)
 2. THE AI_Core SHALL hỗ trợ tối đa 5 iterations per request (safety limit)
 3. THE AI_Core SHALL tự quyết định tool nào cần gọi dựa trên context
-4. THE AI_Core SHALL handle tool execution timeout (10s per tool)
+4. THE AI_Core SHALL handle tool execution timeout và thực thi cơ chế Circuit Breaker (sử dụng pybreaker) cho từng endpoint của tool. Cấu hình timeout được phân cấp động: tối đa 2.0s đối với các công cụ tương tác trực tiếp/hot-path (như `knowledge_base_search`, `contact_lookup`, `analyze_sentiment`) và tối đa 10s đối với các công cụ nền chậm (như `web_search`, `generate_content`). Nếu tool lỗi liên tiếp 5 lần trong 30 giây, Circuit Breaker chuyển sang trạng thái Open để tự động báo lỗi tức thì (1ms) nhằm tránh treo Agent.
 5. IF agent loop vượt max iterations, THEN trả về best-effort response
 
 ### Requirement 8: MCP Tool Registry (MỚI)
@@ -104,7 +105,7 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 
 #### Acceptance Criteria
 1. THE AI_Core SHALL hỗ trợ web search tool (Tavily/SerpAPI)
-2. THE AI_Core SHALL hỗ trợ URL fetch tool (đọc nội dung trang web)
+2. THE AI_Core SHALL hỗ trợ URL fetch tool (đọc nội dung trang web) tích hợp Jina Reader API (`https://r.jina.ai/`) để chuyển đổi nội dung trang web thành Markdown, giúp tối ưu hóa số lượng token truyền vào context.
 3. THE AI_Core SHALL hỗ trợ social trends tool (trending topics per platform)
 4. Web search SHALL rate limited: max 3 per request, 50 per hour per tenant
 5. THE AI_Core SHALL hiển thị sources cho user review
@@ -115,12 +116,28 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 
 #### Acceptance Criteria
 1. THE AI_Core SHALL require human confirmation cho destructive actions (publish, delete)
-2. THE AI_Core SHALL prevent infinite loops (max iterations + anti-loop rules)
+2. THE AI_Core SHALL prevent infinite loops (max iterations + anti-loop rules: cấm gọi liên tiếp quá 2 lần web_search hoặc 3 lần knowledge_base_search).
 3. THE AI_Core SHALL enforce tenant isolation (agent chỉ access data của tenant mình)
 4. THE AI_Core SHALL cap total tokens per session (10000 tokens max)
 5. THE AI_Core SHALL log tất cả agent decisions cho audit trail
+
 
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của AI Core Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `ai-core`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến AI Core Service.
 - **Tenant Isolation:** Dữ liệu AI Core **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+
+---
+
+## Future Roadmap (Phase 2)
+
+### Requirement 11: Semantic Caching
+- **AC 11.1:** Dịch vụ SHALL tích hợp Redis Vector Search để lưu trữ các câu trả lời của LLM.
+- **AC 11.2:** Khi có câu hỏi mới có độ tương đồng ngữ nghĩa > 90% (Cosine Similarity) với câu hỏi cũ đã lưu, hệ thống SHALL trả về ngay lập tức từ cache, bỏ qua cuộc gọi LLM và KB Search để tối ưu chi phí và tăng tốc phản hồi (< 10ms).
+
+### Requirement 12: Structured Outputs Enforcement
+- **AC 12.1:** Dịch vụ SHALL sử dụng JSON Schema (qua tính năng `response_format` của LLM APIs) để bắt buộc Agent phản hồi theo đúng cấu hình định dạng, giúp chatbot và CRM parse kết quả an toàn.
+
+### Requirement 13: Agent Tracing & Observability
+- **AC 13.1:** Dịch vụ SHALL tích hợp OpenTelemetry với LangSmith hoặc Arize Phoenix để ghi nhận và hiển thị trực quan sơ đồ suy luận (Thought -> Action -> Observation) của Agent.
+

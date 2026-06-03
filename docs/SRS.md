@@ -133,7 +133,7 @@ graph TB
 *   **Event-Driven Routing:** Message payload truyền qua Kafka bắt buộc chứa trường `tenant_id` trong Kafka Headers để các consumer thực hiện xử lý tách biệt.
 *   **Vector Database:** Qdrant cấu hình metadata filter `tenant_id` trên mọi Collection để ngăn chặn việc chatbot đọc chéo dữ liệu tri thức của Tenant khác.
 *   **Object Storage (MinIO/S3):** Tổ chức lưu trữ tệp theo tiền tố đường dẫn (Path Prefix): `{tenant_id}/uploads/...` và truy cập thông qua Presigned URLs ngắn hạn (TTL 15 phút).
-*   **In-Memory Cache (Redis):** Mọi Cache Key bắt buộc cấu trúc theo dạng: `{tenant_id}:{service_name}:{key}`.
+*   **In-Memory Cache & Task Queue Broker (Redis):** Mọi Cache Key bắt buộc cấu trúc theo dạng: `{tenant_id}:{service_name}:{key}`. Đồng thời, hệ thống thực hiện phân tầng database logic trong cụm Redis: Database logic `DB 0` dành riêng cho mục đích lưu trữ Caching (configuration, embeddings, search results) và `DB 1` dành riêng cho Broker chứa hàng đợi công việc Celery/ARQ, triệt tiêu nguy cơ tranh chấp tài nguyên và chống tràn bộ nhớ.
 
 ### 2.4. Sơ đồ các thành phần trong Service (Component Diagram)
 
@@ -271,16 +271,24 @@ graph TD
 
 #### Knowledge Base Service (RAG Pipeline)
 1.  **Tải lên tài liệu:** Hỗ trợ định dạng PDF, DOCX, TXT, Markdown. Tệp tin gốc lưu vào MinIO.
-2.  **Semantic Chunking:** Chia nhỏ văn bản dựa trên logic câu (không cắt ngang câu), kích thước 256-512 tokens, gối đầu (overlap) 10-20%.
-3.  **Vector Storage:** Embed các chunks bằng mô hình `text-embedding-3-small` (512 dimensions) và lưu vào Qdrant DB. Sử dụng kỹ thuật int8 quantization để tối ưu RAM.
-4.  **Hybrid Search & Reranking:**
-    *   Tìm kiếm song song: Dense Search (Qdrant Vector) + Sparse Search (BM25 trên PostgreSQL).
-    *   Kết hợp kết quả bằng thuật toán Reciprocal Rank Fusion (RRF).
-    *   Sắp xếp lại (Reranking) top-20 kết quả thông qua mô hình `bge-reranker-v2-m3` để chọn ra top-5 kết quả tốt nhất gửi lại Chatbot.
+2.  **Xử lý Ingestion bất đồng bộ:** Khi có file mới, đẩy tác vụ phân tách và lưu trữ vào hàng đợi **Celery/ARQ Worker** để xử lý chạy ngầm, tránh nghẽn CPU của API thread chính. Cấu hình Redis DB 1 làm Task Queue Broker để tách biệt hoàn toàn với DB 0 lưu trữ Caching.
+3.  **Semantic Chunking (Parent-Child):** Áp dụng kỹ thuật phân cấp (Hierarchical Indexing). Văn bản được chia thành các child chunks nhỏ (100-200 tokens) để tìm kiếm và parent chunks lớn (1000-2000 tokens) để giữ ngữ cảnh.
+4.  **Vector & Sparse Storage:** 
+    *   **Dual-Vector Indexing:** Embed song song 2 vector embeddings cho mỗi chunk để đảm bảo tính sẵn sàng cao: vector chính dùng OpenAI `text-embedding-3-small` (512 dimensions) và vector dự phòng dùng local FastEmbed `multilingual-e5-small` (384 dimensions) để lưu trữ trong Qdrant DB (sử dụng int8 quantization để nén RAM).
+    *   Hỗ trợ **Local Embedding Fallback** (sử dụng FastEmbed cục bộ để sinh vector 384 chiều) và tự động định tuyến truy vấn tìm kiếm trên trường vector `local_fastembed` của Qdrant khi OpenAI API chính bị lỗi hoặc timeout.
+    *   Sinh các Sparse Vectors (BM25/SPLADE) cục bộ bằng **FastEmbed** tại worker và upsert vào Qdrant.
+    *   Lưu ánh xạ ID giữa child chunks (trong Qdrant) và parent chunks (trong PostgreSQL).
+5.  **Hybrid Search & Reranking:**
+    *   Tìm kiếm song song: Dense Search (Vector) + Sparse Search (BM25) trên Qdrant.
+    *   Hợp nhất kết quả bằng thuật toán Reciprocal Rank Fusion (RRF).
+    *   So khớp trên child chunks, tự động loại bỏ trùng lặp (deduplicate) kết quả theo `parent_chunk_id`, rồi ánh xạ và trả về nội dung của **parent chunk** tương ứng để làm ngữ cảnh đầy đủ cho LLM, tránh trùng lặp nội dung.
+    *   Sắp xếp lại (Reranking) top-20 kết quả thông qua mô hình Cross-Encoder `bge-reranker-v2-m3` để chọn ra top-5 kết quả tốt nhất.
+    *   Hỗ trợ tuỳ chọn **bỏ qua Reranking (Bypass Rerank)** đối với các câu hỏi đơn giản hoặc lặp lại khi điểm số tương đồng cosine lớn nhất của Dense Search (trên thang đo [0,1]) đạt vượt trội (> 0.92) để tiết kiệm tài nguyên CPU.
+6.  **Search Caching (Cache Versioning):** Cache kết quả tìm kiếm cuối cùng trên Redis DB 0 (TTL 30m) kết hợp versioning key `{tenant_id}:kb_version`. Khi có thay đổi dữ liệu, thực hiện tăng số phiên bản (`INCR`) để xoá cache an toàn mà không dùng lệnh `SCAN + DEL` gây nghẽn Redis.
 
 #### AI Core Service (Cổng kết nối AI)
 1.  **Unified AI Gateway:** Cung cấp API chung gọi các LLM của OpenAI (GPT-4o, GPT-4o-mini), Anthropic (Claude 3.5 Sonnet), và local LLM engines (Ollama/vLLM như Qwen 3.7, Gemma 3) qua REST hoặc gRPC (hỗ trợ streaming).
-2.  **Dynamic Model Routing (MỚI):** Tự động điều hướng model theo cấu hình động lưu trữ trong bảng cơ sở dữ liệu `llm_route_configs` per-tenant và use case. Admin có thể thay đổi cấu hình định tuyến trực tiếp từ Dashboard mà không cần deploy lại code.
+2.  **Dynamic Model Routing (MỚI):** Tự động điều hướng model theo cấu hình động lưu trữ trong bảng cơ sở dữ liệu `llm_route_configs` per-tenant và use case. Admin có thể thay đổi cấu hình định tuyến trực tiếp từ Dashboard mà không cần deploy lại code. Cột `tenant_id` trong database đồng bộ định dạng kiểu `UUID` để đảm bảo tính nhất quán toàn hệ thống.
 3.  **Failover:** Tự động chuyển đổi sang provider dự phòng nếu provider chính gặp lỗi hoặc timeout > 10 giây dựa trên cấu hình dự phòng trong database.
 4.  **Dynamic API Key Management (MỚI):** Quản lý và bảo mật các API Keys cùng Custom API Base URLs (cho vLLM/Ollama local) trong bảng `api_key_configs`, sử dụng thuật toán mã hóa đối xứng AES-256 để bảo vệ thông tin xác thực của các LLM providers.
 5.  **Cost Analytics & Cost Simulator (MỚI):** 
@@ -290,6 +298,7 @@ graph TD
 6.  **Multi-tenant MCP Host Gateway:** Đăng ký và quản lý kết nối MCP Server động theo Tenant ID trong `config_db` (dùng giao thức SSE và bảo vệ bằng mTLS/OAuth 2.1). Phân giải và khởi chạy phiên kết nối MCP Client Session độc lập khi có yêu cầu gọi công cụ của Tenant đó.
 7.  **Roots Security Boundary:** Tự động truyền giới hạn thư mục ranh giới `Roots` dựa trên Tenant ID khi kết nối MCP Server để đảm bảo an toàn tập tin hệ thống.
 8.  **Prompt Caching & Token Optimization:** Cấu hình AI Core tối ưu hóa prompt bằng cách đặt system prompt, schemas công cụ và context tĩnh lên đầu prompt; tự động chốt cache breakpoints cho các LLM hỗ trợ (Claude 3.5/3.7) để tăng tốc độ phản hồi và tiết kiệm 90% chi phí input token, sử dụng Redis cache (TTL 5 phút) cho cấu hình định tuyến động.
+9.  **Granular Tool Timeouts & Circuit Breaker:** Quản lý thời gian chờ của công cụ động: tối đa 2.0s đối với các công cụ tương tác trực tiếp/hot-path (như `knowledge_base_search`, `contact_lookup`) và tối đa 10.0s đối với các công cụ nền chậm (như `web_search`, `generate_content`). Tích hợp `pybreaker` ngắt mạch nhanh sau 5 lỗi liên tiếp để tránh treo Agent.
 ### 3.4. Phân hệ Lập lịch & Tạo nội dung
 
 #### Content Service
