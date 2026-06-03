@@ -61,7 +61,7 @@ def check_realm_exists(keycloak_url, admin_token, realm_name):
     response = requests.get(url, headers=headers, timeout=10)
     return response.status_code == 200
 
-def create_realm(keycloak_url, admin_token, realm_template_path, tenant_id, tenant_name, api_gateway_secret):
+def create_realm(keycloak_url, admin_token, realm_template_path, tenant_id, tenant_name, api_gateway_secret, user_service_secret):
     url = f"{keycloak_url.rstrip('/')}/admin/realms"
     headers = {
         "Authorization": f"Bearer {admin_token}",
@@ -79,7 +79,8 @@ def create_realm(keycloak_url, admin_token, realm_template_path, tenant_id, tena
     rendered_content = template_content\
         .replace("{{tenant_id}}", tenant_id)\
         .replace("{{tenant_name}}", tenant_name)\
-        .replace("{{api_gateway_secret}}", api_gateway_secret)
+        .replace("{{api_gateway_secret}}", api_gateway_secret)\
+        .replace("{{user_service_secret}}", user_service_secret)
         
     realm_data = json.loads(rendered_content)
     
@@ -252,6 +253,78 @@ def create_custom_client_scopes(keycloak_url, admin_token, realm_name):
         except Exception as e:
             logger.error(f"Error assigning client scope {scope_name}: {e}")
 
+def provision_user_service_client(keycloak_url, admin_token, realm_name, user_service_secret):
+    """
+    AC 4.7 / Requirement 5.4:
+    Cấu hình Client Credentials cho User Service.
+    Gán role 'manage-users' từ 'realm-management' cho service account của user-service-client.
+    Áp dụng nguyên tắc Least Privilege — không gán admin của master realm.
+    """
+    headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
+    }
+    base_url = keycloak_url.rstrip('/')
+
+    # 1. Lấy ID của client user-service-client trong realm
+    clients_url = f"{base_url}/admin/realms/{realm_name}/clients"
+    try:
+        resp = requests.get(clients_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        clients_list = resp.json()
+    except Exception as e:
+        logger.error(f"[user-service-client] Failed to fetch clients from realm {realm_name}: {e}")
+        return
+
+    user_svc_client_id = None
+    realm_mgmt_client_id = None
+    for c in clients_list:
+        if c["clientId"] == "user-service-client":
+            user_svc_client_id = c["id"]
+        elif c["clientId"] == "realm-management":
+            realm_mgmt_client_id = c["id"]
+
+    if not user_svc_client_id:
+        logger.error(f"[user-service-client] 'user-service-client' not found in realm {realm_name}")
+        return
+    if not realm_mgmt_client_id:
+        logger.error(f"[user-service-client] 'realm-management' client not found in realm {realm_name}")
+        return
+
+    # 2. Lấy service account user ID của user-service-client
+    sa_url = f"{base_url}/admin/realms/{realm_name}/clients/{user_svc_client_id}/service-account-user"
+    try:
+        sa_resp = requests.get(sa_url, headers=headers, timeout=10)
+        sa_resp.raise_for_status()
+        sa_user_id = sa_resp.json()["id"]
+        logger.info(f"[user-service-client] Service account user ID: {sa_user_id}")
+    except Exception as e:
+        logger.error(f"[user-service-client] Failed to get service account user: {e}")
+        return
+
+    # 3. Lấy role 'manage-users' từ realm-management client roles
+    role_url = f"{base_url}/admin/realms/{realm_name}/clients/{realm_mgmt_client_id}/roles/manage-users"
+    try:
+        role_resp = requests.get(role_url, headers=headers, timeout=10)
+        role_resp.raise_for_status()
+        manage_users_role = role_resp.json()
+        logger.info(f"[user-service-client] Found 'manage-users' role: {manage_users_role['id']}")
+    except Exception as e:
+        logger.error(f"[user-service-client] Failed to get 'manage-users' role from realm-management: {e}")
+        return
+
+    # 4. Gán role 'manage-users' cho service account (Least Privilege)
+    assign_url = f"{base_url}/admin/realms/{realm_name}/users/{sa_user_id}/role-mappings/clients/{realm_mgmt_client_id}"
+    try:
+        assign_resp = requests.post(assign_url, headers=headers, json=[manage_users_role], timeout=10)
+        if assign_resp.status_code in [204, 200, 201]:
+            logger.info(f"[user-service-client] Successfully assigned 'manage-users' role to service account in realm: {realm_name}")
+        else:
+            logger.error(f"[user-service-client] Failed to assign role. Status: {assign_resp.status_code}, Body: {assign_resp.text}")
+    except Exception as e:
+        logger.error(f"[user-service-client] Error assigning manage-users role: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Provision a new Keycloak realm for Solavie multi-tenancy.")
     parser.add_argument("--keycloak-url", default=os.getenv("KEYCLOAK_URL", "http://localhost:8081"), help="Keycloak server URL")
@@ -263,12 +336,14 @@ def main():
     parser.add_argument("--admin-email", required=True, help="Tenant admin email address")
     parser.add_argument("--admin-password-user", default="SolavieSecurePass123!", help="Tenant admin user password")
     parser.add_argument("--api-gateway-secret", help="Secret key for api-gateway confidential client (auto-generated if empty)")
+    parser.add_argument("--user-service-secret", help="Secret key for user-service-client (auto-generated if empty)")
     parser.add_argument("--force", action="store_true", help="Delete and recreate realm if it already exists")
     
     args = parser.parse_args()
     
     tenant_id = args.tenant_id.lower().strip()
     api_gateway_secret = args.api_gateway_secret or generate_secret()
+    user_service_secret = args.user_service_secret or generate_secret()
     
     try:
         # Wait for Keycloak to be healthy first
@@ -294,7 +369,7 @@ def main():
             
         # 3. Create realm using template
         logger.info(f"Creating realm '{tenant_id}' from template...")
-        create_realm(args.keycloak_url, admin_token, args.template_path, tenant_id, args.tenant_name, api_gateway_secret)
+        create_realm(args.keycloak_url, admin_token, args.template_path, tenant_id, args.tenant_name, api_gateway_secret, user_service_secret)
         
         # 4. Create first admin user
         logger.info(f"Creating tenant admin user 'admin' for realm '{tenant_id}'...")
@@ -308,6 +383,10 @@ def main():
         # 5.5 Create and assign custom client scopes
         logger.info("Creating and assigning custom business client scopes...")
         create_custom_client_scopes(args.keycloak_url, admin_token, tenant_id)
+        
+        # 5.6 Configure user-service-client: grant manage-users role (AC 4.7 / Req 5.4)
+        logger.info("Configuring user-service-client with Least Privilege (manage-users role)...")
+        provision_user_service_client(args.keycloak_url, admin_token, tenant_id, user_service_secret)
         
         # 6. Complete provisioning output
         logger.info(f"Realm provisioning successfully completed for: {tenant_id}")
@@ -326,6 +405,12 @@ def main():
                     "client_id": "api-gateway",
                     "type": "confidential",
                     "secret": api_gateway_secret
+                },
+                "user-service-client": {
+                    "client_id": "user-service-client",
+                    "type": "confidential",
+                    "secret": user_service_secret,
+                    "roles": ["manage-users"]
                 }
             },
             "admin_user": {
