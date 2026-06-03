@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from gateway.router import LLMGateway, MODEL_ROUTING
+from gateway.router import LLMGateway
 from tools.registry import ToolPermissionManager
 from tools.executor import ToolExecutor
 from agent.orchestrator import AgentOrchestrator
@@ -89,8 +89,8 @@ async def test_react_agent_loop_limit():
         "id": "call-123",
         "type": "function",
         "function": {
-            "name": "knowledge_base_search",
-            "arguments": '{"query": "infinite loop test"}'
+            "name": "send_message",
+            "arguments": '{"conversation_id": "conv-123", "message": "infinite loop test"}'
         }
     }
     

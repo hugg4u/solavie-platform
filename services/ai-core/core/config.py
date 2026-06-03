@@ -1,5 +1,4 @@
-import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
@@ -15,8 +14,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
     
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    # Encryption & Sync Configuration
+    ENCRYPTION_SECRET_KEY: str | None = "solavie_super_secret_master_key_change_me_in_production"
+    TENANT_CONFIG_SERVICE_URL: str = "http://localhost:3006"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore"
+    )
 
 settings = Settings()
