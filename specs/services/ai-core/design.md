@@ -156,7 +156,7 @@ POST   /api/v1/analytics/simulate-cost - Simulate financial impact of switching 
 
 ## Model Routing Config & API Key Caching (Dynamic DB-Backed & Sync)
 
-The `LLMGateway` dynamically queries model routing configurations and API keys from PostgreSQL instead of hardcoded maps, with Redis caching (TTL 5 minutes) to ensure hot-path performance.
+The `LLMGateway` dynamically queries model routing configurations and API keys from PostgreSQL instead of hardcoded maps, with Redis caching (TTL 5 minutes) to ensure hot-path performance. All API keys stored in database are encrypted using Fernet (AES-256) where the key is derived from the SHA-256 hash of the `ENCRYPTION_SECRET_KEY` environment variable. Decryption is performed dynamically in-memory when making provider completions calls.
 
 ### Configuration Sync Mechanism (Hot Reload)
 
@@ -186,8 +186,11 @@ MODEL_ROUTING = {
 
 ## Token Optimization Pipeline
 
+To optimize context inputs and avoid token blowup, the system compresses chat history and truncates document context. The URL Fetch tool proxy integrates Jina Reader API (`https://r.jina.ai/`) to scrape and convert webpages to clean Markdown text before context injection.
+
 ```python
 class TokenOptimizer:
+
     async def optimize(self, request: CompletionRequest, route_config: dict) -> CompletionRequest:
         # 1. Prompt caching check
         cached_system = await self.check_prompt_cache(request.system_prompt)
@@ -221,7 +224,7 @@ class TokenOptimizer:
 -- Usage Logging
 CREATE TABLE llm_usage_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(50) NOT NULL,
+    tenant_id UUID NOT NULL,
     use_case VARCHAR(50) NOT NULL,
     model VARCHAR(100) NOT NULL,
     provider VARCHAR(50) NOT NULL,
@@ -238,7 +241,7 @@ CREATE TABLE llm_usage_logs (
 -- Prompt Templates
 CREATE TABLE prompt_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(50) NOT NULL,
+    tenant_id UUID NOT NULL,
     name VARCHAR(255) NOT NULL,
     use_case VARCHAR(50) NOT NULL,
     version INT NOT NULL DEFAULT 1,
@@ -251,7 +254,7 @@ CREATE TABLE prompt_templates (
 CREATE TABLE llm_route_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     use_case VARCHAR(50) NOT NULL,
-    tenant_id VARCHAR(50) NOT NULL,
+    tenant_id UUID NOT NULL,
     primary_model VARCHAR(100) NOT NULL,
     fallback_model VARCHAR(100) NOT NULL,
     provider VARCHAR(50) NOT NULL,
@@ -319,8 +322,8 @@ Moi write operation phai co idempotency key de tranh duplicate processing khi re
 Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
 
 ### Property 4: Circuit Breaker Correctness
-**Validates: Requirements 5.1**
-Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
+**Validates: Requirements 5.1 & Requirement 7 AC 4**
+Mọi cuộc gọi đồng bộ (HTTP/gRPC) từ Tool Executor của AI Core đến các internal services hoặc external APIs bắt buộc phải đi qua một Circuit Breaker (sử dụng pybreaker). Trạng thái chuyển sang Open sau 5 lỗi liên tiếp trong 30s (tự động báo lỗi tức thì trong 1ms), và chuyển sang Half-Open để thử nghiệm lại sau 60s. Thời gian chờ (Timeout) được cấu hình động: các công cụ tương tác trực tiếp/hot-path (như `knowledge_base_search`, `contact_lookup`) có timeout tối đa 2.0s; các công cụ nền nặng (như `web_search`, `generate_content`) có timeout tối đa 10.0s.
 
 ### Property 5: Data Consistency
 **Validates: Requirements 3.1**
@@ -350,3 +353,18 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `ai-core`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+---
+
+## Future Architecture Design (Phase 2)
+
+### 1. Semantic Cache Architecture (Redis Vector)
+Để tối ưu hóa chi phí LLM, hệ thống trong tương lai sẽ định cấu hình Redis làm bộ lưu trữ Semantic Cache:
+*   **Database:** Sử dụng Redis Stack với module RediSearch hỗ trợ Vector Indexing.
+*   **Embedding Generator:** Mỗi câu hỏi của user được chuyển đổi thành vector embedding qua API local của AI-Core trước khi kiểm tra cache.
+*   **Truy vấn:** Sử dụng Vector Similarity Search (K-Nearest Neighbors) để truy vấn với khoảng cách Cosine Distance. Nếu khoảng cách tương đồng > 0.90, trả kết quả đã cache.
+
+### 2. Trực quan hóa suy luận Agent (OpenTelemetry + LangSmith)
+*   **Tracing:** Tích hợp `opentelemetry-sdk` và `opentelemetry-instrumentation-langchain`.
+*   **Exporter:** Các trace span của LangGraph sẽ được export sang OTLP endpoint của LangSmith hoặc OpenTelemetry Collector để trực quan hóa toàn bộ chu trình suy luận của Agent một cách thời gian thực.
+

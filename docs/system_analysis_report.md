@@ -114,6 +114,20 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 
 ---
 
+### Đề xuất 3: Lộ trình tối ưu hóa chi phí và nâng cấp hệ thống AI (AI-Core & Knowledge Base)
+Để chuẩn bị cho hệ thống vận hành thương mại ở quy mô lớn (SaaS) mà không bị bùng nổ chi phí API, Solavie nên áp dụng các kỹ thuật AI tiên tiến sau trong giai đoạn tiếp theo (Phase 2):
+1.  **Semantic Caching (Bộ nhớ đệm ngữ nghĩa):** Sử dụng Redis Vector Search hoặc Qdrant để lưu trữ các cặp câu hỏi-trả lời đã qua xử lý. Khi khách hàng hỏi câu mới có độ tương đồng ngữ nghĩa > 90%, hệ thống lập tức phản hồi từ cache dưới < 10ms, giúp tiết kiệm tới 100% chi phí gọi LLM API cho các câu hỏi lặp lại.
+2.  **Structured Outputs (Đầu ra có cấu trúc ép buộc):** Áp dụng tính năng `response_format` của LLM API để bắt buộc câu trả lời của Agent luôn tuân thủ JSON Schema cố định, giúp chatbot và hệ thống CRM dễ dàng phân tích cú pháp (parse) kết quả và tự động hóa các hành động tiếp theo.
+3.  **Agent Tracing (Giám sát chuỗi suy luận):** Tích hợp OpenTelemetry với LangSmith hoặc Arize Phoenix để trực quan hóa toàn bộ chuỗi suy luận (Thought -> Action -> Observation) của Agent dưới dạng cây quyết định, phục vụ đắc lực cho khâu giám sát chất lượng và gỡ lỗi.
+4.  **Kiến trúc RAG nâng cao tối ưu (Hybrid Modular RAG + Parent-Child Retrieval):** 
+    *   *Ingestion tách biệt:* Chạy ngầm việc parse, chunk, embed tài liệu thông qua **Celery/ARQ Worker** để bảo vệ hiệu năng CPU của API thread.
+    *   *Sinh Sparse Vector cục bộ:* Sử dụng thư viện **FastEmbed** tại local worker để tạo nhanh các Sparse Vectors (BM25/SPLADE), tối ưu hoá chi phí và tránh phụ thuộc vào Cloud APIs.
+    *   *Parent-Child Retriever (Hierarchical Indexing):* Chia nhỏ tài liệu thành các child chunks để vector search chính xác, nhưng ánh xạ và trả về parent chunks rộng hơn làm context đầu vào cho LLM để đảm bảo tính toàn vẹn ngữ cảnh.
+    *   *Cache Versioning:* Sử dụng khoá phiên bản `{tenant_id}:kb_version` trên Redis để invalidate toàn bộ cache cũ của tenant ngay lập tức thông qua phép tăng giá trị (`INCR`), loại bỏ nguy cơ làm nghẽn Redis của lệnh `SCAN + DEL`.
+
+---
+
+
 ## 4. MA TRẬN PHÂN TÍCH RỦI RO KIẾN TRÚC TRONG THỰC TẾ
 
 | Rủi ro kiến trúc | Tác động | Giải pháp phòng ngừa & Tối ưu |

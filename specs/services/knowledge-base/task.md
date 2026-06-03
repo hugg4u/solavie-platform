@@ -6,8 +6,10 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 ### Technical Stack & Configuration
 - **Language:** Python 3.12
 - **Framework:** FastAPI
-- **Database:** PostgreSQL
+- **Task Queue:** Celery / ARQ (Redis broker)
+- **Database:** PostgreSQL + Qdrant
 - **Embedding:** text-embedding-3-small
+- **Sparse Gen:** FastEmbed (local BM25/SPLADE)
 - **Reranker:** bge-reranker-v2-m3
 
 ### Reference Specifications
@@ -25,7 +27,7 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 
 **Acceptance Criteria Implementation:**
 - [ ] AC 1.1: THE Knowledge_Base SHALL hỗ trợ upload: PDF, DOCX, TXT, Markdown
-- [ ] AC 1.2: WHEN document uploaded, THE Knowledge_Base SHALL parse và extract text content
+- [ ] AC 1.2: WHEN document uploaded, THE Knowledge_Base SHALL đẩy tác vụ (task) vào Celery/ARQ worker queue để parse và extract text content bất đồng bộ (async), tránh nghẽn CPU của API thread.
 - [ ] AC 1.3: THE Knowledge_Base SHALL lưu file gốc vào MinIO
 - [ ] AC 1.4: THE Knowledge_Base SHALL track processing status: processing → ready / failed
 - [ ] AC 1.5: THE Knowledge_Base SHALL xử lý embedding throughput >= 1000 docs/phút
@@ -48,6 +50,7 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] AC 3.3: THE Knowledge_Base SHALL batch embed (100 chunks/batch) cho throughput
 - [ ] AC 3.4: THE Knowledge_Base SHALL cache embeddings trong Redis (TTL 1h)
 - [ ] AC 3.5: Qdrant collection config: HNSW m=16, ef_construct=128
+- [ ] AC 3.6: THE Knowledge_Base SHALL sinh sparse vectors cục bộ sử dụng FastEmbed trước khi upsert vào Qdrant.
 
 ### Task 4: 4: Hybrid Search
 > *User Story: Là chatbot/content AI, tôi cần tìm thông tin chính xác và nhanh.*
@@ -58,6 +61,8 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] AC 4.3: THE Knowledge_Base SHALL filter results theo tenant_id
 - [ ] AC 4.4: Vector search latency SHALL < 10ms p95
 - [ ] AC 4.5: THE Knowledge_Base SHALL trả về top-K results (configurable, default 20)
+- [ ] AC 4.6: THE Knowledge_Base SHALL cache kết quả tìm kiếm trên Redis và áp dụng cơ chế Cache Versioning (tăng số version khi có thay đổi tài liệu) để vô hiệu hóa cache cũ mà không gây block Redis bằng lệnh SCAN.
+- [ ] AC 4.7: THE Knowledge_Base SHALL tự động chuyển sang Local Embedding Fallback (sử dụng FastEmbed) nếu OpenAI embedding API gặp sự cố.
 
 ### Task 5: 5: Reranking
 > *User Story: Là AI system, tôi cần kết quả search được sắp xếp chính xác.*
@@ -67,6 +72,7 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] AC 5.2: THE Knowledge_Base SHALL trả về top-5 sau reranking
 - [ ] AC 5.3: RAG accuracy (relevant results) SHALL > 85%
 - [ ] AC 5.4: Reranking SHALL hoàn thành trong < 30ms
+- [ ] AC 5.5: THE Knowledge_Base SHALL hỗ trợ tuỳ chọn bỏ qua Reranking (Bypass Rerank) cho các câu hỏi đơn giản/lặp lại có độ tương đồng thô ban đầu vượt trội (> 0.92) để tiết kiệm tài nguyên CPU.
 
 ### Task 6: 6: Document Management
 > *User Story: Là admin, tôi muốn quản lý tài liệu đã upload.*
@@ -82,6 +88,9 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] Tổng quan vai trò: Nhận tài liệu upload → parse → chunk → embed → lưu Qdrant
 - [ ] Tổng quan vai trò: Phục vụ search queries từ Chatbot và Content Service
 - [ ] Tổng quan vai trò: Đảm bảo accuracy > 85% và latency < 10ms cho vector search
+- [ ] Luồng Ingestion (Celery/ARQ Worker): Đăng ký tasks cho worker xử lý bất đồng bộ
+- [ ] Luồng Ingestion (FastEmbed): Sinh sparse vectors cục bộ bằng FastEmbed BM25/SPLADE
+- [ ] Luồng Ingestion (Parent-Child Index): Lưu trữ child chunks trong Qdrant và parent chunks trong PostgreSQL, ánh xạ ID tương ứng.
 - [ ] Luồng 1: Document Ingestion: faq: Mỗi cặp Q&A = 1 chunk (detect pattern "Q:" / "A:")
 - [ ] Luồng 1: Document Ingestion: product: Chunk theo sections (headers)
 - [ ] Luồng 1: Document Ingestion: general: Semantic chunking (cosine similarity breakpoints)
@@ -97,6 +106,7 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] Luồng 2: Hybrid Search: Bi-encoder (embedding) nhanh nhưng approximate
 - [ ] Luồng 2: Hybrid Search: Cross-encoder chính xác hơn nhưng chậm (O(n) per query)
 - [ ] Luồng 2: Hybrid Search: Trick: dùng bi-encoder lấy top-20, rồi cross-encoder rerank top-20
+- [ ] Luồng 2: Hybrid Search (Parent-Child Retriever): So khớp trên child chunks nhưng trả về nội dung của parent chunk tương ứng.
 - [ ] Luồng 3: Document Deletion: Verify tenant owns document
 - [ ] Luồng 3: Document Deletion: Get all chunk IDs for this document
 - [ ] Luồng 3: Document Deletion: Delete vectors from Qdrant (by chunk IDs)
@@ -104,8 +114,9 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] Luồng 3: Document Deletion: Delete file from MinIO
 - [ ] Luồng 3: Document Deletion: Delete document record
 - [ ] Luồng 3: Document Deletion: Return 204 No Content
-- [ ] Search Result Caching (Tối ưu): Query embedding cache (TTL 1h)
-- [ ] Search Result Caching (Tối ưu): Search results cache (TTL 30min) — MỚI
+- [ ] Search Result Caching (Tối ưu - Cache Versioning): Query embedding cache (TTL 1h)
+- [ ] Search Result Caching (Tối ưu - Cache Versioning): Search results cache (TTL 30min) kết hợp versioning key `{tenant_id}:kb_version`
+- [ ] Search Result Caching (Tối ưu - Cache Versioning): Invalidate cache bằng cách tăng số phiên bản (INCR `{tenant_id}:kb_version`) khi tài liệu thay đổi.
 - [ ] Qdrant Collection Management: Option A: 1 collection per tenant (simple, good isolation)
 - [ ] Qdrant Collection Management: Option B: 1 shared collection + metadata filter (efficient)
 - [ ] Qdrant Collection Management: Ít collections = ít overhead

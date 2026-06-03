@@ -3,12 +3,15 @@
 ## Overview
 Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, hybrid search (vector + BM25), reranking. Foundation cho Chatbot và Content AI.
 
-## Tech Stack
+### Tech Stack
 - **Language:** Python 3.12
 - **Framework:** FastAPI
+- **Task Queue:** Celery / ARQ (Redis-backed asynchronous worker queue)
 - **Database:** PostgreSQL (knowledge_db) + Qdrant (vector)
-- **Embedding:** text-embedding-3-small (512 dims)
+- **Embedding:** text-embedding-3-small (512 dims) + FastEmbed local embedding fallback (multilingual-e5-small)
+- **Sparse Generator:** FastEmbed (local SPLADE/BM25 generation)
 - **Reranker:** bge-reranker-v2-m3
+- **Cache & Broker:** Redis (Tách biệt logic database: DB 0 cho Caching, DB 1 cho Celery/ARQ broker)
 
 ## Requirements
 
@@ -18,7 +21,7 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 
 #### Acceptance Criteria
 1. THE Knowledge_Base SHALL hỗ trợ upload: PDF, DOCX, TXT, Markdown
-2. WHEN document uploaded, THE Knowledge_Base SHALL parse và extract text content
+2. WHEN document uploaded, THE Knowledge_Base SHALL đẩy tác vụ (task) vào Celery/ARQ worker queue để parse và extract text content bất đồng bộ (async), tránh nghẽn CPU của API thread.
 3. THE Knowledge_Base SHALL lưu file gốc vào MinIO
 4. THE Knowledge_Base SHALL track processing status: processing → ready / failed
 5. THE Knowledge_Base SHALL xử lý embedding throughput >= 1000 docs/phút
@@ -38,11 +41,12 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 **User Story:** Là hệ thống, tôi cần chunks được embed và lưu vào vector DB.
 
 #### Acceptance Criteria
-1. THE Knowledge_Base SHALL embed chunks dùng text-embedding-3-small (512 dimensions)
-2. THE Knowledge_Base SHALL lưu embeddings vào Qdrant với int8 quantization
+1. THE Knowledge_Base SHALL sinh song song 2 vector embeddings cho mỗi chunk (Dual-Vector Indexing): vector chính dùng OpenAI text-embedding-3-small (512 dimensions) và vector dự phòng dùng local FastEmbed multilingual-e5-small (384 dimensions) để đảm bảo tính sẵn sàng cao.
+2. THE Knowledge_Base SHALL lưu cả hai embeddings (openai và local_fastembed) vào Qdrant với int8 quantization
 3. THE Knowledge_Base SHALL batch embed (100 chunks/batch) cho throughput
 4. THE Knowledge_Base SHALL cache embeddings trong Redis (TTL 1h)
 5. Qdrant collection config: HNSW m=16, ef_construct=128
+6. THE Knowledge_Base SHALL sinh sparse vectors cục bộ sử dụng FastEmbed trước khi upsert vào Qdrant.
 
 ### Requirement 4: Hybrid Search
 
@@ -54,6 +58,8 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 3. THE Knowledge_Base SHALL filter results theo tenant_id
 4. Vector search latency SHALL < 10ms p95
 5. THE Knowledge_Base SHALL trả về top-K results (configurable, default 20)
+6. THE Knowledge_Base SHALL cache kết quả tìm kiếm trên Redis và áp dụng cơ chế Cache Versioning (tăng số version khi có thay đổi tài liệu) để vô hiệu hóa cache cũ mà không gây block Redis bằng lệnh SCAN.
+7. THE Knowledge_Base SHALL tự động chuyển đổi sang Local Embedding Fallback (sử dụng FastEmbed cục bộ để sinh vector 384 chiều) và thực hiện truy vấn trên trường vector `local_fastembed` của Qdrant nếu API OpenAI chính bị lỗi hoặc timeout.
 
 ### Requirement 5: Reranking
 
@@ -64,6 +70,8 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 2. THE Knowledge_Base SHALL trả về top-5 sau reranking
 3. RAG accuracy (relevant results) SHALL > 85%
 4. Reranking SHALL hoàn thành trong < 30ms
+5. THE Knowledge_Base SHALL hỗ trợ tuỳ chọn bỏ qua Reranking (Bypass Rerank) cho các câu hỏi đơn giản/lặp lại khi điểm số tương đồng cosine lớn nhất của kết quả Dense Search (trên thang đo [0,1]) đạt vượt trội (> 0.92) để tiết kiệm tài nguyên CPU.
+6. THE Knowledge_Base SHALL loại bỏ trùng lặp (deduplicate) các chunks kết quả theo `parent_chunk_id` trước khi truy vấn PostgreSQL để lấy nội dung Parent Chunk đầy đủ gửi cho LLM, tránh dư thừa và hao phí cửa sổ ngữ cảnh.
 
 ### Requirement 6: Document Management
 

@@ -95,7 +95,7 @@ graph TB
 | 5 | **Chatbot** | Python | FastAPI + LangGraph | 8001/50051 | chatbot_db | Quản lý state đồ thị LangGraph (State/Memory), điều phối hội thoại, tự động tóm tắt tin nhắn, tạm dừng breakpoint duyệt bởi Agent. |
 | 6 | **Content** | Python | FastAPI | 8002 | content_db | Tạo bài viết AI theo brand voice, platform adaptation, quy trình phê duyệt. |
 | 7 | **Scheduler** | Java | Spring Boot 3 + Quartz | 8003 | scheduler_db | Đặt lịch đăng bài múi giờ động, quản lý lịch trực quan, xử lý hàng đợi automation. |
-| 8 | **Knowledge Base** | Python | FastAPI | 8004 | knowledge_db | RAG pipeline, semantic chunking, embedding, hybrid search, rerank. |
+| 8 | **Knowledge Base** | Python | FastAPI | 8004 | knowledge_db | RAG pipeline (Celery/ARQ async ingestion, FastEmbed local sparse, Parent-Child hierarchical indexing, Cache Versioning). |
 | 9 | **AI Core** | Python | FastAPI | 8005/50052 | ai_core_db | LLM Gateway & Prompt Caching, định tuyến mô hình động (Dynamic Model Routing), quản lý khóa API mã hóa, bộ giả lập chi phí (Cost Simulator), rào chắn an toàn kép (Input Semantic Router & Output NLI), Cổng MCP Host Gateway đa tenant. |
 | 10| **Analytics** | Java | Spring Boot 3 | 8006 | analytics_db (TimescaleDB) | Thu thập metrics, báo cáo hiệu suất, tính toán ROI và hành vi khách hàng. |
 | 11| **CRM** | Node.js | NestJS | 3003 | crm_db | Quản lý contact đa kênh, phân loại lead score, gom nhóm khách hàng tự động, quản lý Kanban Deal Pipeline, Site Survey và O&M Tickets. |

@@ -11,14 +11,16 @@ Xem **Architecture**, **API Design**, **Chunking Strategy**, và **Search Pipeli
 |-----------|-----------|
 | Runtime | Python 3.12 |
 | Framework | FastAPI |
+| Task Queue | Celery / ARQ (Redis-backed worker for async ingestion) |
 | Vector DB | Qdrant |
 | Database | PostgreSQL 16 |
 | ORM | SQLAlchemy 2 + asyncpg |
 | Embedding | OpenAI text-embedding-3-small (512 dims) |
-| Reranker | BAAI/bge-reranker-v2-m3 (local) |
+| Sparse Gen | FastEmbed (local SPLADE/BM25 tokenizer) |
+| Reranker | BAAI/bge-reranker-v2-m3 (local, ONNX optimized fallback) |
 | Document Parsing | unstructured, PyPDF2, python-docx |
 | Object Storage | MinIO (boto3) |
-| Cache | Redis |
+| Cache & Queue | Redis |
 | Testing | pytest + pytest-asyncio |
 
 ## Architecture
@@ -27,13 +29,13 @@ Xem **Architecture**, **API Design**, **Chunking Strategy**, và **Search Pipeli
 graph TB
     subgraph "Knowledge Base Service"
         API["FastAPI (port 8004)"]
-        INGEST["Ingestion Pipeline"]
         SEARCH["Search Engine"]
         
-        subgraph "Ingestion"
+        subgraph "Ingestion Worker (Celery/ARQ)"
+            INGEST["Ingestion Pipeline Tasks"]
             PARSE["Document Parser"]
             CHUNK["Semantic Chunker"]
-            EMBED["Embedding Generator"]
+            EMBED["Embedding & Sparse Generator (FastEmbed)"]
         end
         
         subgraph "Search"
@@ -44,22 +46,25 @@ graph TB
         end
     end
 
-    subgraph "Storage"
+    subgraph "Storage & Broker"
         PG["PostgreSQL"]
         QD["Qdrant"]
         MINIO["MinIO"]
-        REDIS["Redis (embed cache)"]
+        REDIS["Redis (cache & task queue Broker)"]
     end
 
-    API --> INGEST & SEARCH
-    PARSE --> CHUNK --> EMBED
+    API -->|1. Push Ingestion Task| REDIS
+    REDIS -->|2. Consume Task| INGEST
+    INGEST --> PARSE --> CHUNK --> EMBED
     EMBED --> QD & PG
     PARSE --> MINIO
     
+    API --> SEARCH
+    SEARCH --> DENSE & SPARSE
     DENSE --> QD
     SPARSE --> QD
     DENSE & SPARSE --> MERGE --> RERANK
-    EMBED --> REDIS
+    SEARCH -.->|Read/Write Cache & Version| REDIS
 ```
 
 ## API Design
@@ -95,9 +100,23 @@ CREATE TABLE documents (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Lưu trữ Parent Chunks (Đoạn cha - chứa ngữ cảnh rộng 1000-2000 tokens)
+CREATE TABLE parent_chunks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    parent_index INT NOT NULL,
+    content TEXT NOT NULL,
+    token_count INT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Lưu trữ Chunks (Đoạn con/Child Chunks - dùng để so khớp vector chính xác 100-200 tokens)
 CREATE TABLE chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    parent_chunk_id UUID REFERENCES parent_chunks(id) ON DELETE CASCADE, -- Liên kết Hierarchical
     tenant_id UUID NOT NULL,
     chunk_index INT NOT NULL,
     content TEXT NOT NULL,
@@ -108,7 +127,9 @@ CREATE TABLE chunks (
 );
 
 CREATE INDEX idx_docs_tenant ON documents(tenant_id, status);
+CREATE INDEX idx_parent_chunks_doc ON parent_chunks(document_id, parent_index);
 CREATE INDEX idx_chunks_doc ON chunks(document_id, chunk_index);
+CREATE INDEX idx_chunks_parent ON chunks(parent_chunk_id);
 CREATE INDEX idx_chunks_tenant ON chunks(tenant_id);
 ```
 
@@ -117,9 +138,16 @@ CREATE INDEX idx_chunks_tenant ON chunks(tenant_id);
 ```python
 COLLECTION_CONFIG = {
     "vectors": {
-        "size": 512,
-        "distance": "Cosine",
-        "on_disk": False,  # RAM for speed
+        "openai": {
+            "size": 512,
+            "distance": "Cosine",
+            "on_disk": False,  # RAM for speed
+        },
+        "local_fastembed": {
+            "size": 384,
+            "distance": "Cosine",
+            "on_disk": False,
+        }
     },
     "sparse_vectors": {
         "bm25": {}  # For hybrid search
@@ -137,7 +165,7 @@ COLLECTION_CONFIG = {
         }
     }
 }
-# Result: 1M vectors × 512 dims × int8 ≈ 500MB RAM
+# Result: 1M vectors × (512 + 384) dims × int8 ≈ 900MB RAM
 # Search latency: p95 < 10ms
 ```
 
@@ -159,36 +187,64 @@ class ChunkingConfig:
 ## Search Pipeline
 
 ```python
-async def hybrid_search(query: str, tenant_id: str, top_k: int = 5):
-    # 1. Embed query (cached)
-    query_vector = await get_cached_embedding(query)
+async def hybrid_search(query: str, tenant_id: str, top_k: int = 5, bypass_rerank_threshold: float = 0.92):
+    # 1. Embed query (with Local FastEmbed Fallback and Vector Field Routing)
+    vector_field = "openai"
+    try:
+        query_vector = await get_cached_embedding(query, provider="openai")
+    except Exception:
+        # Fallback to local FastEmbed multilingual-e5-small (384 dims)
+        query_vector = await get_cached_embedding(query, provider="fastembed_local")
+        vector_field = "local_fastembed"
     
-    # 2. Dense search (vector similarity)
+    # 2. Dense search (vector similarity on the routed field with tenant filter)
     dense_results = await qdrant.search(
-        collection=f"kb_{tenant_id}",
+        collection_name="knowledge_base",
         query_vector=query_vector,
+        vector_name=vector_field,
+        query_filter=Filter(
+            must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+        ),
         limit=20
     )
     
-    # 3. Sparse search (BM25)
+    # 3. Sparse search (BM25 generated locally via FastEmbed)
     sparse_results = await qdrant.search(
-        collection=f"kb_{tenant_id}",
-        query_vector=sparse_encode(query),
+        collection_name="knowledge_base",
+        query_vector=fastembed_sparse_encode(query),
         using="bm25",
+        query_filter=Filter(
+            must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+        ),
         limit=20
     )
     
     # 4. Merge with RRF
     merged = reciprocal_rank_fusion(dense_results, sparse_results, k=60)
     
-    # 5. Rerank top-20 → top-5
+    # helper for deduplication
+    def deduplicate_parent_chunks(results):
+        seen_parents = set()
+        unique = []
+        for r in results:
+            pid = r.metadata.get("parent_chunk_id")
+            if pid not in seen_parents:
+                seen_parents.add(pid)
+                unique.append(r)
+        return unique
+
+    # 5. Rerank Bypass Check:
+    # Kiểm tra trực tiếp độ tương đồng cosine lớn nhất của Dense Search (tránh check trên điểm RRF luôn < 0.1)
+    if dense_results and dense_results[0].score >= bypass_rerank_threshold:
+        return deduplicate_parent_chunks(merged)[:top_k]
+        
+    # 6. Rerank top-20 → top-5 (Rerank first, then deduplicate)
     reranked = await reranker.rank(
         query=query,
         documents=merged[:20],
-        top_k=top_k
+        top_k=top_k * 2 # Fetch slightly more to account for duplicates
     )
-    
-    return reranked
+    return deduplicate_parent_chunks(reranked)[:top_k]
 ```
 
 ## Performance Targets

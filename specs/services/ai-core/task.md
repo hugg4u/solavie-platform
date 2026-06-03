@@ -37,7 +37,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [ ] AC 2.1: THE AI_Core SHALL route requests theo use case (chatbot → GPT-4o-mini, content → Claude Sonnet)
 - [ ] AC 2.2: THE AI_Core SHALL hỗ trợ override model per-request qua tham số API
 - [ ] AC 2.3: THE AI_Core SHALL lưu trữ cấu hình định tuyến động (models, temperature, max_tokens) trong bảng cơ sở dữ liệu `llm_route_configs` per-tenant và use case
-- [ ] AC 2.4: THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256)
+- [ ] AC 2.4: THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256 Fernet với Fernet key được sinh bằng cách băm SHA-256 của ENCRYPTION_SECRET_KEY)
 - [ ] AC 2.5: THE AI_Core SHALL áp dụng caching (Redis TTL 5 phút) cho các cấu hình định tuyến động để tránh độ trễ truy vấn database trên hot-path
 - [ ] AC 2.6: THE AI_Core SHALL đăng ký (subscribe) kênh Redis Pub/Sub `config.updates` để nhận thông báo thay đổi cấu hình thời gian thực và thực hiện hot-reload
 
@@ -85,7 +85,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [ ] AC 7.1: THE AI_Core SHALL implement ReAct agent loop (Reason → Act → Observe → Repeat)
 - [ ] AC 7.2: THE AI_Core SHALL hỗ trợ tối đa 5 iterations per request (safety limit)
 - [ ] AC 7.3: THE AI_Core SHALL tự quyết định tool nào cần gọi dựa trên context
-- [ ] AC 7.4: THE AI_Core SHALL handle tool execution timeout (10s per tool)
+- [ ] AC 7.4: THE AI_Core SHALL handle tool execution timeout (10s per tool) và tích hợp cơ chế Circuit Breaker (pybreaker) để báo lỗi nhanh (1ms) khi tool endpoint sập liên tục.
 - [ ] AC 7.5: IF agent loop vượt max iterations, THEN trả về best-effort response
 
 ### Task 8: 8: MCP Tool Registry (MỚI)
@@ -103,7 +103,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 
 **Acceptance Criteria Implementation:**
 - [ ] AC 9.1: THE AI_Core SHALL hỗ trợ web search tool (Tavily/SerpAPI)
-- [ ] AC 9.2: THE AI_Core SHALL hỗ trợ URL fetch tool (đọc nội dung trang web)
+- [ ] AC 9.2: THE AI_Core SHALL hỗ trợ URL fetch tool (đọc nội dung trang web) tích hợp Jina Reader API (`https://r.jina.ai/`) để chuyển đổi nội dung thành Markdown tối ưu hóa tokens
 - [ ] AC 9.3: THE AI_Core SHALL hỗ trợ social trends tool (trending topics per platform)
 - [ ] AC 9.4: Web search SHALL rate limited: max 3 per request, 50 per hour per tenant
 - [ ] AC 9.5: THE AI_Core SHALL hiển thị sources cho user review
@@ -113,7 +113,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 
 **Acceptance Criteria Implementation:**
 - [ ] AC 10.1: THE AI_Core SHALL require human confirmation cho destructive actions (publish, delete)
-- [ ] AC 10.2: THE AI_Core SHALL prevent infinite loops (max iterations + anti-loop rules)
+- [ ] AC 10.2: THE AI_Core SHALL prevent infinite loops (max iterations + anti-loop rules: cấm gọi liên tiếp quá 2 lần web_search hoặc 3 lần knowledge_base_search)
 - [ ] AC 10.3: THE AI_Core SHALL enforce tenant isolation (agent chỉ access data của tenant mình)
 - [ ] AC 10.4: THE AI_Core SHALL cap total tokens per session (10000 tokens max)
 - [ ] AC 10.5: THE AI_Core SHALL log tất cả agent decisions cho audit trail
@@ -179,3 +179,18 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `ai-core`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+---
+
+## Future Phase 2 Task Checklist
+
+### Task 13: Semantic Caching Implementation
+- [ ] AC 11.1: Tích hợp Redis Stack và cài đặt module RediSearch vector index trong code
+- [ ] AC 11.2: Triển khai kiểm tra tương đồng ngữ nghĩa câu hỏi trước khi gọi LLM/KB Search
+
+### Task 14: Structured Outputs Integration
+- [ ] AC 12.1: Định nghĩa JSON schema và tích hợp `response_format` trong LiteLLM completion calls
+
+### Task 15: Agent Tracing & Monitoring
+- [ ] AC 13.1: Cấu hình OpenTelemetry exporter kết nối tới LangSmith/Arize Collector
+

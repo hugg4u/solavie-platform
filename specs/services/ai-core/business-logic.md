@@ -365,11 +365,14 @@ async def execute_tools(state: AgentState) -> dict:
             })
             continue
         
+        # Determine dynamic timeout: hot-path interactive tools (<= 2s) vs background heavy tools (<= 10s)
+        tool_timeout = 2.0 if tool_name in ["knowledge_base_search", "contact_lookup", "analyze_sentiment", "send_message", "tag_contact"] else 10.0
+        
         # Execute with timeout
         try:
             result = await asyncio.wait_for(
                 tool_executor.execute(tool_name, tool_args, state["tenant_id"]),
-                timeout=10.0  # 10s max per tool call
+                timeout=tool_timeout
             )
             tool_results.append({
                 "tool_call_id": tool_call["id"],
