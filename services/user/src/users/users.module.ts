@@ -11,4 +11,4 @@ import { KeycloakModule } from '../keycloak/keycloak.module';
   providers: [UsersService],
   exports: [UsersService],
 })
-export class UsersModule {}
+export class UsersModule { }

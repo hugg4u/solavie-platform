@@ -144,7 +144,12 @@ services:
     build:
       context: ./services/user
       dockerfile: Dockerfile
+      target: builder
     container_name: solavie-user-service
+    command: npm run start:dev
+    volumes:
+      - ./services/user:/usr/src/app
+      - /usr/src/app/node_modules
     environment:
       - PORT=3008
       - DATABASE_URL=postgresql://solavie_user:solavie_user_password@postgres-keycloak:5432/solavie_user_db?schema=public

@@ -5,10 +5,10 @@ import * as crypto from 'crypto';
 export class WebhookGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest();
-    const signature = request.headers['x-keycloak-signature'] as string;
+    const signature = request.headers['x-webhook-signature'] as string;
     
     if (!signature) {
-      throw new UnauthorizedException('Thiếu header chữ ký X-Keycloak-Signature');
+      throw new UnauthorizedException('Missing X-Webhook-Signature header');
     }
 
     // Shared secret cấu hình trong .env (mặc định là webhook_shared_secret)
@@ -17,7 +17,7 @@ export class WebhookGuard implements CanActivate {
     // request.rawBody có sẵn nhờ tùy chọn { rawBody: true } trong main.ts
     const rawBody = request.rawBody;
     if (!rawBody) {
-      throw new UnauthorizedException('Không thể đọc dữ liệu thô của request');
+      throw new UnauthorizedException('Cannot read raw body of the request');
     }
 
     const computedSignature = crypto
@@ -27,7 +27,7 @@ export class WebhookGuard implements CanActivate {
 
     // crypto.timingSafeEqual yêu cầu 2 Buffer cùng độ dài, nếu khác sẽ crash
     if (signature.length !== computedSignature.length) {
-      throw new UnauthorizedException('Chữ ký Webhook không hợp lệ');
+      throw new UnauthorizedException('Invalid Webhook signature');
     }
 
     const isValid = crypto.timingSafeEqual(
@@ -36,7 +36,7 @@ export class WebhookGuard implements CanActivate {
     );
 
     if (!isValid) {
-      throw new UnauthorizedException('Chữ ký Webhook không hợp lệ');
+      throw new UnauthorizedException('Invalid Webhook signature');
     }
 
     return true;
