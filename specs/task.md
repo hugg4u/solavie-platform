@@ -9,7 +9,7 @@ This master checklist tracks the development and deployment of the entire Solavi
 *Goal: Set up database clustering, identity management, API Gateway routing, LLM gateway, and vector knowledge base.*
   - [x] [**AUTH Service**](specs/solavie-system/services/auth/task.md) (5 requirements) ✅ — Keycloak 24+, RBAC, Dynamic Password Policy & Brute Force Sync
   - [x] [**GATEWAY Service**](specs/solavie-system/services/gateway/task.md) (5 requirements) ✅ — Kong OSS 3.x, dynamic-policy plugin, Dynamic CORS & Rate Limit
-  - [ ] [**AI-CORE Service**](specs/solavie-system/services/ai-core/task.md) (10 requirements) - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
+  - [x] [**AI-CORE Service**](specs/solavie-system/services/ai-core/task.md) (10 requirements) ✅ - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
   - [ ] [**KNOWLEDGE-BASE Service**](specs/solavie-system/services/knowledge-base/task.md) (6 requirements) - Tech: Python 3.12 (FastAPI)
 
 ### [ ] Phase 2: Core Messaging & Engagement (Interactions)
