@@ -12,10 +12,10 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - **URL Fetch:** Firecrawl / Jina Reader
 
 ### Reference Specifications
-- [Requirements](file:///specs/solavie-system/services/ai-core/requirements.md)
-- [Design](file:///specs/solavie-system/services/ai-core/design.md)
-- [Logging](file:///specs/solavie-system/services/ai-core/logging.md)
-- [Business Logic](file:///specs/solavie-system/services/ai-core/business-logic.md)
+- [Requirements](file:///d:/workspace/project/solavie-system/specs/services/ai-core/requirements.md)
+- [Design](file:///d:/workspace/project/solavie-system/specs/services/ai-core/design.md)
+- [Logging](file:///d:/workspace/project/solavie-system/specs/services/ai-core/logging.md)
+- [Business Logic](file:///d:/workspace/project/solavie-system/specs/services/ai-core/business-logic.md)
 
 ---
 
@@ -94,7 +94,8 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 **Acceptance Criteria Implementation:**
 - [x] AC 8.1: THE AI_Core SHALL maintain registry của tất cả available tools
 - [x] AC 8.2: THE AI_Core SHALL phân loại tools: retrieval, action, content, processing
-- [x] AC 8.3: THE AI_Core SHALL restrict tools per use case (permission matrix)
+- [x] AC 8.3: THE AI_Core SHALL restrict tools per use case (Use Case mapping matrix)
+- [ ] AC 8.3b: THE AI_Core SHALL thực thi phân quyền người dùng động theo mã quyền hạn dạng `module:action` so khớp với cache Redis Keycloak `{tenant_id}:permissions:{user_role}` (độ trễ < 50ms)
 - [x] AC 8.4: THE AI_Core SHALL rate limit tool calls (per tool, per tenant)
 - [x] AC 8.5: THE AI_Core SHALL log tất cả tool calls cho audit
 
@@ -117,6 +118,11 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 10.3: THE AI_Core SHALL enforce tenant isolation (agent chỉ access data của tenant mình)
 - [x] AC 10.4: THE AI_Core SHALL cap total tokens per session (10000 tokens max)
 - [x] AC 10.5: THE AI_Core SHALL log tất cả agent decisions cho audit trail
+- [ ] AC 10.6: THE AI_Core SHALL hỗ trợ chặn chủ đề (Topic Guardrails) qua System Prompt và so khớp RAG confidence
+- [ ] AC 10.7: THE AI_Core SHALL tích hợp Custom Regex Middleware PII Masking đầu vào/đầu ra với độ trễ < 10ms
+- [ ] AC 10.8: THE AI_Core SHALL tận dụng Safety Filters ở tầng API của nhà cung cấp mô hình
+- [ ] AC 10.9: THE AI_Core SHALL tích hợp bộ đánh giá kiểm chứng nguồn tin (NLI Grounding Validator) ở đầu ra bằng mô hình NLI
+- [ ] AC 10.10: THE AI_Core SHALL tích hợp bộ kiểm duyệt nội dung đầu ra (Output Content Moderation - Profanity, Toxicity, Prompt Leakage prevention) tại tầng ContentGuardrail
 
 ### Task 11: Implement Business Logic Rules
 **Business Validations:**
@@ -155,6 +161,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Sensitive Data Rules: NEVER log API keys
 - [x] Sensitive Data Rules: Log tenant_id nhưng KHÔNG log user PII
 - [x] Sensitive Data Rules: Truncate long content (max 200 chars in logs)
+- [ ] Guardrails Logging: Ghi nhận danh sách PII placeholders (`pii_masked_keys`), điểm số NLI validation (`nli_grounding_score`), trạng thái kiểm chứng NLI (`nli_status`), và số vòng lặp Agent (`agent_iterations`) trong JSON context logs.
+- [ ] Guardrails Tracing: Định nghĩa và propagate trace context cho các Middleware và Agent Loop spans (de-id, nli, re-id).
+- [ ] Guardrails Metrics: Triển khai các Prometheus metrics custom (`ai_core_pii_tokens_total`, `ai_core_nli_grounding_score`, `ai_core_nli_violations_total`, `ai_core_rag_similarity_score`, `ai_core_rate_limit_violations_total`) và tích hợp vào `/metrics` endpoint.
 
 ## Verification & Testing
 
@@ -195,4 +204,16 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 
 ### Task 15: Agent Tracing & Monitoring
 - [x] AC 13.1: Cấu hình OpenTelemetry exporter kết nối tới LangSmith/Arize Collector
+
+### Task 16: 12 LLM Providers Custom Optimization (MỚI)
+> *User Story: Là business owner và system admin, tôi muốn AI-core được cấu hình tối ưu chi phí, độ trễ và tính năng đặc thù cho 12 LLM providers (Tương ứng với Requirement 14).*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 16.1: Tích hợp cấu trúc Prompt Caching (OpenAI & Anthropic cache control breakpoints - AC 14.1)
+- [ ] AC 16.2: Triển khai Google Safety Settings và Context Caching lớn cho Gemini (AC 14.2)
+- [ ] AC 16.3: Xử lý DeepSeek-R1 suy nghĩ (thinking block parsing) và fast failover circuit breaker (5s timeout - AC 14.3)
+- [ ] AC 16.4: Đồng bộ hóa local vLLM/Ollama endpoints qua database configurations (AC 14.4)
+- [ ] AC 16.5: Parse và cấu trúc citations metadata từ Cohere và Perplexity APIs (AC 14.5)
+- [ ] AC 16.6: Tự động dọn dẹp format parameters null cho Mistral và cấu hình EU nodes routing (AC 14.6)
+
 

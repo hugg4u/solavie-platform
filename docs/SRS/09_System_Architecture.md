@@ -97,6 +97,7 @@ graph TB
 | 7 | **Scheduler** | Java | Spring Boot 3 + Quartz | 8003 | scheduler_db | Đặt lịch đăng bài múi giờ động, quản lý lịch trực quan, xử lý hàng đợi automation. |
 | 8 | **Knowledge Base** | Python | FastAPI | 8004 | knowledge_db | RAG pipeline (Celery/ARQ async ingestion, FastEmbed local sparse, Parent-Child hierarchical indexing, Cache Versioning). |
 | 9 | **AI Core** | Python | FastAPI | 8005/50052 | ai_core_db | LLM Gateway & Prompt Caching, định tuyến mô hình động (Dynamic Model Routing), quản lý khóa API mã hóa, bộ giả lập chi phí (Cost Simulator), rào chắn an toàn kép (Input Semantic Router & Output NLI), Cổng MCP Host Gateway đa tenant. |
+| 9 | **AI Core** | Python | FastAPI + LangGraph | 8005/50052 | ai_core_db | **AI Core Enterprise (Lõi AI Tác nhân):** Lập luận có trạng thái (LangGraph Stateful Multi-Agent), Tích hợp Hybrid RAG (GraphRAG + Qdrant + Gemini 2M Context), Cổng MCP Host Gateway, Triple-Layer Guardrails (PII Tokenizer/Re-id, SDD Spec Validator, Permission Enforcement) và Tối ưu 12 LLM Providers. |
 | 10| **Analytics** | Java | Spring Boot 3 | 8006 | analytics_db (TimescaleDB) | Thu thập metrics, báo cáo hiệu suất, tính toán ROI và hành vi khách hàng. |
 | 11| **CRM** | Node.js | NestJS | 3003 | crm_db | Quản lý contact đa kênh, phân loại lead score, gom nhóm khách hàng tự động, quản lý Kanban Deal Pipeline, Site Survey và O&M Tickets. |
 | 12| **Campaign** | Java | Spring Boot 3 | 8007 | campaign_db | Lên chiến dịch gửi tin nhắn hàng loạt, A/B testing hiệu quả content. |
@@ -111,7 +112,7 @@ graph TB
 
 ## 9.3. Sơ đồ các thành phần trong Service (Component Diagram)
 
-Dưới đây mô tả chi tiết sơ đồ thành phần cấu trúc nội bộ và luồng gọi dịch vụ giữa `Messaging Service`, `Chatbot Service` và `AI Core Service` tích hợp các lớp tối ưu hóa:
+Dưới đây mô tả chi tiết sơ đồ thành phần cấu trúc nội bộ và luồng gọi dịch vụ giữa `Messaging Service`, `Chatbot Service` và `AI Core Service` sau khi tái cấu trúc chuyển toàn bộ lõi tác nhân thông minh về AI Core:
 
 ```mermaid
 graph TD
@@ -121,46 +122,94 @@ graph TD
         grpc_client[Chatbot gRPC Client]
     end
 
-    subgraph "Chatbot Service (LangGraph FastAPI - Stateful)"
+    subgraph "Chatbot Service (FastAPI - Thin Wrapper)"
         grpc_server[gRPC Server]
-        langgraph_core[LangGraph Engine]
-        intent_clf[Intent Classifier]
-        summarizer[Summarization Node]
-        checkpoint_saver[PostgreSQL Checkpoint Saver]
+        session_mgr[Session Connection Manager]
         ai_core_client[AI Core Client]
     end
 
-    subgraph "AI Core Service (FastAPI - Stateless)"
-        ai_core_server[AI Core Server]
-        input_guard[Input Semantic Router]
-        llm_router[LLM Router & Prompt Caching]
-        output_guard[Output NLI Validator]
-        mcp_host[Multi-tenant MCP Host Gateway]
-        roi_calc[Solar ROI Calculator]
+    subgraph "AI Core Service (FastAPI + LangGraph - Stateful Engine)"
+        ai_core_server[AI Core Server / gRPC]
+        
+        %% Tầng 1: Input Guardrail
+        subgraph "Tầng 1: Input Guardrails"
+            pii_tok[PII Tokenizer Middleware]
+            intent_val[Intent & Jailbreak Validator]
+        end
+        
+        %% Tầng 2: Orchestration (LangGraph)
+        subgraph "Tầng 2: Orchestration Layer"
+            langgraph_core[LangGraph Engine]
+            agent_state[AgentState & Checkpoint Saver]
+            crm_agent[CRM Agent Node]
+            om_agent[O&M Agent Node]
+            inv_agent[Inventory Agent Node]
+        end
+        
+        %% Tầng 3: API/Permissions (Structural & Output Gate)
+        subgraph "Tầng 3: Security & SDD Gates"
+            spec_val[SDD Spec Validator api-spec.yaml]
+            perm_gate[Permission Interceptor module:action]
+        end
+        
+        %% Tầng 4: Integration (MCP Host)
+        subgraph "Tầng 4: Integration Layer"
+            mcp_host[Multi-tenant MCP Host Gateway]
+            re_id[Re-id PII Restorer]
+        end
+
+        %% Tầng 5: LLM Router & Hybrid RAG
+        subgraph "Tầng 5: LLM Gateway & RAG"
+            llm_router[LLM Gateway Router LiteLLM]
+            graph_rag[GraphRAG Client Database Relations]
+            gemini_long[Gemini 2M Context Client]
+        end
+
+        %% Tầng 6: Output Guardrails
+        subgraph "Tầng 6: Output Guardrails"
+            nli_val[NLI Grounding Validator]
+        end
     end
 
-    subgraph "Knowledge Base Service & Qdrant"
-        kb_service[KB Service]
+    subgraph "External Databases & MCP Servers"
+        pg_db[(PostgreSQL DB CRM/O&M)]
         qdrant[(Qdrant Vector DB)]
+        mcp_iot[MCP IoT Inverter Server]
     end
 
     ws_gate --> msg_service
     msg_service -->|1. Call Chatbot| grpc_client
     grpc_client -->|2. gRPC Call| grpc_server
-    grpc_server -->|3. Run State Graph| langgraph_core
-    langgraph_core -->|4. Intent Classification| intent_clf
-    langgraph_core -->|5. Trim & Summarize| summarizer
-    langgraph_core -->|6. Save State Checkpoint| checkpoint_saver
-    langgraph_core -->|7. Query LLM/Tools| ai_core_client
+    grpc_server -->|3. Forward Request| session_mgr
+    session_mgr -->|4. Complete API Call| ai_core_client
 
-    ai_core_client -->|8. REST/gRPC Call| ai_core_server
-    ai_core_server -->|9. Check Input Safety| input_guard
-    input_guard -->|10. Pass| llm_router
-    llm_router -->|11. Query Context| kb_service
-    kb_service --> qdrant
-    llm_router -->|12. Validate Grounding| output_guard
-    llm_router -->|13. Call Custom Tool| mcp_host
-    llm_router -->|14. Calculate Solar ROI| roi_calc
+    %% Luồng AI Core
+    ai_core_client -->|5. Call Agent| ai_core_server
+    ai_core_server -->|6. De-id PII| pii_tok
+    pii_tok -->|7. Check Intent| intent_val
+    intent_val -->|8. Run Graph| langgraph_core
+    
+    langgraph_core -->|9. Manage Checkpoints| agent_state
+    langgraph_core -->|10. Delegate Tasks| crm_agent & om_agent & inv_agent
+    
+    crm_agent & om_agent & inv_agent -->|11. Complete/Reason| llm_router
+    llm_router -->|12. Semantic Search| qdrant
+    llm_router -->|13. Read Database Relations| graph_rag
+    llm_router -->|14. Query Codebase/Contracts| gemini_long
+
+    %% Chốt chặn Tool Call
+    langgraph_core -->|15. Call Action Tool| spec_val
+    spec_val -->|16. Validate Schema| perm_gate
+    perm_gate -->|17. Check Redis/JWT| mcp_host
+    
+    %% Thực thi Tool và Phân giải PII
+    mcp_host -->|18. Re-id PII map| re_id
+    re_id -->|19. Call SQL DB tool| pg_db
+    re_id -->|20. Call Inverter tool| mcp_iot
+
+    %% Kiểm soát đầu ra
+    langgraph_core -->|21. Validate Hallucination| nli_val
+    nli_val -->|22. Final Response| ai_core_server
 ```
 
 

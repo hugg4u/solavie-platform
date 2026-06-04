@@ -57,6 +57,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "knowledge-base",
         "endpoint": "POST /api/v1/search",
+        "required_permission": "kb:search",
     },
     {
         "name": "web_search",
@@ -68,6 +69,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "external",
         "provider": "tavily",  # or serpapi
+        "required_permission": "kb:search",
     },
     {
         "name": "fetch_url",
@@ -78,6 +80,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "external",
         "provider": "firecrawl",  # or jina reader
+        "required_permission": "kb:search",
     },
     {
         "name": "analytics_query",
@@ -91,6 +94,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "analytics",
         "endpoint": "GET /api/v1/metrics",
+        "required_permission": "crm:read",
     },
     {
         "name": "contact_lookup",
@@ -103,6 +107,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "crm",
         "endpoint": "GET /api/v1/contacts/:id",
+        "required_permission": "crm:read",
     },
     {
         "name": "get_social_trends",
@@ -114,6 +119,7 @@ RETRIEVAL_TOOLS = [
         },
         "service": "external",
         "provider": "social_trends_api",
+        "required_permission": "kb:search",
     },
 ]
 ```
@@ -133,6 +139,7 @@ ACTION_TOOLS = [
         "service": "messaging",
         "endpoint": "POST /api/v1/conversations/:id/messages",
         "requires_confirmation": False,  # Chatbot can auto-send
+        "required_permission": "messaging:chat",
     },
     {
         "name": "handoff_to_agent",
@@ -144,6 +151,7 @@ ACTION_TOOLS = [
         },
         "service": "messaging",
         "endpoint": "PUT /api/v1/conversations/:id/mode",
+        "required_permission": "messaging:chat",
     },
     {
         "name": "tag_contact",
@@ -154,6 +162,7 @@ ACTION_TOOLS = [
         },
         "service": "crm",
         "endpoint": "POST /api/v1/contacts/:id/tags",
+        "required_permission": "crm:update",
     },
     {
         "name": "create_schedule",
@@ -167,6 +176,7 @@ ACTION_TOOLS = [
         "service": "scheduler",
         "endpoint": "POST /api/v1/schedules",
         "requires_confirmation": True,  # Need human approval
+        "required_permission": "scheduler:publish",
     },
     {
         "name": "hide_comment",
@@ -177,6 +187,7 @@ ACTION_TOOLS = [
         },
         "service": "comment-manager",
         "endpoint": "PUT /api/v1/comments/:id/hide",
+        "required_permission": "comments:update",
     },
     {
         "name": "send_notification",
@@ -189,6 +200,7 @@ ACTION_TOOLS = [
         },
         "service": "notification",
         "endpoint": "POST /api/v1/notifications/send",
+        "required_permission": "messaging:chat",
     },
 ]
 ```
@@ -210,6 +222,7 @@ CONTENT_TOOLS = [
         "service": "content",
         "endpoint": "POST /api/v1/content/generate",
         "requires_confirmation": True,
+        "required_permission": "kb:search",
     },
     {
         "name": "adapt_content",
@@ -221,6 +234,7 @@ CONTENT_TOOLS = [
         },
         "service": "content",
         "endpoint": "POST /api/v1/content/adapt",
+        "required_permission": "kb:search",
     },
 ]
 ```
@@ -237,6 +251,7 @@ PROCESSING_TOOLS = [
             "dimensions": "int - default 512"
         },
         "service": "internal",  # AI Core handles directly
+        "required_permission": "kb:search",
     },
     {
         "name": "summarize",
@@ -247,6 +262,7 @@ PROCESSING_TOOLS = [
             "style": "string - 'bullet_points', 'paragraph', 'key_facts'"
         },
         "service": "internal",
+        "required_permission": "kb:search",
     },
     {
         "name": "translate",
@@ -257,6 +273,7 @@ PROCESSING_TOOLS = [
             "target_language": "string"
         },
         "service": "internal",
+        "required_permission": "kb:search",
     },
     {
         "name": "analyze_sentiment",
@@ -265,7 +282,8 @@ PROCESSING_TOOLS = [
             "text": "string"
         },
         "service": "internal",
-        "returns": "{'sentiment': 'positive|neutral|negative|angry', 'confidence': 0.0-1.0}"
+        "returns": "{'sentiment': 'positive|neutral|negative|angry', 'confidence': 0.0-1.0}",
+        "required_permission": "kb:search",
     },
     {
         "name": "calculate_lead_score",
@@ -275,6 +293,7 @@ PROCESSING_TOOLS = [
             "behavior_data": "object - message frequency, interests, etc."
         },
         "service": "internal",
+        "required_permission": "crm:update",
     },
 ]
 ```
@@ -286,7 +305,7 @@ PROCESSING_TOOLS = [
 ```python
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from typing import TypedDict, Annotated, Literal
+from typing import TypedDict, Annotated, Literal, List, Dict, Any
 import operator
 
 class AgentState(TypedDict):
@@ -298,6 +317,8 @@ class AgentState(TypedDict):
     iteration_count: int  # Prevent infinite loops
     final_response: str
     confidence: float
+    pii_map: Dict[str, str]  # PII placeholders to real values mapping dict (local)
+    user_permissions: List[str]  # User Keycloak permissions from Redis cache
 
 MAX_ITERATIONS = 5  # Safety: max tool calls per request
 
@@ -356,22 +377,40 @@ async def execute_tools(state: AgentState) -> dict:
         tool_name = tool_call["name"]
         tool_args = tool_call["arguments"]
         
-        # Permission check
-        if not await check_tool_permission(state["tenant_id"], tool_name):
+        # 1. Permission check (RBAC module:action check from user_permissions)
+        tool_def = get_tool_definition(tool_name)
+        required_perm = tool_def.get("required_permission")
+        if required_perm and required_perm not in state["user_permissions"]:
             tool_results.append({
                 "tool_call_id": tool_call["id"],
-                "result": "Permission denied for this tool",
+                "result": f"Permission denied for tool '{tool_name}' (requires {required_perm})",
                 "error": True,
             })
             continue
+            
+        # 2. Redis Rate limit check
+        if not await check_rate_limit(state["tenant_id"], tool_name):
+            tool_results.append({
+                "tool_call_id": tool_call["id"],
+                "result": f"Rate limit exceeded for tool '{tool_name}'",
+                "error": True,
+            })
+            continue
+            
+        # 3. PII Re-identification Interceptor (Rule 3.1)
+        # Restore real PII values to arguments before execution
+        resolved_args = tool_args.copy()
+        for k, v in resolved_args.items():
+            if isinstance(v, str) and v in state["pii_map"]:
+                resolved_args[k] = state["pii_map"][v]  # replace e.g. [PHONE_1] -> 0912345678
         
         # Determine dynamic timeout: hot-path interactive tools (<= 2s) vs background heavy tools (<= 10s)
         tool_timeout = 2.0 if tool_name in ["knowledge_base_search", "contact_lookup", "analyze_sentiment", "send_message", "tag_contact"] else 10.0
         
-        # Execute with timeout
+        # Execute with timeout and resolved arguments
         try:
             result = await asyncio.wait_for(
-                tool_executor.execute(tool_name, tool_args, state["tenant_id"]),
+                tool_executor.execute(tool_name, resolved_args, state["tenant_id"]),
                 timeout=tool_timeout
             )
             tool_results.append({
@@ -531,8 +570,11 @@ class ToolExecutor:
 ```python
 class ToolPermissionManager:
     """
-    Không phải mọi use case đều được gọi mọi tool.
-    Security: restrict tools per use case.
+    Quản lý phân quyền gọi công cụ.
+    Đảm bảo kiểm tra chéo hai tầng:
+    1. Usecase Mapping: use_case tương ứng có được phép gọi tool này không.
+    2. RBAC check: Người dùng hiện tại có đủ mã quyền hạn `module:action` của tool này không (tra cứu từ cache Redis Keycloak).
+    3. Tenant restrictions: Tenant có vô hiệu hóa tool này không.
     """
     
     PERMISSIONS = {
@@ -576,12 +618,19 @@ class ToolPermissionManager:
         ],
     }
     
-    async def check_permission(self, tenant_id: str, use_case: str, tool_name: str) -> bool:
+    async def check_permission(self, tenant_id: str, use_case: str, tool_name: str, user_permissions: List[str]) -> bool:
+        # 1. Kiểm tra ánh xạ Use Case
         allowed_tools = self.PERMISSIONS.get(use_case, [])
         if tool_name not in allowed_tools:
             return False
+            
+        # 2. Kiểm tra quyền hạn người dùng (RBAC module:action)
+        tool_def = get_tool_definition(tool_name)
+        required_perm = tool_def.get("required_permission")
+        if required_perm and required_perm not in user_permissions:
+            return False
         
-        # Additional tenant-level restrictions
+        # 3. Kiểm tra cấu hình tắt/mở công cụ của riêng Tenant
         tenant_config = await self.get_tenant_config(tenant_id)
         if tool_name in tenant_config.get("disabled_tools", []):
             return False
