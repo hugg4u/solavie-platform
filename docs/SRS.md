@@ -536,26 +536,43 @@ Khi chạy 18 microservices độc lập trên cùng một cụm máy chủ và 
 - **Giới hạn tài nguyên Docker (Memory Limits)**: Thiết lập tham số `mem_limit` (ví dụ: giới hạn RAM từ 250MB - 350MB cho các container Node.js/Python thông thường) và giới hạn CPU trong file cấu hình triển khai để tránh tình trạng rò rỉ bộ nhớ (memory leak) làm sập hệ điều hành.
 - **GraalVM Native Image**: Đối với các service viết bằng Java (Spring Boot), khuyến nghị biên dịch sang Native Image ở giai đoạn phát hành thương mại để hạ dung lượng tiêu thụ RAM rảnh từ ~400MB xuống dưới 50MB mỗi container.
 
-### 4.7. Đặc tả Tối ưu hóa LLM & Prompt Caching
-Để giảm chi phí gọi API mô hình ngôn ngữ lớn (LLM) và tối ưu hóa tốc độ phản hồi (Time-to-First-Token) của chatbot, hệ thống áp dụng các tiêu chuẩn thiết kế Prompt như sau:
+### 4.7. Đặc tả Tối ưu hóa LLM & Cấu hình Đa Nhà cung cấp (12 Providers)
+Để giảm chi phí gọi API mô hình ngôn ngữ lớn (LLM), giảm thời gian phản hồi (TTFT) và nâng cao tính sẵn sàng của chatbot, hệ thống áp dụng các tiêu chuẩn tối ưu hóa như sau:
 *   **Quy tắc Thiết kế Cấu trúc Prompt tĩnh ở đầu:** Tất cả các prompt gửi lên LLM qua AI Core **PHẢI** được cấu trúc sao cho phần tĩnh (ít thay đổi giữa các request) nằm ở đầu, và phần động (tin nhắn mới của khách hàng) nằm ở cuối cùng:
     1.  *System Prompt / Hướng dẫn thương hiệu:* Tĩnh (vị trí số 1).
     2.  *MCP Tool Schemas:* Tĩnh (vị trí số 2).
     3.  *Tài liệu tri thức trích xuất từ RAG (Context):* Ít biến động (vị trí số 3).
     4.  *Tóm tắt hội thoại lịch sử (Summary):* Ít biến động (vị trí số 4).
     5.  *n tin nhắn gần nhất trong phiên:* Động (vị trí số 5).
-*   **Sử dụng Cache Breakpoints:** Đối với các API hỗ trợ khai báo cache (như Anthropic Claude API), AI Core **PHẢI** chèn nhãn `"cache_control": {"type": "ephemeral"}` tại cuối phần System Prompt + MCP Tool Schemas (Breakpoint 1) và tại cuối RAG Context + Summary (Breakpoint 2) để kích hoạt cơ chế bộ đệm.
 *   **Sliding Window Memory:** LangGraph tự động nén lịch sử chat của state checkpoint khi vượt quá giới hạn (ví dụ: 10 tin nhắn hoặc 4000 tokens) thành một `summary` ngắn gọn, giúp giữ token đầu vào tối giản.
+*   **Kỹ thuật Tối ưu hóa cho Từng Nhà cung cấp (Providers):**
+    1.  **OpenAI:** Sắp xếp System Prompt tĩnh lên đầu để tự động tận dụng cơ chế Prompt Caching của OpenAI. Định tuyến use-case chatbot và phân loại trung gian mặc định qua `gpt-4o-mini` để tiết kiệm 90% chi phí.
+    2.  **Anthropic:** Chèn trực tiếp nhãn `"cache_control": {"type": "ephemeral"}` ở cuối phần System Prompt / MCP Tools (Breakpoint 1) và cuối RAG Context (Breakpoint 2) để giảm 90% chi phí nạp prompt.
+    3.  **Google Gemini:** Kích hoạt Context Caching cho các phiên chat lớn (>32,768 tokens) với thời hạn hiệu lực (TTL) cấu hình động. Ánh xạ prefix `gemini/` bắt buộc khi gọi LiteLLM. Cấu hình các thuộc tính bộ lọc an toàn `safety_settings` ngay trong payload API.
+    4.  **DeepSeek:** Thiết lập timeout kết nối tối đa chỉ **5s** (thay vì 10s mặc định) và ngắt mạch nhanh sang Gemini. Trích xuất trường dữ liệu đặc thù `reasoning_content` (hoặc parse khối nằm giữa cặp thẻ `<think>...</think>`) từ phản hồi stream/non-stream để lưu trữ và hiển thị riêng biệt chuỗi lập luận trên giao diện.
+    5.  **Local (vLLM/Ollama):** Triển khai vLLM thay thế Ollama để tận dụng PagedAttention giúp tăng thông lượng xử lý gấp 10 lần. Sử dụng FastEmbed cục bộ để sinh vector embeddings không qua mạng.
+    6.  **Qwen (Alibaba DashScope):** Gọi Qwen qua OpenAPI tương thích, tối ưu hóa tác vụ lập trình bằng `qwen-2.5-coder` ở nhiệt độ `temperature = 0.0` để loại bỏ tính ngẫu nhiên.
+    7.  **Together AI:** Triển khai xoay vòng API Key (Round-Robin Key Rotation) tại gateway để tránh giới hạn RPM. Truyền tham số định danh `extra_headers` (`HTTP-Referer`, `X-Title`) bắt buộc.
+    8.  **Groq:** Sử dụng mô hình trên LPU để xử lý tốc độ siêu tốc cho các tác vụ Chatbot/Voice (TTFT < 100ms). Đọc header rate limit (`x-ratelimit-remaining`) để chủ động chuyển mạch trước khi bị lỗi 429.
+    9.  **OpenRouter:** Đăng ký tiêu đề định danh ứng dụng bắt buộc và xử lý Fallback cục bộ trên Gateway của Solavie thay vì phụ thuộc vào OpenRouter để kiểm soát chi phí.
+    10. **Cohere:** Trích xuất mảng dữ liệu trích dẫn `citations` (gồm `start`, `end`, `text`, `document_ids`) từ API metadata để trả về cho frontend hiển thị nguồn đối chiếu.
+    11. **Perplexity:** Sử dụng `perplexity/sonar` trực tiếp cho các câu hỏi cần tìm kiếm thực tế trên internet nhằm bỏ qua vòng lặp ReAct Agent, giảm 70% độ trễ phản hồi.
+    12. **Mistral:** Thực hiện đệ quy làm sạch payload định nghĩa tools (lọc bỏ các trường mang giá trị `None` hoặc thuộc tính rỗng) trước khi gọi để tránh lỗi 400 Bad Request. Hỗ trợ định tuyến qua EU endpoints khi cần tuân thủ GDPR.
 
 ### 4.8. Rào chắn AI an toàn (Guardrails) & Xử lý lỗi
-Hệ thống chạy song song 2 chốt chặn kiểm duyệt an toàn:
-*   **Input Guardrail (Semantic Router):**
-    *   Sử dụng thư viện `semantic-router` kết hợp một mô hình embedding nhẹ chạy tại local.
-    *   Các nhóm lọc cấm: `competitors` (đối thủ cạnh tranh Solar), `jailbreaks` (tấn công prompt injection), và `off-topic` (chủ đề cấm hoặc ngoài lề).
-    *   Hành động khi vi phạm (On-fail Action): Chặn chuyển tiếp đến LLM và trả về phản hồi từ chối chuẩn hóa.
+Quy trình kiểm duyệt tin nhắn chạy song song trên Chatbot Service và AI Core Service qua các chốt chặn:
+*   **Input Guardrail (Custom PII Masking & Semantic/Prompt Topic Router):**
+    *   **Custom Guardrail Middleware (PII Masking):** Tích hợp Regex hiệu năng cao trực tiếp tại lớp Gateway/Router của AI Core để phát hiện và che giấu các thông tin nhạy cảm của khách hàng trước khi truyền sang bên thứ ba (overhead trễ xử lý < 2ms):
+        *   *Email Pattern:* `[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+` $\rightarrow$ Thay thế bằng `[EMAIL_MASKED]`
+        *   *Phone Pattern (VN):* `(?:\+84|0[3|5|7|8|9])[0-9]{8}\b` $\rightarrow$ Thay thế bằng `[PHONE_MASKED]`
+        *   *Credit Card Pattern:* `\b(?:\d[ -]*?){13,16}\b` $\rightarrow$ Thay thế bằng `[CARD_MASKED]`
+    *   **Topic Routing (Chặn chủ đề):** Hỗ trợ chặn chủ đề ngoài phạm vi doanh nghiệp thông qua việc cấu hình chỉ dẫn chặt chẽ trong System Prompt Templates của từng Tenant, kết hợp đối chiếu độ tin cậy của tài liệu RAG. Nếu Relevance Score của toàn bộ các tài liệu trích xuất đều **< 0.50**, hệ thống tự động kích hoạt câu từ chối mặc định: *"Xin lỗi, tôi chỉ được thiết lập để trả lời các câu hỏi liên quan đến sản phẩm và dịch vụ của Solavie..."*
+    *   **Safety Filters:** Tận dụng bộ lọc an toàn sẵn có của nhà cung cấp mô hình (như Google Safety Settings cho Gemini với các danh mục `HARM_CATEGORY_HARASSMENT`, `HARM_CATEGORY_HATE_SPEECH`, `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_DANGEROUS_CONTENT`) cấu hình chặn ở mức `BLOCK_LOW_AND_ABOVE` hoặc `BLOCK_MEDIUM_AND_ABOVE` tùy theo cấu hình Tenant.
 *   **Output Guardrail (NLI Grounding Validator):**
-    *   Đối chiếu câu trả lời từ RAG của LLM với tài liệu context thông qua mô hình NLI (ví dụ: `RoBERTa-large-MNLI`).
-    *   Hành động khi vi phạm (On-fail Action): Nếu NLI phân loại là `Contradiction` hoặc `Neutral` (Grounding Score < 0.80), hệ thống sẽ chặn câu trả lời, tiến hành sinh lại (Regenerate) tối đa 2 lần. Nếu vẫn vi phạm, hệ thống tự động chặn và trả về tin nhắn chờ để gán cuộc chat sang cho con người xử lý.
+    *   **Mô tả:** Khi LLM sinh câu trả lời dựa trên RAG, câu trả lời đó và tài liệu context được gửi tới mô hình NLI (ví dụ: `RoBERTa-large-MNLI`) tại AI Core.
+    *   **Phân loại của NLI:** `Entailment` (Hợp lệ), `Contradiction` (Mâu thuẫn), và `Neutral` (Không có cơ sở - Hallucination).
+    *   **Hành động khi vi phạm (On-fail Action):** Nếu Grounding Score (lớp `Entailment`) **< 0.80**, hệ thống chặn câu trả lời. Tiến hành yêu cầu LLM sinh lại tối đa **2 lần** với prompt bổ sung yêu cầu chỉ sử dụng thông tin trong tài liệu context cung cấp. Nếu sau 2 lần thử lại vẫn vi phạm, hệ thống tự động chặn và trả về tin nhắn thông báo chờ kết nối với Agent: *"Tôi xin phép chuyển cuộc hội thoại này cho nhân viên tư vấn để cung cấp thông tin chính xác nhất cho bạn. Vui lòng đợi trong giây lát."*
+
 
 ### 4.9. Chính sách lưu trữ và dọn dẹp dữ liệu (Data Retention & Archiving Policy)
 

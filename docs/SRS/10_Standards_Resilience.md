@@ -188,45 +188,60 @@ Khi chạy 18 microservices độc lập trên cùng một cụm máy chủ và 
 
 ---
 
-## 10.9. Đặc tả Tối ưu hóa LLM & Prompt Caching
+## 10.9. Đặc tả Tối ưu hóa LLM & Cấu hình Đa Nhà cung cấp (12 Providers)
 
-Để giảm thiểu chi phí API LLM và giảm thời gian phản hồi (Time-to-First-Token) của chatbot, hệ thống áp dụng các tiêu chuẩn thiết kế Prompt như sau:
+Để giảm thiểu chi phí API LLM, giảm thời gian phản hồi (TTFT) và nâng cao tính sẵn sàng cao, hệ thống áp dụng các tiêu chuẩn tối ưu hóa chi tiết cho 12 nhà cung cấp sau:
 
-### 10.9.1. Quy tắc Thiết kế Cấu trúc Prompt tĩnh ở đầu
-Tất cả các prompt gửi lên LLM qua AI Core **PHẢI** được cấu trúc sao cho phần tĩnh (ít thay đổi giữa các request) nằm ở đầu, và phần động (tin nhắn mới của khách hàng) nằm ở cuối cùng:
+### 10.9.1. Quy tắc Sắp xếp Prompt để Tối ưu hóa Cache
+Tất cả các prompt gửi lên LLM qua AI Core **PHẢI** được cấu trúc sao cho phần tĩnh (ít thay đổi giữa các request) nằm ở đầu, và phần động (tin nhắn mới) nằm ở cuối cùng:
 1.  **System Prompt / Hướng dẫn thương hiệu:** Tĩnh (vị trí số 1).
 2.  **MCP Tool Schemas:** Tĩnh (vị trí số 2).
 3.  **Tài liệu tri thức trích xuất từ RAG (Context):** Ít biến động (vị trí số 3).
 4.  **Tóm tắt hội thoại lịch sử (Summary):** Ít biến động (vị trí số 4).
 5.  **n tin nhắn gần nhất trong phiên:** Động (vị trí số 5).
 
-### 10.9.2. Sử dụng Cache Breakpoints
-*   Đối với các API hỗ trợ khai báo cache (như Anthropic API), AI Core **PHẢI** chèn nhãn `"cache_control": {"type": "ephemeral"}` tại cuối phần System Prompt + MCP Tool Schemas (Breakpoint 1) và tại cuối RAG Context + Summary (Breakpoint 2).
-*   Đảm bảo cấu trúc JSON của Tool Schemas và System Prompt đồng nhất 100% giữa các request của cùng một Tenant để đạt tỷ lệ Cache Hit > 80%.
+### 10.9.2. Kỹ thuật Tối ưu hóa cho Từng Nhà cung cấp (Providers)
+1.  **OpenAI:** Sắp xếp System Prompt tĩnh lên đầu để kích hoạt tự động bộ nhớ đệm (Automatic Prompt Caching). Định tuyến use-case chatbot và phân loại trung gian mặc định qua `gpt-4o-mini` để giảm 90% chi phí so với `gpt-4o`.
+2.  **Anthropic:** Chèn trực tiếp nhãn `"cache_control": {"type": "ephemeral"}` ở cuối phần System Prompt / MCP Tools (Breakpoint 1) và cuối RAG Context (Breakpoint 2) để giảm 90% chi phí nạp prompt đối với các phiên hội thoại dài.
+3.  **Google Gemini:** Kích hoạt Context Caching cho các phiên chat lớn (>32,768 tokens) với thời hạn hiệu lực (TTL) cấu hình động. Ánh xạ prefix `gemini/` bắt buộc khi gọi LiteLLM. Cấu hình các thuộc tính bộ lọc an toàn `safety_settings` ngay trong payload API.
+4.  **DeepSeek:** Thiết lập thời gian chờ timeout ngắn (5s) và tự động Fallback nhanh sang Gemini do API DeepSeek thường xuyên nghẽn. Trích xuất trường dữ liệu đặc thù `reasoning_content` (hoặc parse khối nằm giữa cặp thẻ `<think>...</think>`) từ phản hồi stream/non-stream để lưu trữ và hiển thị riêng biệt chuỗi lập luận trên giao diện.
+5.  **Local (vLLM/Ollama):** Triển khai vLLM thay thế Ollama để tận dụng PagedAttention giúp tăng thông lượng xử lý gấp 10 lần. Sử dụng FastEmbed cục bộ để sinh vector embeddings không qua mạng.
+6.  **Qwen (Alibaba DashScope):** Gọi Qwen qua OpenAPI tương thích, tối ưu hóa tác vụ lập trình bằng `qwen-2.5-coder` ở nhiệt độ `temperature = 0.0` để loại bỏ tính ngẫu nhiên.
+7.  **Together AI:** Triển khai xoay vòng API Key (Round-Robin Key Rotation) tại gateway để tránh giới hạn RPM. Truyền tham số định danh `extra_headers` (`HTTP-Referer`, `X-Title`) bắt buộc.
+8.  **Groq:** Sử dụng mô hình trên LPU để xử lý tốc độ siêu tốc cho các tác vụ Chatbot/Voice (TTFT < 100ms). Đọc header rate limit (`x-ratelimit-remaining`) để chủ động chuyển mạch trước khi bị lỗi 429.
+9.  **OpenRouter:** Đăng ký tiêu đề định danh ứng dụng bắt buộc và xử lý Fallback cục bộ trên Gateway của Solavie thay vì phụ thuộc vào OpenRouter để kiểm soát chi phí.
+10. **Cohere:** Trích xuất mảng dữ liệu trích dẫn `citations` (gồm `start`, `end`, `text`, `document_ids`) từ API metadata để trả về cho frontend hiển thị nguồn đối chiếu.
+11. **Perplexity:** Sử dụng `perplexity/sonar` trực tiếp cho các câu hỏi cần tìm kiếm thực tế trên internet nhằm bỏ qua vòng lặp ReAct Agent, giảm 70% độ trễ phản hồi.
+12. **Mistral:** Thực hiện đệ quy làm sạch payload định nghĩa tools (lọc bỏ các trường mang giá trị `None` hoặc thuộc tính rỗng) trước khi gọi để tránh lỗi 400 Bad Request. Hỗ trợ định tuyến qua EU endpoints khi cần tuân thủ GDPR.
+
 
 ---
 
 ## 10.10. Quy trình kiểm duyệt an toàn Guardrail & Xử lý lỗi
 
-Quy trình kiểm duyệt tin nhắn chạy song song trên Chatbot Service và AI Core Service qua 2 chốt chặn:
+Quy trình kiểm duyệt tin nhắn được thực hiện bất đồng bộ hoặc đồng bộ qua các tầng chốt chặn tại AI Core Service:
 
-### 10.10.1. Input Guardrail: Semantic Router
-*   **Mô tả:** Sử dụng thư viện `semantic-router` (hoặc tương đương) kết hợp một mô hình embedding nhẹ chạy tại local CPU/RAM.
-*   **Mẫu cấu hình chủ đề cấm (Banned Routes):**
-    *   `competitors`: Chứa tên các đối thủ cạnh tranh điện mặt trời (ví dụ: Vũ Phong Solar, GPsolar, Solar Sông Đà).
-    *   `jailbreaks`: Chứa các từ khóa/câu lệnh bẻ khóa hệ thống (ví dụ: "forget previous instructions", "system override").
-    *   `off-topic`: Chứa các chủ đề không thuộc lĩnh vực năng lượng hoặc hỗ trợ của công ty.
-*   **Hành động khi vi phạm (On-fail Action):** Trả về HTTP Status `200 OK` nhưng đính kèm text từ chối chuẩn: *"Tôi chỉ có thể hỗ trợ các thông tin về sản phẩm và dịch vụ của Solavie. Bạn có cần tôi giúp tư vấn gói lắp đặt hoặc đặt lịch khảo sát không?"*
+### 10.10.1. Input Guardrail: PII Masking Middleware & Topic Router
+*   **Custom Guardrail Middleware (PII Masking):** Tích hợp Regex hiệu năng cao trực tiếp tại lớp Gateway/Router của AI Core để phát hiện và che giấu các thông tin nhạy cảm của khách hàng trước khi truyền sang bên thứ ba (overhead trễ xử lý < 2ms):
+    *   *Email Pattern:* `[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+` $\rightarrow$ Thay thế bằng `[EMAIL_MASKED]`
+    *   *Phone Pattern (VN):* `(?:\+84|0[3|5|7|8|9])[0-9]{8}\b` $\rightarrow$ Thay thế bằng `[PHONE_MASKED]`
+    *   *Credit Card Pattern:* `\b(?:\d[ -]*?){13,16}\b` $\rightarrow$ Thay thế bằng `[CARD_MASKED]`
+*   **Topic Routing (Chặn chủ đề):** 
+    *   *System Prompt Constraints:* Cấu hình chỉ thị cấm trong prompt của từng tenant để từ chối trả lời ngoài lề (đối thủ, chính trị, tôn giáo) bằng mẫu câu lịch sự mặc định.
+    *   *RAG Confidence Match:* Khi RAG truy xuất tài liệu tri thức, nếu điểm tương đồng (Relevance Score) của toàn bộ các tài liệu trích xuất đều **< 0.50**, hệ thống xác định yêu cầu nằm ngoài phạm vi tri thức doanh nghiệp và tự động kích hoạt câu từ chối mặc định.
+*   **Safety Filters:** Tận dụng bộ lọc an toàn sẵn có của nhà cung cấp mô hình (như Google Safety Settings cho Gemini với các danh mục `HARM_CATEGORY_HARASSMENT`, `HARM_CATEGORY_HATE_SPEECH`, `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_DANGEROUS_CONTENT`) cấu hình chặn ở mức `BLOCK_LOW_AND_ABOVE` hoặc `BLOCK_MEDIUM_AND_ABOVE` tùy theo cấu hình Tenant.
 
 ### 10.10.2. Output Guardrail: NLI Grounding Validator
-*   **Mô tả:** Khi LLM sinh câu trả lời dựa trên RAG, câu trả lời đó và RAG context được gửi tới mô hình NLI (ví dụ: `RoBERTa-large-MNLI`) tại AI Core.
+*   **Mô tả:** Khi LLM sinh câu trả lời dựa trên RAG, câu trả lời đó và tài liệu context được gửi tới mô hình NLI (ví dụ: `RoBERTa-large-MNLI`) tại AI Core.
 *   **Phân loại của NLI:**
-    *   `Entailment` (Hợp lệ): Câu trả lời được chứng minh hoàn toàn bởi tài liệu context.
-    *   `Contradiction` (Mâu thuẫn): Câu trả lời trái ngược hoặc chứa thông tin sai lệch so với context.
-    *   `Neutral` (Không có cơ sở - Hallucination): Câu trả lời chứa thông tin thực tế đúng nhưng không xuất phát từ tài liệu context.
+    *   `Entailment` (Hợp lệ): Khẳng định của câu trả lời được chứng minh và suy diễn hợp lệ từ tài liệu context.
+    *   `Contradiction` (Mâu thuẫn): Câu trả lời chứa thông tin trái ngược hoặc sai lệch so với context.
+    *   `Neutral` (Không có cơ sở - Hallucination): Câu trả lời chứa thông tin đúng thực tế ngoài đời nhưng không được cung cấp trong tài liệu context.
 *   **Hành động khi vi phạm (On-fail Action):**
-    *   Lần 1: Yêu cầu LLM sinh lại câu trả lời với prompt bổ sung yêu cầu chỉ sử dụng thông tin trong tài liệu.
-    *   Lần 2: Nếu vẫn vi phạm, hệ thống tự động chặn câu trả lời và trả về tin nhắn thông báo chờ kết nối với Agent: *"Tôi xin phép chuyển cuộc hội thoại này cho nhân viên kỹ thuật tư vấn chi tiết hơn cho bạn để đảm bảo thông tin chính xác nhất. Vui lòng đợi trong giây lát."*
+    *   Nếu điểm số tin cậy của lớp `Entailment` (Grounding Score) **< 0.80**, hệ thống chặn câu trả lời.
+    *   *Lần 1 & 2 (Retry):* Yêu cầu LLM sinh lại câu trả lời với prompt bổ sung yêu cầu chỉ sử dụng thông tin trong tài liệu.
+    *   *Lần 3 (Handoff):* Nếu vẫn vi phạm sau 2 lần thử lại, hệ thống tự động chặn đầu ra và trả về tin nhắn thông báo chờ kết nối với Agent: *"Tôi xin phép chuyển cuộc hội thoại này cho nhân viên tư vấn để cung cấp thông tin chính xác nhất cho bạn. Vui lòng đợi trong giây lát."*
+
 
 ---
 

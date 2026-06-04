@@ -114,11 +114,12 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 
 ---
 
-### Đề xuất 3: Lộ trình tối ưu hóa chi phí và nâng cấp hệ thống AI (AI-Core & Knowledge Base)
-Để chuẩn bị cho hệ thống vận hành thương mại ở quy mô lớn (SaaS) mà không bị bùng nổ chi phí API, Solavie nên áp dụng các kỹ thuật AI tiên tiến sau trong giai đoạn tiếp theo (Phase 2):
-1.  **Semantic Caching (Bộ nhớ đệm ngữ nghĩa):** Sử dụng Redis Vector Search hoặc Qdrant để lưu trữ các cặp câu hỏi-trả lời đã qua xử lý. Khi khách hàng hỏi câu mới có độ tương đồng ngữ nghĩa > 90%, hệ thống lập tức phản hồi từ cache dưới < 10ms, giúp tiết kiệm tới 100% chi phí gọi LLM API cho các câu hỏi lặp lại.
-2.  **Structured Outputs (Đầu ra có cấu trúc ép buộc):** Áp dụng tính năng `response_format` của LLM API để bắt buộc câu trả lời của Agent luôn tuân thủ JSON Schema cố định, giúp chatbot và hệ thống CRM dễ dàng phân tích cú pháp (parse) kết quả và tự động hóa các hành động tiếp theo.
-3.  **Agent Tracing (Giám sát chuỗi suy luận):** Tích hợp OpenTelemetry với LangSmith hoặc Arize Phoenix để trực quan hóa toàn bộ chuỗi suy luận (Thought -> Action -> Observation) của Agent dưới dạng cây quyết định, phục vụ đắc lực cho khâu giám sát chất lượng và gỡ lỗi.
+### Đề xuất 3: Tối ưu hóa chi phí và nâng cấp hệ thống AI (AI-Core & Knowledge Base)
+Để chuẩn bị cho hệ thống vận hành thương mại ở quy mô lớn (SaaS) mà không bị bùng nổ chi phí API, Solavie đã thực hiện thiết kế và tích hợp trực tiếp các giải pháp tối ưu hóa AI tiên tiến ngay trong giai đoạn hiện tại:
+1.  **Tối ưu hóa đa nhà cung cấp (12 LLM Providers):** Tích hợp bộ thư viện LiteLLM hỗ trợ định tuyến động cho 12+ providers (OpenAI, Anthropic, Google, DeepSeek, Local, vLLM, Groq, Together AI, OpenRouter, Cohere, Perplexity, Mistral) kết hợp prompt caching, context caching dài hạn của Gemini, trích xuất citations và thinking tokens để tối ưu hóa chi phí và độ trễ.
+2.  **Hệ thống Rào chắn Nội dung Nhiều Lớp (Content Guardrails):** Tích hợp bộ lọc Custom Regex Middleware để phát hiện và ẩn danh PII (email, phone, credit card) cục bộ dưới 10ms, cấu hình Safety Filters tầng API, và kiểm soát chủ đề kinh doanh thông qua System Prompt Templates kết hợp độ tin cậy RAG.
+3.  **Structured Outputs (Đầu ra có cấu trúc ép buộc):** Áp dụng tính năng JSON Schema (qua cấu hình `response_format` của LLM APIs) để bắt buộc câu trả lời của Agent luôn tuân thủ cấu trúc dữ liệu mong muốn, giúp chatbot và CRM dễ dàng xử lý.
+4.  **Agent Tracing & Observability (Phase 2):** Dự kiến tích hợp OpenTelemetry với LangSmith hoặc Arize Phoenix để trực quan hóa sơ đồ suy luận (Thought -> Action -> Observation) dưới dạng cây quyết định phục vụ giám sát chất lượng.
 4.  **Kiến trúc RAG nâng cao tối ưu (Hybrid Modular RAG + Parent-Child Retrieval):** 
     *   *Ingestion tách biệt:* Chạy ngầm việc parse, chunk, embed tài liệu thông qua **Celery/ARQ Worker** để bảo vệ hiệu năng CPU của API thread.
     *   *Sinh Sparse Vector cục bộ:* Sử dụng thư viện **FastEmbed** tại local worker để tạo nhanh các Sparse Vectors (BM25/SPLADE), tối ưu hoá chi phí và tránh phụ thuộc vào Cloud APIs.
