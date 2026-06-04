@@ -9,12 +9,17 @@ from core.circuit_breaker import call_async
 
 logger = logging.getLogger(__name__)
 
+# Exclude client-side (HTTP 4xx except 429) and configuration exceptions from tripping the Circuit Breaker
+EXCLUDED_TOOL_EXCEPTIONS = [
+    lambda e: isinstance(e, httpx.HTTPStatusError) and e.response.status_code < 500 and e.response.status_code != 429
+]
+
 # Tool circuit breakers: Opens if a tool endpoint fails 5 times in 30s, resets after 60s
 TOOL_BREAKERS = {
-    "knowledge_base_search": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0),
-    "web_search": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0),
-    "fetch_url": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0),
-    "send_message": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0),
+    "knowledge_base_search": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "web_search": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "fetch_url": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "send_message": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
 }
 
 class ToolExecutor:
@@ -28,7 +33,7 @@ class ToolExecutor:
         args["tenant_id"] = tenant_id
         
         # Determine dynamic timeout: hot-path interactive tools (<= 2s) vs background heavy tools (<= 10s)
-        tool_timeout = 2.0 if tool_name in ["knowledge_base_search", "send_message"] else 10.0
+        tool_timeout = 2.0 if tool_name in ["knowledge_base_search", "send_message", "contact_lookup", "analyze_sentiment"] else 10.0
         
         logger.info(f"Executing tool {tool_name} for tenant {tenant_id} with timeout {tool_timeout}s and arguments: {args}")
         

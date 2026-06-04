@@ -8,7 +8,8 @@ from sqlalchemy import select
 from core.config import settings
 from core.redis_client import redis_client
 from db.database import SessionLocal
-from db.models import LLMRouteConfig, APIKeyConfig
+from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig
+from core.providers import PROVIDER_PRIORITY, get_provider_by_model
 
 logger = logging.getLogger(__name__)
 
@@ -42,30 +43,68 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
     fallback_models = config_data.get("ai_fallback_models", [])
     api_keys = config_data.get("api_keys", {})
 
-    # Default mappings if empty
-    if not model_routing:
-        model_routing = {
-            "chatbot": "gpt-4o-mini",
-            "content_generation": "claude-3-5-sonnet-20241022",
-            "summarization": "gpt-4o-mini",
-            "sentiment": "gpt-4o-mini",
-            "classification": "gpt-4o-mini"
-        }
-    if not fallback_models:
-        fallback_models = ["claude-3-haiku-20240307", "gpt-4o"]
 
-    # Helper function to guess provider from model name
-    def get_provider_by_model(model_name: str) -> str:
-        name = model_name.lower()
-        if "gpt" in name or "text-embedding" in name:
-            return "openai"
-        if "claude" in name:
-            return "anthropic"
-        if "gemini" in name:
-            return "google"
-        return "local"
 
     async with SessionLocal() as db:
+        # Check active keys count before sync
+        stmt_count = select(APIKeyConfig).where(
+            APIKeyConfig.tenant_id == tenant_uuid,
+            APIKeyConfig.is_active == True
+        )
+        res_count = await db.execute(stmt_count)
+        active_keys_before = len(res_count.scalars().all())
+
+        # Determine the tenant's active providers to select the best default provider
+        active_providers = set()
+        for p_name, k_info in api_keys.items():
+            if k_info.get("api_key_encrypted") and k_info.get("is_active", True) is not False:
+                active_providers.add(p_name.strip().lower())
+                
+        try:
+            stmt = select(APIKeyConfig.provider).where(
+                APIKeyConfig.tenant_id == tenant_uuid,
+                APIKeyConfig.is_active == True
+            )
+            res = await db.execute(stmt)
+            for row in res.all():
+                active_providers.add(row[0].strip().lower())
+        except Exception as e:
+            logger.error(f"Error querying existing active keys: {e}")
+
+        # Priority resolution for defaults
+        selected_provider = "openai"
+        for p in PROVIDER_PRIORITY:
+            if p in active_providers:
+                selected_provider = p
+                break
+
+        # Populate model_routing from system_default_route_configs in DB if empty
+        if not model_routing:
+            try:
+                stmt = select(SystemDefaultRouteConfig).where(
+                    SystemDefaultRouteConfig.provider == selected_provider,
+                    SystemDefaultRouteConfig.is_active == True
+                )
+                res = await db.execute(stmt)
+                db_defaults = res.scalars().all()
+                for d_config in db_defaults:
+                    model_routing[d_config.use_case] = d_config.primary_model
+            except Exception as e:
+                logger.error(f"Error querying default system routes for tenant sync: {e}")
+
+            # Safe Python backup fallback
+            if not model_routing:
+                from gateway.router import LLMGateway
+                gateway = LLMGateway()
+                cheapest_model = gateway._get_cheapest_model_from_registry(selected_provider)
+                model_routing = {
+                    "chatbot": cheapest_model,
+                    "content_generation": cheapest_model,
+                    "summarization": cheapest_model,
+                    "sentiment": cheapest_model,
+                    "classification": cheapest_model
+                }
+
         # Sync Model Routing Configs
         for uc, model in model_routing.items():
             # Skip if we only want to sync a specific use case
@@ -80,12 +119,35 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
             route = result.scalar_one_or_none()
             
             provider = get_provider_by_model(model)
-            # Pick a fallback model of a different provider if possible
-            fallback_model = fallback_models[0] if fallback_models else "claude-3-haiku-20240307"
-            fallback_provider = get_provider_by_model(fallback_model)
             
-            temp = 0.7 if uc == "content_generation" else 0.3
-            max_tok = 1500 if uc == "content_generation" else 300
+            # Query default details from DB
+            default_config = None
+            try:
+                stmt = select(SystemDefaultRouteConfig).where(
+                    SystemDefaultRouteConfig.provider == provider,
+                    SystemDefaultRouteConfig.use_case == uc
+                )
+                res = await db.execute(stmt)
+                default_config = res.scalar_one_or_none()
+            except Exception as e:
+                logger.error(f"Error querying default config for routing sync: {e}")
+
+            if default_config:
+                fallback_model = default_config.fallback_model or default_config.primary_model
+                fallback_provider = provider
+                temp = float(default_config.temperature)
+                max_tok = default_config.max_tokens
+            else:
+                # Safe fallback heuristics
+                from core.providers import USE_CASE_PARAMS
+                from gateway.router import LLMGateway
+                gateway = LLMGateway()
+                cheapest_model = gateway._get_cheapest_model_from_registry(provider)
+                params = USE_CASE_PARAMS.get(uc, {"temperature": 0.3, "max_tokens": 300})
+                fallback_model = fallback_models[0] if fallback_models else cheapest_model
+                fallback_provider = get_provider_by_model(fallback_model)
+                temp = params["temperature"]
+                max_tok = params["max_tokens"]
             
             if not route:
                 route = LLMRouteConfig(
@@ -113,6 +175,7 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
             cache_key = f"{tenant_uuid}:config:llm_model_routing:{uc}"
             await redis_client.delete(cache_key)
             logger.info(f"Invalidated model routing cache for {cache_key}")
+
             
         # Sync API Keys
         for provider_name, key_info in api_keys.items():
@@ -120,12 +183,16 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
             if not encrypted_key:
                 continue
                 
-            stmt = select(APIKeyConfig).where(APIKeyConfig.provider == provider_name)
+            stmt = select(APIKeyConfig).where(
+                APIKeyConfig.tenant_id == tenant_uuid,
+                APIKeyConfig.provider == provider_name
+            )
             result = await db.execute(stmt)
             key_config = result.scalar_one_or_none()
             
             if not key_config:
                 key_config = APIKeyConfig(
+                    tenant_id=tenant_uuid,
                     provider=provider_name,
                     api_key_encrypted=encrypted_key,
                     api_base=key_info.get("api_base"),
@@ -138,11 +205,23 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
                 key_config.is_active = key_info.get("is_active", key_config.is_active)
                 
             # Invalidate credentials cache
-            cred_cache_key = f"config:api_keys:{provider_name}"
+            cred_cache_key = f"{tenant_uuid}:config:api_keys:{provider_name}"
             await redis_client.delete(cred_cache_key)
             logger.info(f"Invalidated provider credentials cache for {cred_cache_key}")
 
         await db.commit()
+
+        if active_keys_before == 0:
+            stmt_count_after = select(APIKeyConfig).where(
+                APIKeyConfig.tenant_id == tenant_uuid,
+                APIKeyConfig.is_active == True
+            )
+            res_count_after = await db.execute(stmt_count_after)
+            active_keys_after = res_count_after.scalars().all()
+            if len(active_keys_after) > 0:
+                first_active_provider = active_keys_after[0].provider
+                from core.dynamic_cost import auto_create_tenant_routes_from_defaults
+                await auto_create_tenant_routes_from_defaults(db, tenant_uuid, first_active_provider)
 
 async def sync_listener_loop() -> None:
     """

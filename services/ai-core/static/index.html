@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solavie AI-CORE Test Playground</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-secondary: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent-primary: #8b5cf6;
+            --accent-secondary: #3b82f6;
+            --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --card-bg: rgba(31, 41, 55, 0.4);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(139, 92, 246, 0.3) transparent;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(59, 130, 246, 0.15) 0%, transparent 40%);
+        }
+
+        header {
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(12px);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-text {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .service-badge {
+            font-size: 0.75rem;
+            background: rgba(139, 92, 246, 0.2);
+            color: #c084fc;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .tenant-selector {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .tenant-selector select {
+            background: transparent;
+            color: var(--text-main);
+            border: none;
+            outline: none;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 70px);
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 260px;
+            border-right: 1px solid var(--border-color);
+            background: rgba(11, 15, 25, 0.5);
+            padding: 1.5rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .nav-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.85rem 1rem;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: left;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-main);
+        }
+
+        .nav-btn.active {
+            background: var(--accent-gradient);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.25);
+        }
+
+        /* Content Area */
+        .content-area {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+            height: 100%;
+        }
+
+        .tab-content.active {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Glassmorphic Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: white;
+        }
+
+        /* Form elements */
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        input[type="text"], input[type="number"], select, textarea {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-main);
+            outline: none;
+            font-size: 0.95rem;
+            transition: border-color 0.2s ease;
+        }
+
+        input[type="text"]:focus, select:focus, textarea:focus {
+            border-color: var(--accent-primary);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Playground Chat UI */
+        .chat-container {
+            display: flex;
+            gap: 1.5rem;
+            height: calc(100% - 20px);
+        }
+
+        .chat-main {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            height: 100%;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-height: 350px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 0.85rem 1.2rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .message.system {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed var(--border-color);
+            color: var(--text-muted);
+            align-self: center;
+            max-width: 90%;
+            font-size: 0.85rem;
+        }
+
+        .message.user {
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: var(--text-main);
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
+        }
+
+        .message.assistant {
+            background: rgba(139, 92, 246, 0.15);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            color: var(--text-main);
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+        }
+
+        .message-meta {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .chat-input-area {
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 0.75rem;
+            background: rgba(0, 0, 0, 0.1);
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+
+        /* Sidebar stats */
+        .chat-sidebar {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.65rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem;
+        }
+
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+        }
+
+        .metric-val {
+            font-weight: 600;
+        }
+
+        /* Config list tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        /* Status Badge */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-pill.active {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-pill.inactive {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        /* Toasts for alerts */
+        #toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            color: white;
+            font-size: 0.9rem;
+            font-weight: 500;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideIn 0.3s ease forwards;
+            min-width: 250px;
+        }
+
+        .toast.success { background: #059669; border-left: 4px solid #34d399; }
+        .toast.error { background: #dc2626; border-left: 4px solid #f87171; }
+        .toast.warning { background: #d97706; border-left: 4px solid #fbbf24; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-container">
+            <i data-lucide="cpu" style="color: #a855f7;"></i>
+            <span class="logo-text">Solavie AI-CORE</span>
+            <span class="service-badge">Playground UI</span>
+        </div>
+        
+        <div class="header-actions">
+            <div class="tenant-selector">
+                <i data-lucide="building-2" size="16" style="color: var(--accent-secondary);"></i>
+                <select id="tenantSelect" onchange="onTenantChange()">
+                    <option value="d3b07384-d113-4ec2-a5d8-7e30d1774e1d">Test Tenant (Mock)</option>
+                    <option value="c3a2f9b2-3f82-4f18-a6b1-6a2c3a5d8e7c">VIP Tenant (Custom)</option>
+                </select>
+            </div>
+            
+            <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                <label for="customTenantInput" style="margin: 0;">Custom UUID:</label>
+                <input type="text" id="customTenantInput" placeholder="Nhập UUID tenant..." style="width: 180px; padding: 0.4rem 0.75rem; font-size: 0.85rem;" onchange="onCustomTenantChange()">
+            </div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <aside class="sidebar">
+            <button class="nav-btn active" onclick="switchTab('playground', this)">
+                <i data-lucide="message-square"></i> Chat Playground
+            </button>
+            <button class="nav-btn" onclick="switchTab('routing', this)">
+                <i data-lucide="git-branch"></i> Model Routing
+            </button>
+            <button class="nav-btn" onclick="switchTab('apikeys', this)">
+                <i data-lucide="key-round"></i> API Keys Manager
+            </button>
+            <button class="nav-btn" onclick="switchTab('analytics', this)">
+                <i data-lucide="bar-chart-3"></i> Cost & Analytics
+            </button>
+        </aside>
+
+        <main class="content-area">
+            <!-- ── TAB 1: PLAYGROUND ── -->
+            <div id="playground" class="tab-content active">
+                <div class="chat-container">
+                    <div class="chat-main">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="message system">
+                                Chào mừng Hoàng tử đến với AI-CORE Playground. Vui lòng thiết lập Tenant ID ở góc trên bên phải, chọn Use Case và bắt đầu trò chuyện để kiểm thử.
+                            </div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input type="text" id="chatInput" placeholder="Nhập nội dung tin nhắn và nhấn Enter..." onkeydown="if(event.key==='Enter') sendMessage()">
+                            <button class="btn btn-primary" onclick="sendMessage()">
+                                <i data-lucide="send"></i> Gửi
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="chat-sidebar">
+                        <div class="card">
+                            <div class="card-title">
+                                <i data-lucide="settings-2"></i> Thông số cấu hình
+                            </div>
+                            <div class="form-group">
+                                <label for="useCaseSelect">Use Case</label>
+                                <select id="useCaseSelect">
+                                    <option value="chatbot">Chatbot (Hot Path)</option>
+                                    <option value="content_generation">Content Generation (Heavy)</option>
+                                    <option value="summarization">Summarization</option>
+                                    <option value="sentiment">Sentiment analysis</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="systemPromptInput">System Prompt</label>
+                                <textarea id="systemPromptInput" rows="3" placeholder="Ví dụ: Bạn là trợ lý tư vấn năng lượng mặt trời của công ty Solavie..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="modelOverrideInput">Model Override (Tùy chọn)</label>
+                                <input type="text" id="modelOverrideInput" placeholder="gpt-4o, claude-3-5-sonnet-20241022...">
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-title">
+                                <i data-lucide="activity"></i> Kết quả thực thi
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Mô hình đã dùng:</span>
+                                <span class="metric-val" id="statModel" style="color: #a855f7;">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Provider:</span>
+                                <span class="metric-val" id="statProvider">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Tổng tokens:</span>
+                                <span class="metric-val" id="statTokens">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Chi phí:</span>
+                                <span class="metric-val" id="statCost" style="color: #34d399;">$0.00</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Độ trễ (Latency):</span>
+                                <span class="metric-val" id="statLatency">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Độ tin cậy:</span>
+                                <span class="metric-val" id="statConfidence">-</span>
+                            </div>
+                            <div class="metric-row" style="flex-direction: column; align-items: flex-start; gap: 0.25rem;">
+                                <span class="metric-label">Công cụ đã gọi (Tools Called):</span>
+                                <span class="metric-val" id="statTools" style="color: var(--warning); word-break: break-all; font-size: 0.8rem;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── TAB 2: ROUTING ── -->
+            <div id="routing" class="tab-content">
+                <div class="card">
+                    <div class="card-title">
+                        <i data-lucide="git-merge"></i> Cập nhật Model Routing Config
+                    </div>
+                    <form id="routingForm" onsubmit="saveRouteConfig(event)">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="routeUseCase">Use Case</label>
+                                <select id="routeUseCase">
+                                    <option value="chatbot">Chatbot</option>
+                                    <option value="content_generation">Content Generation</option>
+                                    <option value="summarization">Summarization</option>
+                                    <option value="sentiment">Sentiment Analysis</option>
+                                    <option value="classification">Classification</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="routePrimaryModel">Primary Model</label>
+                                <input type="text" id="routePrimaryModel" placeholder="gpt-4o-mini" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="routeProvider">Primary Provider</label>
+                                <select id="routeProvider">
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="google">Google</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="local">Local</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="routeFallbackModel">Fallback Model</label>
+                                <input type="text" id="routeFallbackModel" placeholder="claude-3-haiku-20240307" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="routeFallbackProvider">Fallback Provider</label>
+                                <select id="routeFallbackProvider">
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="google">Google</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="local">Local</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="routeTemperature">Temperature</label>
+                                <input type="number" id="routeTemperature" step="0.1" min="0" max="2" value="0.3" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="routeMaxTokens">Max Tokens</label>
+                                <input type="number" id="routeMaxTokens" value="300" required>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i data-lucide="save"></i> Lưu cấu hình định tuyến
+                        </button>
+                    </form>
+                </div>
+
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-title">
+                        <i data-lucide="table"></i> Danh sách cấu hình hiện tại của Tenant
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadRouteConfigs()" style="margin-bottom: 0.5rem;">
+                        <i data-lucide="refresh-cw"></i> Tải lại
+                    </button>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Use Case</th>
+                                <th>Primary Model (Provider)</th>
+                                <th>Fallback Model (Provider)</th>
+                                <th>Temp</th>
+                                <th>Max Tokens</th>
+                                <th>Trạng thái</th>
+                            </tr>
+                        </thead>
+                        <tbody id="routesTableBody">
+                            <tr>
+                                <td colspan="6" style="text-align: center; color: var(--text-muted);">Đang tải dữ liệu...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── TAB 3: API KEYS ── -->
+            <div id="apikeys" class="tab-content">
+                <div class="card">
+                    <div class="card-title">
+                        <i data-lucide="key"></i> Cấu hình Khóa API (Mã hóa đối xứng AES-256)
+                    </div>
+                    <form id="keyForm" onsubmit="saveApiKey(event)">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="keyProvider">Nhà cung cấp (Provider ID)</label>
+                                <input type="text" id="keyProvider" placeholder="openai, anthropic, deepseek..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="keyBaseUrl">Custom Endpoint URL (API Base - Tùy chọn)</label>
+                                <input type="text" id="keyBaseUrl" placeholder="https://api.openai.com/v1">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="keyPlaintext">Khóa API (API Key)</label>
+                            <input type="text" id="keyPlaintext" placeholder="sk-proj-... hoặc sk-ant-..." required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i data-lucide="shield-check"></i> Lưu khóa API (Mã hóa và lưu trữ)
+                        </button>
+                    </form>
+                </div>
+
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-title">
+                        <i data-lucide="shield-alert"></i> Trạng thái khóa đang hoạt động
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadApiKeys()" style="margin-bottom: 0.5rem;">
+                        <i data-lucide="refresh-cw"></i> Tải lại
+                    </button>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID cấu hình</th>
+                                <th>Nhà cung cấp (Provider)</th>
+                                <th>Custom Base URL</th>
+                                <th>API Key (Mặt nạ bảo mật)</th>
+                                <th>Trạng thái</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keysTableBody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: var(--text-muted);">Đang tải dữ liệu...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── TAB 4: ANALYTICS ── -->
+            <div id="analytics" class="tab-content">
+                <div class="form-row">
+                    <div class="card" style="flex: 1;">
+                        <div class="card-title">
+                            <i data-lucide="line-chart"></i> Báo cáo sử dụng 30 ngày (Usage Summary)
+                        </div>
+                        <button class="btn btn-secondary" onclick="loadUsageSummary()" style="margin-bottom: 1rem;">
+                            <i data-lucide="refresh-cw"></i> Tải báo cáo
+                        </button>
+                        <div class="metric-row">
+                            <span class="metric-label">Số ngày theo dõi:</span>
+                            <span class="metric-val">30 ngày gần nhất</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Tổng Prompt Tokens:</span>
+                            <span class="metric-val" id="summaryPrompt">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Tổng Completion Tokens:</span>
+                            <span class="metric-val" id="summaryCompletion">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Tổng chi phí tích lũy:</span>
+                            <span class="metric-val" id="summaryCost" style="color: var(--success); font-size: 1.1rem;">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Độ trễ trung bình (Avg Latency):</span>
+                            <span class="metric-val" id="summaryLatency">-</span>
+                        </div>
+                    </div>
+
+                    <div class="card" style="flex: 1.2;">
+                        <div class="card-title">
+                            <i data-lucide="calculator"></i> Bộ giả lập chi phí động (Cost Simulator)
+                        </div>
+                        <div class="form-group">
+                            <label for="simulateModel">Chọn mô hình muốn so sánh giá:</label>
+                            <input type="text" id="simulateModel" placeholder="gpt-4o, gpt-4o-mini, claude-3-5-sonnet-20241022..." value="gpt-4o-mini">
+                        </div>
+                        <button class="btn btn-primary" onclick="runCostSimulation()">
+                            <i data-lucide="play"></i> Bắt đầu giả lập mô phỏng chi phí
+                        </button>
+                        
+                        <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                            <div class="metric-row">
+                                <span class="metric-label">Chi phí thực tế (30 ngày qua):</span>
+                                <span class="metric-val" id="simHistCost">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Chi phí giả lập khi đổi mô hình:</span>
+                                <span class="metric-val" id="simNewCost" style="color: #a855f7;">-</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Số tiền tiết kiệm/hao phí dự kiến:</span>
+                                <span class="metric-val" id="simSavings" style="font-size: 1.1rem;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-title">
+                        <i data-lucide="pie-chart"></i> Chi phí chia theo Use Case (Usage Breakdown)
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadUsageBreakdown()" style="margin-bottom: 1rem;">
+                        <i data-lucide="refresh-cw"></i> Tải phân tích
+                    </button>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Use Case</th>
+                                <th>Prompt Tokens</th>
+                                <th>Completion Tokens</th>
+                                <th>Chi phí ước tính (USD)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="breakdownTableBody">
+                            <tr>
+                                <td colspan="4" style="text-align: center; color: var(--text-muted);">Chưa có dữ liệu. Hãy nhấn "Tải phân tích".</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // Get effective Tenant ID
+        function getTenantId() {
+            const selectVal = document.getElementById('tenantSelect').value;
+            const customVal = document.getElementById('customTenantInput').value.trim();
+            return customVal || selectVal;
+        }
+
+        function onTenantChange() {
+            document.getElementById('customTenantInput').value = '';
+            showToast('Đã chuyển sang Tenant: ' + getTenantId(), 'success');
+            // Reload tables for new tenant
+            loadRouteConfigs();
+            loadApiKeys();
+        }
+
+        function onCustomTenantChange() {
+            const val = document.getElementById('customTenantInput').value.trim();
+            if (val) {
+                showToast('Đã chọn Tenant tùy chỉnh: ' + val, 'success');
+                loadRouteConfigs();
+                loadApiKeys();
+            }
+        }
+
+        // Tab Switcher
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+
+            // Tab-specific loads
+            if (tabId === 'routing') {
+                loadRouteConfigs();
+            } else if (tabId === 'apikeys') {
+                loadApiKeys();
+            }
+        }
+
+        // Toasts
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            
+            let icon = 'info';
+            if (type === 'success') icon = 'check-circle';
+            if (type === 'error') icon = 'alert-triangle';
+            if (type === 'warning') icon = 'alert-circle';
+            
+            toast.innerHTML = `<i data-lucide="${icon}"></i> <span>${message}</span>`;
+            container.appendChild(toast);
+            lucide.createIcons({attrs: {class: 'toast-icon'}});
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease reverse forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // ── API: Chat completions ──
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add user message to UI
+            appendMessage(query, 'user');
+            input.value = '';
+
+            const tenantId = getTenantId();
+            const useCase = document.getElementById('useCaseSelect').value;
+            const systemPrompt = document.getElementById('systemPromptInput').value.trim() || undefined;
+            const modelOverride = document.getElementById('modelOverrideInput').value.trim() || undefined;
+
+            // Loading message placeholder
+            const botMsgEl = appendMessage('Đang xử lý...', 'assistant', true);
+
+            try {
+                const response = await fetch('/api/v1/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant-ID': tenantId
+                    },
+                    body: JSON.stringify({
+                        tenant_id: tenantId,
+                        use_case: useCase,
+                        messages: [{role: 'user', content: query}],
+                        system_prompt: systemPrompt,
+                        model_override: modelOverride
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+
+                const result = await response.json();
+                
+                // Update bot message content
+                botMsgEl.querySelector('.message-text').innerText = result.content || result.final_response || "Không có phản hồi từ LLM.";
+                
+                // Update bot message metadata
+                botMsgEl.querySelector('.message-meta').innerHTML = `
+                    <span>Model: ${result.model_used || '-'}</span>
+                    <span>Cost: $${(result.cost_usd || 0).toFixed(5)}</span>
+                    <span>Latency: ${result.latency_ms || 100}ms</span>
+                `;
+
+                // Update right sidebar stats panel
+                document.getElementById('statModel').innerText = result.model_used || 'routed';
+                document.getElementById('statProvider').innerText = result.provider || 'openai';
+                document.getElementById('statTokens').innerText = (result.prompt_tokens + result.completion_tokens) || 0;
+                document.getElementById('statCost').innerText = `$${(result.cost_usd || 0).toFixed(5)}`;
+                document.getElementById('statLatency').innerText = `${result.latency_ms || 100} ms`;
+                document.getElementById('statConfidence').innerText = `${((result.confidence || 1.0) * 100).toFixed(0)}%`;
+                
+                // Show tools called if any
+                const toolsCalled = result.tools_called || result.tool_calls || [];
+                document.getElementById('statTools').innerText = toolsCalled.length > 0 ? toolsCalled.join(', ') : 'Không có';
+
+            } catch (err) {
+                botMsgEl.querySelector('.message-text').innerText = 'Lỗi thực thi: ' + err.message;
+                botMsgEl.querySelector('.message-text').style.color = 'var(--error)';
+                showToast('Chat API lỗi: ' + err.message, 'error');
+            }
+        }
+
+        function appendMessage(text, role, isPending = false) {
+            const container = document.getElementById('chatMessages');
+            const msg = document.createElement('div');
+            msg.className = `message ${role}`;
+            msg.innerHTML = `
+                <div class="message-text">${text}</div>
+                <div class="message-meta">${isPending ? 'Đang gửi...' : 'Đã phản hồi'}</div>
+            `;
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+            return msg;
+        }
+
+        // ── API: Load Route Configs ──
+        async function loadRouteConfigs() {
+            const tbody = document.getElementById('routesTableBody');
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Đang tải...</td></tr>';
+            
+            try {
+                const response = await fetch(`/api/v1/configs/routes?tenant_id=${getTenantId()}`, {
+                    headers: { 'X-Tenant-ID': getTenantId() }
+                });
+                
+                if (!response.ok) throw new Error('Không thể tải cấu hình định tuyến');
+                
+                const routes = await response.json();
+                if (routes.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Không tìm thấy cấu hình tùy chỉnh cho Tenant này. Hệ thống sẽ tự động dùng Baseline Fallback.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = routes.map(r => `
+                    <tr>
+                        <td style="font-weight: 600;">${r.use_case}</td>
+                        <td><code style="color: #a855f7;">${r.primary_model}</code> (${r.provider})</td>
+                        <td><code>${r.fallback_model}</code> (${r.fallback_provider})</td>
+                        <td>${r.temperature}</td>
+                        <td>${r.max_tokens}</td>
+                        <td><span class="status-pill ${r.is_active ? 'active' : 'inactive'}">${r.is_active ? 'Active' : 'Disabled'}</span></td>
+                    </tr>
+                `).join('');
+
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--error);">Lỗi: ${err.message}</td></tr>`;
+            }
+        }
+
+        // ── API: Save Route Config ──
+        async function saveRouteConfig(e) {
+            e.preventDefault();
+            const payload = {
+                tenant_id: getTenantId(),
+                use_case: document.getElementById('routeUseCase').value,
+                primary_model: document.getElementById('routePrimaryModel').value.trim(),
+                provider: document.getElementById('routeProvider').value,
+                fallback_model: document.getElementById('routeFallbackModel').value.trim(),
+                fallback_provider: document.getElementById('routeFallbackProvider').value,
+                temperature: parseFloat(document.getElementById('routeTemperature').value),
+                max_tokens: parseInt(document.getElementById('routeMaxTokens').value),
+                is_active: true
+            };
+
+            try {
+                const response = await fetch('/api/v1/configs/routes', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant-ID': getTenantId()
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(await response.text());
+                
+                showToast('Đã lưu cấu hình định tuyến thành công!', 'success');
+                loadRouteConfigs();
+            } catch (err) {
+                showToast('Lưu định tuyến thất bại: ' + err.message, 'error');
+            }
+        }
+
+        // ── API: Load API Keys ──
+        async function loadApiKeys() {
+            const tbody = document.getElementById('keysTableBody');
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Đang tải...</td></tr>';
+
+            try {
+                const response = await fetch(`/api/v1/configs/keys?tenant_id=${getTenantId()}`, {
+                    headers: { 'X-Tenant-ID': getTenantId() }
+                });
+
+                if (!response.ok) throw new Error('Không thể tải API Keys');
+
+                const keys = await response.json();
+                if (keys.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Chưa cấu hình API Keys riêng cho Tenant này. Hệ thống sẽ tự động dùng System Config / Env.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = keys.map(k => `
+                    <tr>
+                        <td style="font-size: 0.8rem; font-family: monospace;">${k.id}</td>
+                        <td style="font-weight: 600; text-transform: uppercase;">${k.provider}</td>
+                        <td style="color: var(--text-muted); font-size: 0.85rem;">${k.api_base || 'Mặc định (Default)'}</td>
+                        <td><code>${k.api_key_masked}</code></td>
+                        <td><span class="status-pill ${k.is_active ? 'active' : 'inactive'}">${k.is_active ? 'Active' : 'Disabled'}</span></td>
+                    </tr>
+                `).join('');
+
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--error);">Lỗi: ${err.message}</td></tr>`;
+            }
+        }
+
+        // ── API: Save API Key ──
+        async function saveApiKey(e) {
+            e.preventDefault();
+            const payload = {
+                provider: document.getElementById('keyProvider').value.trim().toLowerCase(),
+                api_key: document.getElementById('keyPlaintext').value.trim(),
+                api_base: document.getElementById('keyBaseUrl').value.trim() || undefined,
+                is_active: true
+            };
+
+            try {
+                const response = await fetch('/api/v1/configs/keys', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant-ID': getTenantId()
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(await response.text());
+
+                showToast('Đã mã hóa và lưu API Key thành công!', 'success');
+                document.getElementById('keyPlaintext').value = '';
+                loadApiKeys();
+            } catch (err) {
+                showToast('Lưu API Key thất bại: ' + err.message, 'error');
+            }
+        }
+
+        // ── API: Analytics summary ──
+        async function loadUsageSummary() {
+            try {
+                const response = await fetch(`/api/v1/analytics/usage-summary?tenant_id=${getTenantId()}`, {
+                    headers: { 'X-Tenant-ID': getTenantId() }
+                });
+                
+                if (!response.ok) throw new Error('Không thể tải báo cáo sử dụng');
+                
+                const data = await response.json();
+                document.getElementById('summaryPrompt').innerText = data.total_prompt_tokens.toLocaleString() + ' tokens';
+                document.getElementById('summaryCompletion').innerText = data.total_completion_tokens.toLocaleString() + ' tokens';
+                document.getElementById('summaryCost').innerText = '$' + (data.total_cost_usd || 0).toFixed(5);
+                document.getElementById('summaryLatency').innerText = (data.avg_latency_ms || 0).toFixed(0) + ' ms';
+                showToast('Đã tải báo cáo sử dụng mới nhất!', 'success');
+            } catch (err) {
+                showToast('Lỗi: ' + err.message, 'error');
+            }
+        }
+
+        // ── API: Cost Simulation ──
+        async function runCostSimulation() {
+            const targetModel = document.getElementById('simulateModel').value.trim();
+            if (!targetModel) return;
+
+            try {
+                const response = await fetch('/api/v1/analytics/simulate-cost', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant-ID': getTenantId()
+                    },
+                    body: JSON.stringify({
+                        tenant_id: getTenantId(),
+                        new_model: targetModel
+                    })
+                });
+
+                if (!response.ok) throw new Error(await response.text());
+                
+                const data = await response.json();
+                document.getElementById('simHistCost').innerText = '$' + (data.historical_cost_30d || 0).toFixed(5);
+                document.getElementById('simNewCost').innerText = '$' + (data.simulated_cost_30d || 0).toFixed(5);
+                
+                const diff = data.estimated_savings_30d || 0;
+                const savingsEl = document.getElementById('simSavings');
+                if (diff >= 0) {
+                    savingsEl.innerText = `Tiết kiệm dự kiến: +$${diff.toFixed(5)}`;
+                    savingsEl.style.color = 'var(--success)';
+                } else {
+                    savingsEl.innerText = `Chi phí tăng thêm: -$${Math.abs(diff).toFixed(5)}`;
+                    savingsEl.style.color = 'var(--error)';
+                }
+                showToast('Đã giả lập chi phí thành công!', 'success');
+            } catch (err) {
+                showToast('Lỗi giả lập: ' + err.message, 'error');
+            }
+        }
+
+        // ── API: Load Usage Breakdown ──
+        async function loadUsageBreakdown() {
+            const tbody = document.getElementById('breakdownTableBody');
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Đang tải...</td></tr>';
+
+            try {
+                const response = await fetch(`/api/v1/usage/breakdown?tenant_id=${getTenantId()}`, {
+                    headers: { 'X-Tenant-ID': getTenantId() }
+                });
+
+                if (!response.ok) throw new Error('Không thể tải phân tích sử dụng');
+
+                const breakdown = await response.json();
+                if (breakdown.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Không tìm thấy dữ liệu sử dụng cho Tenant này trong cơ sở dữ liệu.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = breakdown.map(b => `
+                    <tr>
+                        <td style="font-weight: 600; text-transform: uppercase;">${b.use_case}</td>
+                        <td>${b.prompt_tokens.toLocaleString()}</td>
+                        <td>${b.completion_tokens.toLocaleString()}</td>
+                        <td style="color: var(--success); font-weight: 600;">$${(b.cost_usd || 0).toFixed(5)}</td>
+                    </tr>
+                `).join('');
+                showToast('Đã cập nhật bảng phân tích Use Case!', 'success');
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--error);">Lỗi: ${err.message}</td></tr>`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -18,6 +18,8 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+import os
+from fastapi.staticfiles import StaticFiles
 
 from core.config import settings
 from db.database import engine, Base
@@ -28,10 +30,15 @@ logger = logging.getLogger("solavie.ai_core")
 
 app = FastAPI(title="Solavie AI-CORE Service", version="1.0.0")
 
+# ── Mount static folder for test UI ──
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/ui", StaticFiles(directory=static_dir, html=True), name="static")
+
 # ── CORS middleware ──
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

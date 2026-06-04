@@ -131,10 +131,13 @@ async def simulate_cost(
         input_price = model_info.get("input_cost_per_token", 1.5e-07)
         output_price = model_info.get("output_cost_per_token", 6.0e-07)
     else:
-        logger.warning(f"Model '{new_model}' not found in LiteLLM registry. Using fallback gpt-4o-mini pricing.")
-        # Fallback to gpt-4o-mini pricing (0.15/M input, 0.60/M output)
-        input_price = 1.5e-07
-        output_price = 6.0e-07
+        from gateway.router import LLMGateway
+        gateway = LLMGateway()
+        fallback_model = gateway._get_cheapest_model_from_registry("openai")
+        logger.warning(f"Model '{new_model}' not found in LiteLLM registry. Using fallback '{fallback_model}' pricing.")
+        fallback_info = litellm.model_cost.get(fallback_model, {})
+        input_price = fallback_info.get("input_cost_per_token", 1.5e-07)
+        output_price = fallback_info.get("output_cost_per_token", 6.0e-07)
         
     simulated_input_cost = prompt_tokens * input_price
     simulated_output_cost = completion_tokens * output_price

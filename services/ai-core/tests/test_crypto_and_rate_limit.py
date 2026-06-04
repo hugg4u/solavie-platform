@@ -20,51 +20,37 @@ def test_encryption_empty_values():
     assert decrypt_key("") == ""
 
 # --- Redis Rate Limit Tests ---
+# Note: check_rate_limit now uses atomic Lua eval (LUA_INCR_EXPIRE) instead of incr/expire
 @pytest.mark.asyncio
 async def test_redis_rate_limiter():
     pm = ToolPermissionManager()
-    
-    # Mock redis_client INCR, EXPIRE and GET
+
     with patch("tools.registry.redis_client") as mock_redis:
-        mock_redis.get = AsyncMock(return_value=None)  # Defaults to standard
-        
-        # Simulate under limit (first call: count = 1)
-        mock_redis.incr = AsyncMock(return_value=1)
-        mock_redis.expire = AsyncMock(return_value=True)
-        
+        # Default tier: standard (get returns None for tier key)
+        mock_redis.get = AsyncMock(return_value=None)
+
+        # Simulate under limit (Lua eval returns count=1, limit=50 for standard)
+        mock_redis.eval = AsyncMock(return_value=1)
         allowed = await pm.check_rate_limit("test-tenant", "web_search")
         assert allowed is True
-        mock_redis.incr.assert_called_once()
-        mock_redis.expire.assert_called_once()
+        mock_redis.eval.assert_called_once()
 
-        # Reset mocks
-        mock_redis.incr.reset_mock()
-        mock_redis.expire.reset_mock()
-
-        # Simulate under limit (subsequent call: count = 10)
-        mock_redis.incr = AsyncMock(return_value=10)
-        allowed = await pm.check_rate_limit("test-tenant", "web_search")
-        assert allowed is True
-        mock_redis.incr.assert_called_once()
-        mock_redis.expire.assert_not_called()
-
-        # Simulate over limit (count = 60, limit = 50)
-        mock_redis.incr = AsyncMock(return_value=60)
+        # Simulate over standard limit (count=60 > limit=50)
+        mock_redis.eval = AsyncMock(return_value=60)
         allowed = await pm.check_rate_limit("test-tenant", "web_search")
         assert allowed is False
 
-        # --- Dynamic Tier Rate Limit Test ---
-        # Free tier: web_search limit = 20
+        # Free tier: web_search limit=20, count=25 → blocked
         mock_redis.get = AsyncMock(return_value=b"free")
-        mock_redis.incr = AsyncMock(return_value=25)
+        mock_redis.eval = AsyncMock(return_value=25)
         allowed = await pm.check_rate_limit("test-tenant", "web_search")
-        assert allowed is False  # Over free limit (25 > 20)
+        assert allowed is False  # 25 > 20 free tier limit
 
-        # Enterprise tier: web_search limit = 200
+        # Enterprise tier: web_search limit=200, count=150 → allowed
         mock_redis.get = AsyncMock(return_value=b"enterprise")
-        mock_redis.incr = AsyncMock(return_value=150)
+        mock_redis.eval = AsyncMock(return_value=150)
         allowed = await pm.check_rate_limit("test-tenant", "web_search")
-        assert allowed is True   # Under enterprise limit (150 <= 200)
+        assert allowed is True  # 150 <= 200 enterprise limit
 
 # --- Tool Executor Timeouts and URL Fetching ---
 @pytest.mark.asyncio

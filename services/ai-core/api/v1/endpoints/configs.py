@@ -105,6 +105,14 @@ async def create_or_update_key(
     tenant_uuid = get_effective_tenant(x_tenant_id, None) # API Keys must rely on injected tenant header
     encrypted = encrypt_key(payload.api_key)
     
+    # Check count of active keys before saving
+    stmt_count = select(APIKeyConfig).where(
+        APIKeyConfig.tenant_id == tenant_uuid,
+        APIKeyConfig.is_active == True
+    )
+    res_count = await db.execute(stmt_count)
+    active_keys_count = len(res_count.scalars().all())
+    
     stmt = select(APIKeyConfig).where(
         APIKeyConfig.tenant_id == tenant_uuid,
         APIKeyConfig.provider == payload.provider
@@ -112,13 +120,15 @@ async def create_or_update_key(
     result = await db.execute(stmt)
     key_config = result.scalar_one_or_none()
     
+    is_active_now = payload.is_active if payload.is_active is not None else True
+    
     if not key_config:
         key_config = APIKeyConfig(
             tenant_id=tenant_uuid,
             provider=payload.provider,
             api_key_encrypted=encrypted,
             api_base=payload.api_base,
-            is_active=payload.is_active if payload.is_active is not None else True
+            is_active=is_active_now
         )
         db.add(key_config)
     else:
@@ -131,9 +141,14 @@ async def create_or_update_key(
     await db.refresh(key_config)
     
     # Invalidate Redis cache key
-    cache_key = f"config:api_keys:{payload.provider}"
+    cache_key = f"{tenant_uuid}:config:api_keys:{payload.provider}"
     await redis_client.delete(cache_key)
     
+    # Trigger auto-route creation if this is the first active key
+    if active_keys_count == 0 and key_config.is_active:
+        from core.dynamic_cost import auto_create_tenant_routes_from_defaults
+        await auto_create_tenant_routes_from_defaults(db, tenant_uuid, payload.provider)
+        
     return {"status": "success", "provider": payload.provider}
 
 # Prompts Endpoints

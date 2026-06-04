@@ -56,7 +56,7 @@ class APIKeyConfig(Base):
     __tablename__ = "api_key_configs"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(Uuid, nullable=False, default=lambda: uuid.UUID("00000000-0000-0000-0000-000000000000"), index=True)
+    tenant_id = Column(Uuid, nullable=False, index=True)
     provider = Column(String(50), nullable=False)
     api_key_encrypted = Column(String, nullable=False)
     api_base = Column(String, nullable=True)
@@ -67,3 +67,23 @@ class APIKeyConfig(Base):
     __table_args__ = (
         UniqueConstraint('tenant_id', 'provider', name='uq_tenant_provider'),
     )
+
+
+class SystemDefaultRouteConfig(Base):
+    __tablename__ = "system_default_route_configs"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    provider = Column(String(50), nullable=False)
+    use_case = Column(String(50), nullable=False)
+    primary_model = Column(String(100), nullable=False)
+    fallback_model = Column(String(100), nullable=True)
+    temperature = Column(Numeric(3, 2), default=0.3)
+    max_tokens = Column(Integer, default=300)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('provider', 'use_case', name='uq_provider_use_case_default'),
+    )
+
