@@ -34,6 +34,11 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 4. THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL (như vLLM/Ollama local) trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256). Thuật toán mã hóa sử dụng `cryptography.fernet` với Fernet Key được sinh bằng cách băm SHA-256 chuỗi cấu hình `ENCRYPTION_SECRET_KEY` nhằm đảm bảo tính chịu lỗi cao.
 5. THE AI_Core SHALL áp dụng caching (Redis TTL 5 phút) cho các cấu hình định tuyến động để tránh độ trễ truy vấn database trên hot-path.
 6. THE AI_Core SHALL lắng nghe sự kiện cập nhật cấu hình từ Tenant Config Service qua kênh Redis Pub/Sub `config.updates` để tự động đồng bộ (hot-reload) cấu hình định tuyến và API keys mới về database cục bộ và làm trống (invalidate) cache hiện tại.
+7. THE AI_Core SHALL NOT sử dụng bất kỳ khóa API dùng chung nào (như khóa của hệ thống hoặc biến môi trường fallback) khi Tenant gọi dịch vụ AI. Nếu không tìm thấy khóa API riêng của Tenant trong cơ sở dữ liệu (BYOK model), hệ thống PHẢI lập tức trả về lỗi rõ ràng yêu cầu Tenant cấu hình bổ sung API Key của họ để sử dụng.
+8. THE AI_Core SHALL duy trì bảng cấu hình mặc định hệ thống `system_default_route_configs` trong DB để lưu trữ model mặc định cho từng cặp (provider, use_case) thay vì fix cứng trong mã nguồn. Hệ thống sẽ tự động đồng bộ (sync) bảng này khi khởi động dịch vụ (startup) và định kỳ chạy job kéo bảng giá LLM mới nhất từ GitHub LiteLLM. Quá trình kiểm tra tính hợp lệ của tệp giá tải về PHẢI thực hiện xác thực cấu trúc schema động (structural validation - lấy mẫu kiểm tra ngẫu nhiên xem có chứa thông số giá token đầu vào/đầu ra hay không) thay vì kiểm tra sự tồn tại của một tên mô hình fix cứng cụ thể. Sau đó, hệ thống tự động tính toán ra mô hình chat rẻ nhất hiện tại của từng Provider để làm mặc định.
+9. THE AI_Core SHALL thực hiện kiểm tra hoạt động (Active Verification) trước mỗi cuộc gọi LLM. Nếu mô hình được cấu hình (ví dụ: mô hình mặc định hoặc mô hình do Tenant cấu hình) không còn tồn tại trong LiteLLM Registry (dấu hiệu bị khai tử ở upstream), hệ thống phải tự động fallback sang mô hình rẻ nhất đang hoạt động của Provider đó và ghi log warning kèm Prometheus metrics để DevOps xử lý.
+10. THE AI_Core SHALL tự động khởi tạo các bản ghi cấu hình định tuyến (`LLMRouteConfig`) cho cả 5 usecase cho Tenant dựa trên cấu hình model rẻ nhất của Provider hoạt động tương ứng từ bảng `system_default_route_configs` ngay khi Tenant thêm hoặc đồng bộ khóa API đầu tiên.
+11. THE AI_Core SHALL cung cấp REST API `/api/v1/completions/models` trả về danh sách mô hình động bằng cách duyệt qua registry LiteLLM (`model_cost`), lọc toàn bộ mô hình chat (`mode == "chat"`) thuộc 12 nhà cung cấp hỗ trợ trong hệ thống và tự động bổ sung mô hình local mặc định, thay vì trả về danh sách tĩnh fix cứng mô hình.
 
 
 ### Requirement 3: Token Optimization
@@ -42,7 +47,7 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 
 #### Acceptance Criteria
 1. THE AI_Core SHALL áp dụng prompt caching (giảm 50% cost cho system prompts)
-2. THE AI_Core SHALL compress conversation history (summarize old messages)
+2. THE AI_Core SHALL compress conversation history: sử dụng logic cắt chuỗi thô (Baseline), và hỗ trợ cơ chế nâng cao (Production-ready) thông qua LLM-based summarization chạy ngầm và lưu Redis cache (TTL 1 giờ). Quá trình nén chỉ kích hoạt khi thỏa mãn đồng thời: tổng số tin nhắn `len(messages) > keep_recent + 4` (mặc định > 9 tin nhắn) và tổng độ dài tin nhắn cũ > 1500 ký tự. Hệ thống phải xác định nhà cung cấp (provider) từ cấu hình định tuyến động (Route Configs) của Tenant cho use-case `summarization` hoặc `chatbot` làm fallback. Từ provider này, hệ thống tự động phân giải ra mô hình hỗ trợ chat rẻ nhất của nhà cung cấp đó từ kho dữ liệu định giá của LiteLLM, sử dụng bộ nhớ đệm trong RAM (`_cheapest_models_cache`) để tối ưu hóa hiệu năng truy xuất O(1), tránh việc fix cứng mô hình trong mã nguồn.
 3. THE AI_Core SHALL extract only relevant sentences từ context documents
 4. THE AI_Core SHALL control response length per use case
 5. Token cost trung bình SHALL < $0.005 per message
@@ -65,7 +70,7 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 1. THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback.
 2. THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider.
 3. THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất.
-4. THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant.
+4. THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức.
 5. THE AI_Core SHALL expose metrics cho Prometheus.
 
 ### Requirement 6: Prompt Management

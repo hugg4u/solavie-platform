@@ -317,6 +317,14 @@ class AgentState(TypedDict):
     iteration_count: int  # Prevent infinite loops
     final_response: str
     confidence: float
+    total_tokens_used: int
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int
+    cache_hit: bool
+    cost_usd: float
+    model_used: str
+    provider: str
     pii_map: Dict[str, str]  # PII placeholders to real values mapping dict (local)
     user_permissions: List[str]  # User Keycloak permissions from Redis cache
 

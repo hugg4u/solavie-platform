@@ -32,6 +32,7 @@ findings.md
 task_plan.md
 progress.md
 antigravity.md
+.antigravity/
 
 # --- Environment Configurations ---
 .env

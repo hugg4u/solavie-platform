@@ -303,7 +303,9 @@
 - **Truy vết:** UC-10, US-018
 
 ### FR-CB-011: Tự động tóm tắt tin nhắn lịch sử (Sliding Window & Summarization)
-- **Mô tả:** Khi số lượng tin nhắn trong `MessagesState` vượt quá giới hạn cấu hình (mặc định 10 tin nhắn hoặc 4,000 tokens), LangGraph node **PHẢI** tự động gọi LLM để tóm tắt các tin nhắn cũ và lưu vào trường `summary` của state, sau đó cắt bỏ (trim) các tin nhắn cũ để tối ưu hóa dung lượng token gửi lên LLM.
+- **Mô tả:** Hệ thống **PHẢI** nén lịch sử cuộc hội thoại khi và chỉ khi thỏa mãn đồng thời: tổng số tin nhắn `len(messages) > keep_recent + 4` (mặc định > 9 tin nhắn) và tổng độ dài các tin nhắn cũ > 1500 ký tự. Hệ thống hỗ trợ hai cơ chế nén:
+  - **Cơ chế cơ bản (Baseline):** Sử dụng logic cắt chuỗi thô (trích xuất và nối 100 ký tự đầu tiên của các tin nhắn cũ) để làm tóm tắt thô cực nhanh mà không phát sinh thêm chi phí gọi LLM.
+  - **Cơ chế nâng cao (Production-ready):** Thực hiện tra cứu cache Redis key `{tenant_id}:history_summary:{MD5}` (TTL 1 giờ). Nếu cache miss, hệ thống trả về baseline ngay lập tức để giảm thiểu độ trễ phản hồi cho người dùng, đồng thời lên lịch tác vụ chạy ngầm (`asyncio.create_task`) xác định nhà cung cấp (provider) hoạt động từ cấu hình định tuyến động (Route Configs) của Tenant và phân giải mô hình rẻ nhất của provider đó từ LiteLLM registry (tối ưu hóa bằng RAM cache `_cheapest_models_cache`) để gọi LLM tóm tắt cuộc hội thoại cũ và lưu lại cache.
 - **Đầu vào:** Lịch sử cuộc hội thoại trong MessagesState.
 - **Đầu ra:** Trạng thái State được cập nhật với trường `summary` mới và danh sách `messages` đã được rút gọn.
 - **Mức độ ưu tiên:** 🔴 Must Have
@@ -980,10 +982,10 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 
-### FR-AI-006: Quản lý API Key mã hóa (Encrypted API Key Management)
-- **Mô tả:** AI Core Service **PHẢI** quản lý và bảo mật API Keys cùng Custom Endpoint URL (Ollama/vLLM) trong bảng `api_key_configs` sử dụng thuật toán mã hóa đối xứng (AES-256).
-- **Đầu vào:** LLM Provider, API Key thô, Base URL.
-- **Đầu ra:** Khóa được mã hóa lưu DB và giải mã động khi gọi API.
+### FR-AI-006: Quản lý API Key mã hóa và Xác thực bắt buộc (Encrypted API Key & Strict BYOK)
+- **Mô tả:** AI Core Service **PHẢI** quản lý và bảo mật API Keys cùng Custom Endpoint URL (Ollama/vLLM) của từng Tenant trong bảng `api_key_configs` sử dụng thuật toán mã hóa đối xứng (AES-256). Hệ thống **PHẢI** bắt buộc sử dụng khóa API riêng của Tenant (BYOK model) và **KHÔNG ĐƯỢC PHÉP** sử dụng khóa dùng chung (như khóa hệ thống hoặc biến môi trường fallback). Nếu không tìm thấy khóa riêng của Tenant, hệ thống **PHẢI** lập tức chặn yêu cầu và trả về lỗi HTTP 400 rõ ràng.
+- **Đầu vào:** LLM Provider, API Key thô, Base URL của Tenant.
+- **Đầu ra:** Khóa được mã hóa lưu DB, giải mã động khi gọi API, hoặc trả về lỗi nếu thiếu khóa.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10
 
@@ -1001,6 +1003,42 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 
+### FR-AI-009: Cảnh báo chi phí vượt hạn mức (Cost Alert)
+- **Mô tả:** AI Core Service **PHẢI** liên tục theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs`. Hệ thống **PHẢI** đối chiếu chi phí này với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của Tenant). Khi chi phí sử dụng thực tế đạt **80%** hạn mức, AI Core Service **PHẢI** tự động kích hoạt cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời thông báo qua hệ thống Notification hoặc tự động hạ cấp xuống mô hình AI rẻ tiền hơn để kiểm soát ngân sách.
+- **Đầu vào:** Bản ghi log chi phí `llm_usage_logs` của 30 ngày qua, cấu hình limits của Tenant.
+- **Đầu ra:** Metric cảnh báo phát đi, thông báo cảnh báo và kích hoạt chiến lược hạ cấp mô hình.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-069
+
+### FR-AI-010: Đồng bộ bảng giá LLM động và Cấu hình mặc định hệ thống (Dynamic Pricing & System Default Route)
+- **Mô tả:** AI Core Service **PHẢI** duy trì bảng cấu hình mặc định hệ thống `system_default_route_configs` trong DB để lưu trữ model mặc định cho từng cặp (provider, use_case) thay vì fix cứng trong mã nguồn. Hệ thống **PHẢI** tự động tải bảng giá mới nhất từ GitHub LiteLLM khi khởi động dịch vụ (startup) và định kỳ chạy job, tự động tính toán ra mô hình chat rẻ nhất hiện tại của từng Provider để làm mặc định.
+- **Đầu vào:** LiteLLM GitHub registry, job scheduler.
+- **Đầu ra:** Bảng `system_default_route_configs` được cập nhật mô hình rẻ nhất mới nhất.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10
+
+### FR-AI-011: Phòng vệ mô hình bị khai tử ở Upstream (Upstream Model Deprecation Defense)
+- **Mô tả:** AI Core Service **PHẢI** thực hiện kiểm tra hoạt động (Active Verification) trước mỗi cuộc gọi LLM. Nếu mô hình được cấu hình (ví dụ: mô hình mặc định hoặc mô hình do Tenant cấu hình) không còn tồn tại trong LiteLLM Registry (dấu hiệu bị khai tử ở upstream), hệ thống **PHẢI** tự động fallback sang mô hình rẻ nhất đang hoạt động của Provider đó và ghi log warning kèm Prometheus metrics để DevOps xử lý.
+- **Đầu vào:** Model ID được gọi, LiteLLM Registry.
+- **Đầu ra:** Cuộc gọi LLM diễn ra an toàn qua mô hình thay thế rẻ nhất đang hoạt động, phát cảnh báo hệ thống.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10
+
+### FR-AI-012: Tự động khởi tạo cấu hình định tuyến khi thêm API Key đầu tiên
+- **Mô tả:** AI Core Service **PHẢI** tự động sinh ra 5 bản ghi cấu hình định tuyến (`LLMRouteConfig`) cho cả 5 usecase của Tenant ngay khi phát hiện Tenant thêm hoặc đồng bộ khóa API hoạt động đầu tiên. Các cấu hình định tuyến này được sao chép trực tiếp từ bảng giá trị mặc định mẫu `system_default_route_configs` của nhà cung cấp khóa tương ứng, giúp Tenant sẵn sàng sử dụng Gateway ngay lập tức mà không cần cấu hình thủ công.
+- **Đầu vào:** Sự kiện thêm/đồng bộ API Key hoạt động của Tenant, bảng `system_default_route_configs`.
+- **Đầu ra:** 5 bản ghi `LLMRouteConfig` mới trong DB và làm trống cache Redis tương ứng của Tenant.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-018
+
+### FR-AI-013: API `/models` danh mục mô hình động từ Registry
+- **Mô tả:** API endpoint `/api/v1/completions/models` **PHẢI** trả về danh sách mô hình hoàn toàn động bằng cách truy vấn trực tiếp từ LiteLLM registry (`model_cost`) của 12 nhà cung cấp được hỗ trợ trong hệ thống đối với tất cả mô hình dạng Chat (`mode == "chat"`). Hệ thống **PHẢI** tự động thêm các mô hình local (như `qwen2.5-coder`, `llama3`) vào kết quả trả về, thay vì trả về danh sách tĩnh fix cứng.
+- **Đầu vào:** Yêu cầu GET `/api/v1/completions/models`, LiteLLM registry.
+- **Đầu ra:** JSON payload chứa danh sách hơn 339 mô hình động kèm provider của chúng.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10
+
 ---
 
 *← [Trước: User Stories](./04_User_Stories.md) | [Về Mục lục](./00_SRS_Index.md) | [Tiếp: Non-Functional Requirements →](./06_NonFunctional_Requirements.md)*
+

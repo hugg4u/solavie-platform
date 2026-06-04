@@ -9,7 +9,8 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 1. **Cấu hình do System Admin kiểm soát (Gói cước & Phân hạng):**
    - **Định nghĩa Tiers/Plans:** Quy chuẩn hạn mức các gói cước được định nghĩa chung trên toàn hệ thống.
    - **Gán hạng gói cho Tenant:** Được lưu trữ tập trung tại Redis dưới khóa `tenant:{tenant_id}:tier` (các giá trị: `free`, `standard`, `enterprise`) và trong DB quản lý tài khoản hệ thống của Admin.
-   - **System Master Keys:** Các khóa API dùng chung của hệ thống (fallback) được lưu trong cơ sở dữ liệu `api_key_configs` cục bộ của AI Core dưới dạng Tenant UUID mặc định (`00000000-0000-0000-0000-000000000000`) để dễ dàng rotate qua bảng điều khiển của Admin hệ thống thay vì restart app.
+   - **Không sử dụng System Master Keys:** Hệ thống không sử dụng bất kỳ khóa API dùng chung hay fallback nào của hệ thống. Mỗi Tenant bắt buộc phải tự cấu hình khóa API riêng (BYOK) để sử dụng dịch vụ AI.
+
 
 2. **Cấu hình do Tenant Admin kiểm soát (BYOK, Prompts, Thresholds):**
    - **Vị trí lưu trữ:** Nằm hoàn toàn trong bảng `tenant_configs` của `config_db` (phân chia theo `tenant_id`). Các trường nhạy cảm như API Keys của riêng Tenant (BYOK) được mã hóa đối xứng (AES-256) trước khi lưu.

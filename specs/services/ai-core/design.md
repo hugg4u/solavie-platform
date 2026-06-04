@@ -136,7 +136,7 @@ message SummarizeResponse {
 POST   /api/v1/completions             - LLM completion
 POST   /api/v1/embeddings              - Generate embeddings
 POST   /api/v1/summarize               - Summarize text
-GET    /api/v1/models                  - List available models
+GET    /api/v1/models                  - List available models (dynamic list of 339+ chat models across 12 providers from LiteLLM model_cost registry)
 GET    /api/v1/usage                   - Token usage stats (per tenant)
 GET    /api/v1/usage/breakdown         - Breakdown by use case
 GET    /api/v1/prompts                 - List prompt templates
@@ -158,11 +158,18 @@ POST   /api/v1/analytics/simulate-cost - Simulate financial impact of switching 
 
 The `LLMGateway` dynamically queries model routing configurations and API keys from PostgreSQL instead of hardcoded maps, with Redis caching (TTL 5 minutes) to ensure hot-path performance. All API keys stored in database are encrypted using Fernet (AES-256) where the key is derived from the SHA-256 hash of the `ENCRYPTION_SECRET_KEY` environment variable. Decryption is performed dynamically in-memory when making provider completions calls.
 
-### API Key Lookup Precedence & Fallbacks:
-Khi dịch vụ cần gọi API của các LLM Provider, `LLMGateway` sẽ giải quyết thông tin xác thực (Credentials/API keys) theo thứ tự ưu tiên giảm dần:
+### Tự động Khởi tạo Cấu hình Định tuyến (Auto-create Route Configs on First Key):
+Khi Tenant thêm hoặc đồng bộ khóa API đầu tiên của họ:
+1. Dịch vụ thực hiện truy vấn cơ sở dữ liệu để kiểm tra xem Tenant đã có bất kỳ khóa API đang hoạt động nào chưa.
+2. Nếu đây là khóa API hoạt động đầu tiên được lưu thành công, hệ thống sẽ tự động truy vấn bảng `system_default_route_configs` để lấy các cấu hình mặc định (cheapest models) của nhà cung cấp khóa tương ứng.
+3. Tự động sinh và lưu trữ 5 bản ghi định tuyến (`LLMRouteConfig`) cho cả 5 usecase của Tenant (`chatbot`, `content_generation`, `summarization`, `sentiment`, `classification`) kế thừa các thông số mặc định (primary_model, fallback_model, temperature, max_tokens) của nhà cung cấp đó, giúp Tenant có thể sử dụng Gateway ngay lập tức mà không cần cấu hình định tuyến thủ công.
+4. Xóa cache Redis cho các cấu hình định tuyến này để cập nhật tức thì.
+
+### Xác thực khóa API (Strict Tenant API Key Verification - BYOK):
+Khi dịch vụ cần gọi API của các LLM Provider, `LLMGateway` bắt buộc phải sử dụng khóa API riêng của Tenant (BYOK model) để thực hiện cuộc gọi:
 1.  **Tenant Custom Key (BYOK):** Tìm khóa API của riêng Tenant trong DB cục bộ `api_key_configs` với `tenant_id == tenant_uuid`.
-2.  **System Config DB Key (Dynamic Global Key):** Nếu Tenant không thiết lập BYOK, hệ thống tìm khóa tổng do System Admin cấu hình trong bảng `api_key_configs` với `tenant_id == 00000000-0000-0000-0000-000000000000`.
-3.  **Environment Fallback:** Nếu cả hai không có, hệ thống sử dụng khóa được khai báo tĩnh trong biến môi trường `.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+2.  **Từ chối và báo lỗi:** Nếu Tenant không thiết lập khóa API riêng (BYOK), hệ thống KHÔNG ĐƯỢC PHÉP sử dụng khóa dùng chung (như khóa hệ thống hoặc biến môi trường fallback) mà phải ngay lập tức ném ra lỗi rõ ràng: `MissingAPIKeyError` (hoặc HTTP 400 với thông báo: "Không tìm thấy cấu hình API Key của Tenant cho nhà cung cấp {provider}. Vui lòng bổ sung API Key tại trang cấu hình để sử dụng dịch vụ này.").
+
 
 ### Dynamic Tier Rate Limiting Check:
 Khi chạy các Agent Tools (như Web Search, Knowledge Base Search, Content Generation):
@@ -220,10 +227,14 @@ class TokenOptimizer:
         # 1. Prompt caching check
         cached_system = await self.check_prompt_cache(request.system_prompt)
         
-        # 2. Context compression (only relevant sentences)
+        # 2. History Compression (Nén lịch sử)
+        # - Triggers: len(messages) > keep_recent + 4 và older_messages_length > 1500 ký tự.
+        # - Provider Resolution: Lấy provider từ cấu hình định tuyến (use_case="summarization" hoặc chatbot fallback) của Tenant.
+        # - Dynamic Model Resolution: Từ provider, truy vấn mô hình chat rẻ nhất trong RAM cache `_cheapest_models_cache`. Nếu cache miss, quét và tính toán động từ bảng giá LiteLLM `model_prices_and_context_window` rồi lưu lại cache.
+        # - Flow: Kiểm tra cache Redis key {tenant_id}:history_summary:{MD5}. Cache Hit -> trả về ngay. Cache Miss -> trả về baseline, tạo task ngầm gọi LLM để tóm tắt và ghi cache.
         if request.use_case == "chatbot":
             request.messages = await self.compress_history(
-                request.messages, keep_recent=5
+                request.tenant_id, request.messages, keep_recent=5
             )
         
         # 3. Truncate context documents
@@ -479,6 +490,21 @@ CREATE TABLE llm_route_configs (
     UNIQUE(use_case, tenant_id)
 );
 
+-- System Default Route Configurations (MỚI - Tự động hóa)
+CREATE TABLE system_default_route_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider VARCHAR(50) NOT NULL,
+    use_case VARCHAR(50) NOT NULL,
+    primary_model VARCHAR(100) NOT NULL,
+    fallback_model VARCHAR(100),
+    temperature NUMERIC(3, 2) DEFAULT 0.3,
+    max_tokens INTEGER DEFAULT 300,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(provider, use_case)
+);
+
 -- Encrypted API Keys Configuration (MỚI)
 CREATE TABLE api_key_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -494,6 +520,7 @@ CREATE INDEX idx_usage_tenant ON llm_usage_logs(tenant_id, created_at DESC);
 CREATE INDEX idx_usage_cost ON llm_usage_logs(tenant_id, use_case, created_at);
 CREATE INDEX idx_prompts_tenant ON prompt_templates(tenant_id, use_case, is_active);
 CREATE INDEX idx_routes_tenant ON llm_route_configs(tenant_id, use_case);
+CREATE INDEX idx_system_routes ON system_default_route_configs(provider, use_case);
 ```
 
 ## Cost Tracking & Simulator (MỚI)
@@ -517,6 +544,12 @@ PRICING_REGISTRY = {
 # Cost Simulation Logic:
 # Estimated_Cost = Sum(Usage_Logs.prompt_tokens) * New_Input_Price + Sum(Usage_Logs.completion_tokens) * New_Output_Price
 # Savings = Historical_Cost - Estimated_Cost
+
+# Cost Alert Logic (Requirement 5 AC 4):
+# Accumulated_30d_Cost = Sum(Usage_Logs.cost_usd where created_at >= now() - 30 days)
+# Threshold_Limit = Tenant_limits.cost_limit_usd
+# IF Accumulated_30d_Cost >= 0.80 * Threshold_Limit:
+#     Trigger Cost Alert Signal (Log error, emit alert metrics, fallback to cheaper model or notify Admin)
 ```
 
 ## Correctness Properties

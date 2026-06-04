@@ -40,6 +40,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 2.4: THE AI_Core SHALL quản lý và bảo mật API Keys cùng Custom Endpoint URL trong bảng `api_key_configs` sử dụng mã hóa đối xứng (AES-256 Fernet với Fernet key được sinh bằng cách băm SHA-256 của ENCRYPTION_SECRET_KEY)
 - [x] AC 2.5: THE AI_Core SHALL áp dụng caching (Redis TTL 5 phút) cho các cấu hình định tuyến động để tránh độ trễ truy vấn database trên hot-path
 - [x] AC 2.6: THE AI_Core SHALL đăng ký (subscribe) kênh Redis Pub/Sub `config.updates` để nhận thông báo thay đổi cấu hình thời gian thực và thực hiện hot-reload
+- [x] AC 2.7: THE AI_Core SHALL chặn cuộc gọi LLM và trả về lỗi 400 rõ ràng khi không tìm thấy Custom API Key riêng của Tenant (BYOK) trong DB (Ngăn chặn hoàn toàn việc sử dụng khóa fallback dùng chung)
 
 ### Task 3: 3: Token Optimization
 > *User Story: Là business owner, tôi muốn chi phí AI thấp nhất có thể.*
@@ -47,6 +48,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 **Acceptance Criteria Implementation:**
 - [x] AC 3.1: THE AI_Core SHALL áp dụng prompt caching (giảm 50% cost cho system prompts)
 - [x] AC 3.2: THE AI_Core SHALL compress conversation history (summarize old messages)
+  - [x] Baseline: Trích xuất 100 ký tự đầu tiên của tin nhắn cũ và nối lại
+  - [x] Production-ready: Gọi LLM phụ chạy ngầm để sinh tóm tắt hội thoại cũ
+  - [x] Dynamic Provider & Model Resolution: Phân giải provider từ Route Config của Tenant và tự động tra cứu mô hình rẻ nhất của provider đó từ LiteLLM registry, lưu RAM cache `_cheapest_models_cache` để tối ưu hóa hiệu năng, loại bỏ hoàn toàn việc fix cứng tên mô hình trong mã nguồn.
 - [x] AC 3.3: THE AI_Core SHALL extract only relevant sentences từ context documents
 - [x] AC 3.4: THE AI_Core SHALL control response length per use case
 - [x] AC 3.5: Token cost trung bình SHALL < $0.005 per message
@@ -67,7 +71,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 5.1: THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback
 - [x] AC 5.2: THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider
 - [x] AC 5.3: THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất
-- [x] AC 5.4: THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant
+- [x] AC 5.4: THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức
 - [x] AC 5.5: THE AI_Core SHALL expose metrics cho Prometheus
 
 ### Task 6: 6: Prompt Management
@@ -95,7 +99,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 8.1: THE AI_Core SHALL maintain registry của tất cả available tools
 - [x] AC 8.2: THE AI_Core SHALL phân loại tools: retrieval, action, content, processing
 - [x] AC 8.3: THE AI_Core SHALL restrict tools per use case (Use Case mapping matrix)
-- [ ] AC 8.3b: THE AI_Core SHALL thực thi phân quyền người dùng động theo mã quyền hạn dạng `module:action` so khớp với cache Redis Keycloak `{tenant_id}:permissions:{user_role}` (độ trễ < 50ms)
+- [x] AC 8.3b: THE AI_Core SHALL thực thi phân quyền người dùng động theo mã quyền hạn dạng `module:action` so khớp với cache Redis Keycloak `{tenant_id}:permissions:{user_role}` (độ trễ < 50ms)
 - [x] AC 8.4: THE AI_Core SHALL rate limit tool calls (per tool, per tenant)
 - [x] AC 8.5: THE AI_Core SHALL log tất cả tool calls cho audit
 
@@ -118,11 +122,11 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 10.3: THE AI_Core SHALL enforce tenant isolation (agent chỉ access data của tenant mình)
 - [x] AC 10.4: THE AI_Core SHALL cap total tokens per session (10000 tokens max)
 - [x] AC 10.5: THE AI_Core SHALL log tất cả agent decisions cho audit trail
-- [ ] AC 10.6: THE AI_Core SHALL hỗ trợ chặn chủ đề (Topic Guardrails) qua System Prompt và so khớp RAG confidence
-- [ ] AC 10.7: THE AI_Core SHALL tích hợp Custom Regex Middleware PII Masking đầu vào/đầu ra với độ trễ < 10ms
-- [ ] AC 10.8: THE AI_Core SHALL tận dụng Safety Filters ở tầng API của nhà cung cấp mô hình
-- [ ] AC 10.9: THE AI_Core SHALL tích hợp bộ đánh giá kiểm chứng nguồn tin (NLI Grounding Validator) ở đầu ra bằng mô hình NLI
-- [ ] AC 10.10: THE AI_Core SHALL tích hợp bộ kiểm duyệt nội dung đầu ra (Output Content Moderation - Profanity, Toxicity, Prompt Leakage prevention) tại tầng ContentGuardrail
+- [x] AC 10.6: THE AI_Core SHALL hỗ trợ chặn chủ đề (Topic Guardrails) qua System Prompt và so khớp RAG confidence
+- [x] AC 10.7: THE AI_Core SHALL tích hợp Custom Regex Middleware PII Masking đầu vào/đầu ra với độ trễ < 10ms
+- [x] AC 10.8: THE AI_Core SHALL tận dụng Safety Filters ở tầng API của nhà cung cấp mô hình
+- [x] AC 10.9: THE AI_Core SHALL tích hợp bộ đánh giá kiểm chứng nguồn tin (NLI Grounding Validator) ở đầu ra bằng mô hình NLI
+- [x] AC 10.10: THE AI_Core SHALL tích hợp bộ kiểm duyệt nội dung đầu ra (Output Content Moderation - Profanity, Toxicity, Prompt Leakage prevention) tại tầng ContentGuardrail
 
 ### Task 11: Implement Business Logic Rules
 **Business Validations:**
@@ -148,7 +152,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Luồng đồng bộ cấu hình (MỚI): Ghi đè thông tin mới vào database `ai_core_db` (`api_key_configs` và `llm_route_configs`)
 - [x] Luồng đồng bộ cấu hình (MỚI): Giải mã API Keys bằng thuật toán đối xứng AES-256 trước khi gọi các LLM APIs ngoại vi
 - [x] Luồng đồng bộ cấu hình (MỚI): Thực hiện invalidate cache Redis của AI Core ngay sau khi reload config thành công
-- [x] Phân giải khóa API theo thứ tự ưu tiên: BYOK (của Tenant) -> System Config DB (Tenant ID hệ thống `00000000-0000-0000-0000-000000000000`) -> Biến môi trường (.env)
+- [x] Phân giải khóa API: Bắt buộc sử dụng BYOK (khoá riêng của Tenant), nếu thiếu khóa phải lập tức chặn cuộc gọi và báo lỗi HTTP 400 (không sử dụng System Config DB fallback hay biến môi trường)
 - [x] Kiểm tra phân hạng gói cước động từ Redis (`tenant:{tenant_id}:tier`) để áp dụng hạn mức Rate Limiting cho các tool
 - [x] API Endpoints (MỚI): Triển khai GET /api/v1/configs/routes trả về cấu hình định tuyến động của tenant
 - [x] API Endpoints (MỚI): Triển khai POST /api/v1/configs/routes cập nhật/tạo mới cấu hình định tuyến động
@@ -161,9 +165,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Sensitive Data Rules: NEVER log API keys
 - [x] Sensitive Data Rules: Log tenant_id nhưng KHÔNG log user PII
 - [x] Sensitive Data Rules: Truncate long content (max 200 chars in logs)
-- [ ] Guardrails Logging: Ghi nhận danh sách PII placeholders (`pii_masked_keys`), điểm số NLI validation (`nli_grounding_score`), trạng thái kiểm chứng NLI (`nli_status`), và số vòng lặp Agent (`agent_iterations`) trong JSON context logs.
-- [ ] Guardrails Tracing: Định nghĩa và propagate trace context cho các Middleware và Agent Loop spans (de-id, nli, re-id).
-- [ ] Guardrails Metrics: Triển khai các Prometheus metrics custom (`ai_core_pii_tokens_total`, `ai_core_nli_grounding_score`, `ai_core_nli_violations_total`, `ai_core_rag_similarity_score`, `ai_core_rate_limit_violations_total`) và tích hợp vào `/metrics` endpoint.
+- [x] Guardrails Logging: Ghi nhận danh sách PII placeholders (`pii_masked_keys`), điểm số NLI validation (`nli_grounding_score`), trạng thái kiểm chứng NLI (`nli_status`), và số vòng lặp Agent (`agent_iterations`) trong JSON context logs.
+- [x] Guardrails Tracing: Định nghĩa và propagate trace context cho các Middleware và Agent Loop spans (de-id, nli, re-id).
+- [x] Guardrails Metrics: Triển khai các Prometheus metrics custom (`ai_core_pii_tokens_total`, `ai_core_nli_grounding_score`, `ai_core_nli_violations_total`, `ai_core_rag_similarity_score`, `ai_core_rate_limit_violations_total`) và tích hợp vào `/metrics` endpoint.
 
 ## Verification & Testing
 
@@ -209,11 +213,49 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 > *User Story: Là business owner và system admin, tôi muốn AI-core được cấu hình tối ưu chi phí, độ trễ và tính năng đặc thù cho 12 LLM providers (Tương ứng với Requirement 14).*
 
 **Acceptance Criteria Implementation:**
-- [ ] AC 16.1: Tích hợp cấu trúc Prompt Caching (OpenAI & Anthropic cache control breakpoints - AC 14.1)
-- [ ] AC 16.2: Triển khai Google Safety Settings và Context Caching lớn cho Gemini (AC 14.2)
-- [ ] AC 16.3: Xử lý DeepSeek-R1 suy nghĩ (thinking block parsing) và fast failover circuit breaker (5s timeout - AC 14.3)
-- [ ] AC 16.4: Đồng bộ hóa local vLLM/Ollama endpoints qua database configurations (AC 14.4)
-- [ ] AC 16.5: Parse và cấu trúc citations metadata từ Cohere và Perplexity APIs (AC 14.5)
-- [ ] AC 16.6: Tự động dọn dẹp format parameters null cho Mistral và cấu hình EU nodes routing (AC 14.6)
+- [x] AC 16.1: Tích hợp cấu trúc Prompt Caching (OpenAI & Anthropic cache control breakpoints - AC 14.1)
+  - OpenAI: `apply_openai_caching()` — system prompt reorder + `X-Cache-Hint` header (auto-cache ≥ 1024 tokens)
+  - Anthropic: `apply_anthropic_caching()` — `cache_control: {type: ephemeral}` tại System Prompt & RAG Context
+- [x] AC 16.2: Triển khai Google Safety Settings và Context Caching lớn cho Gemini (AC 14.2)
+  - Safety Settings: 4 harm categories BLOCK_MEDIUM_AND_ABOVE
+  - Context Caching: `build_gemini_context_cache_params()` inject `cachedContent.ttl=300s` cho contexts > 32k tokens
+- [x] AC 16.3: Xử lý DeepSeek-R1 suy nghĩ (thinking block parsing) và fast failover circuit breaker (5s timeout - AC 14.3)
+  - `timeout=5.0` cho DeepSeek provider
+  - `<think>...</think>` block extraction → `reasoning_content` field
+- [x] AC 16.4: Đồng bộ hóa local vLLM/Ollama endpoints qua database configurations (AC 14.4)
+  - `api_base` từ `api_key_configs` được inject vào LiteLLM call (provider `local`)
+  - Circuit breaker `PROVIDER_BREAKERS["local"]` đã được đăng ký
+- [x] AC 16.5: Parse và cấu trúc citations metadata từ Cohere và Perplexity APIs (AC 14.5)
+  - Perplexity: `response.citations` direct extraction
+  - Cohere: `response.citations` + `response.meta.citations` fallback với chuẩn hoá `{start, end, text, source}`
+- [x] AC 16.6: Tự động dọn dẹp format parameters null cho Mistral và cấu hình EU nodes routing (AC 14.6)
+  - Null cleanup: `sanitize_mistral_tools()` recursive deep copy remove None values
+  - EU routing: `apply_mistral_eu_routing()` detect `eu.`/`europe` trong `api_base` hoặc default Mistral La Plateforme endpoint
+
+
+### Task 17: Dynamic Default Model Resolution & Deprecation Defense (MỚI)
+> *User Story: Là system admin, tôi muốn các mô hình mặc định tự động thích ứng với khóa API hoạt động của Tenant và tự động đổi sang mô hình rẻ nhất còn sống khi mô hình hiện tại bị khai tử ở upstream (Tương ứng với Requirement 2 AC 8 & 9).*
+
+**Acceptance Criteria Implementation:**
+- [x] AC 17.1: Thiết lập cơ sở dữ liệu bảng `system_default_route_configs` trong DB AI-CORE
+- [x] AC 17.2: Triển khai background job `sync_dynamic_cost_registry` kéo bảng giá mới nhất từ GitHub LiteLLM, lưu local cache và nạp vào LiteLLM registry
+- [x] AC 17.3: Triển khai đồng bộ bảng default `sync_system_default_configs`: tính toán cheapest model của từng Provider cho tất cả các usecase và lưu/cập nhật (UPSERT) vào DB
+- [x] AC 17.4: Cấu hình startup sync trong `main.py` tự động chạy đồng bộ bảng default khi server khởi động
+- [x] AC 17.5: Định tuyến Gateway thông minh: Khi Tenant chưa có Route Config cụ thể, tự động chọn đúng default model của active Provider từ `system_default_route_configs` DB
+- [x] AC 17.6: Triển khai hàm `resolve_active_default_model` để tự động phát hiện model bị khai tử và tự động chuyển hướng sang cheapest model còn sống của Provider đó
+- [x] AC 17.7: Viết unit tests bổ sung và đảm bảo toàn bộ tests PASS thành công
+
+
+### Task 18: Auto-Configuration on First Key & Dynamic Models Endpoint (MỚI)
+> *User Story: Là system admin, tôi muốn hệ thống tự động thiết lập các định tuyến LLM ban đầu khi Tenant cấu hình API Key đầu tiên, và cung cấp một danh mục mô hình khả dụng động thay vì fix cứng.*
+
+**Acceptance Criteria Implementation:**
+- [x] AC 18.1: Triển khai hàm helper `auto_create_tenant_routes_from_defaults` nhân bản cấu hình định tuyến mặc định của Provider tương ứng khi thêm khóa API đầu tiên
+- [x] AC 18.2: Tích hợp logic tự động tạo định tuyến vào REST API `create_or_update_key`
+- [x] AC 18.3: Tích hợp logic tự động tạo định tuyến vào sync listener `fetch_and_sync_config`
+- [x] AC 18.4: Nâng cấp REST API `/models` động dựa trên LiteLLM model_cost registry
+- [x] AC 18.5: Cập nhật cơ chế xác thực tệp registry LiteLLM sang kiểm tra schema động thay vì kiểm tra model cứng gpt-4o-mini
+- [x] AC 18.6: Bổ sung unit tests kiểm thử toàn diện logic mới và chạy pass 100% test suite
+
 
 
