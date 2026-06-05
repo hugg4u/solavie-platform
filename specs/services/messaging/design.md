@@ -17,6 +17,7 @@ Xem **Architecture**, **REST APIs**, **WebSocket Events**, và **gRPC Client** b
 | Queue | KafkaJS (consumer + producer) |
 | Realtime | Socket.IO + Redis Adapter |
 | gRPC Client | @grpc/grpc-js + protobuf |
+| MCP SDK | @modelcontextprotocol/sdk |
 | Testing | Jest + Supertest |
 
 ## Architecture
@@ -29,6 +30,7 @@ graph TB
         KAFKA_C["Kafka Consumer"]
         ROUTER["Message Router"]
         GRPC["gRPC Client (→ Chatbot)"]
+        MCP["MCP SSE Server"]
     end
 
     subgraph "Infrastructure"
@@ -42,6 +44,11 @@ graph TB
         CC["Channel Connector"]
     end
 
+    subgraph "Gateway & Hosts"
+        GW["API Gateway (Kong)"]
+        AIC["AI Core (MCP Host)"]
+    end
+
     Kafka -->|channel.message.received| KAFKA_C
     KAFKA_C --> ROUTER
     ROUTER -->|mode=auto| GRPC
@@ -50,6 +57,10 @@ graph TB
     WS -->|Redis Pub/Sub| Redis
     API -->|agent reply| CC
     API & KAFKA_C --> PG
+    
+    AIC -->|SSE MCP Request| GW
+    GW -->|Route to /api/v1/messaging/mcp| MCP
+    MCP -->|Call Send/Handoff Tools| ROUTER
 ```
 
 ## API Design
@@ -64,6 +75,8 @@ PUT    /api/v1/conversations/:id/assign       — Assign to agent
 PUT    /api/v1/conversations/:id/mode         — Switch auto/manual
 PUT    /api/v1/conversations/:id/status       — Change status (open/closed)
 GET    /api/v1/conversations/stats            — Inbox stats (unread, pending)
+GET    /api/v1/messaging/mcp                  — SSE connection endpoint for MCP Server
+POST   /api/v1/messaging/mcp/messages         — JSON-RPC message transport for MCP Server
 ```
 
 ### WebSocket Events
@@ -155,6 +168,25 @@ interface ConversationCreatedEvent {
 }
 ```
 
+
+## Model Context Protocol (MCP) Tools
+
+Messaging Service đóng vai trò là một MCP SSE Server, đăng ký các tools nghiệp vụ sau với AI Core (MCP Host):
+
+### 1. Tool: `send_message`
+* **Mô tả:** Gửi tin nhắn thay mặt cho bot hoặc hệ thống đến một cuộc hội thoại cụ thể.
+* **Tham số đầu vào (Schema):**
+  * `conversation_id` (string, UUID, required): ID của cuộc hội thoại đích.
+  * `content` (string, required): Nội dung tin nhắn cần gửi.
+  * `content_type` (string, optional, mặc định là 'text'): Kiểu nội dung ('text', 'image', 'file').
+* **Bảo mật:** Tham số `tenant_id` sẽ được tự động tiêm từ header `X-Tenant-ID` của Gateway vào hàm nghiệp vụ xử lý, cấm LLM tự ý chèn hoặc sửa đổi tham số này.
+
+### 2. Tool: `handoff_to_agent`
+* **Mô tả:** Chuyển đổi trạng thái cuộc hội thoại sang chế độ Agent xử lý thủ công và kích hoạt phân bổ Agent.
+* **Tham số đầu vào (Schema):**
+  * `conversation_id` (string, UUID, required): ID của cuộc hội thoại cần chuyển hướng.
+  * `reason` (string, optional): Lý do chuyển tiếp (ví dụ: 'user_request', 'complex_query', 'negative_sentiment').
+* **Bảo mật:** Tương tự, `tenant_id` được inject trực tiếp từ request header để đảm bảo an toàn đa thuê.
 
 ## Correctness Properties
 

@@ -36,6 +36,11 @@ content_quality_score: Histogram [buckets: 0.0-1.0]
 content_approval_time: Histogram [] # time from draft to approved
 content_regeneration_total: Counter [] # quality < 0.7 → regenerate
 content_published_total: Counter ['platform']
+
+# Model Context Protocol (MCP) Metrics
+content_mcp_connections_active: Gauge [tenant_id]
+content_mcp_requests_total: Counter [tool_name, status] # status: success/error
+content_mcp_execution_duration_seconds: Histogram [tool_name]
 ```
 
 ## Alert Rules

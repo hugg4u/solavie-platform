@@ -91,3 +91,10 @@ This document tracks the implementation checklist for **SCHEDULER Service** base
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `scheduler`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 6: Custom MCP Server Integration
+- [ ] Thiết kế các MCP endpoints `GET /api/v1/scheduler/mcp` (SSE stream) và `POST /api/v1/scheduler/mcp/messages` (JSON-RPC handler) sử dụng Spring WebFlux/SseEmitter.
+- [ ] Đăng ký công cụ `create_schedule` với các thuộc tính đầu vào: `post_id`, `scheduled_at`, `channel_ids`, `recurrence`.
+- [ ] Tích hợp cơ chế bảo mật tiêm `tenant_id` từ request header trực tiếp vào các Quartz Job và DB models.
+- [ ] Viết các test case tự động để xác nhận cô lập tenant khi đặt lịch.
+

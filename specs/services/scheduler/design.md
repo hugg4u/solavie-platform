@@ -58,6 +58,8 @@ GET    /api/v1/automations/:id         — Get automation detail
 PUT    /api/v1/automations/:id         — Update automation
 PUT    /api/v1/automations/:id/toggle  — Enable/disable
 GET    /api/v1/automations/:id/history — Execution history
+GET    /api/v1/scheduler/mcp            — SSE connection endpoint for MCP Server
+POST   /api/v1/scheduler/mcp/messages   — JSON-RPC message transport for MCP Server
 ```
 
 ## Data Models
@@ -152,6 +154,19 @@ public void checkDueSchedules() {
 }
 ```
 
+
+## Model Context Protocol (MCP) Tools
+
+Dịch vụ Scheduler Service đóng vai trò là một MCP SSE Server đăng ký các công cụ sau:
+
+### 1. Tool: `create_schedule`
+* **Mô tả:** Lên lịch đăng bài viết hoặc thực thi công việc tự động vào thời điểm được chỉ định.
+* **Tham số đầu vào (Schema):**
+  * `post_id` (string, UUID, required): ID bài viết đã được phê duyệt cần đăng.
+  * `scheduled_at` (string, ISO-8601 offset date-time format, required): Thời gian đăng bài lên lịch.
+  * `channel_ids` (array of strings, UUIDs, required): Danh sách các ID kênh mạng xã hội đích để đăng bài.
+  * `recurrence` (string, optional): Lặp lại (cron expression hoặc 'daily', 'weekly').
+* **Bảo mật:** Tham số `tenant_id` sẽ được trích xuất từ header `X-Tenant-ID` và tự động tiêm vào Quartz Job Data Map và DB schedules, cấm LLM tự sửa đổi.
 
 ## Correctness Properties
 

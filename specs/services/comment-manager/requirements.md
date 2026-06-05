@@ -35,7 +35,17 @@ Dịch vụ quản lý bình luận trên bài đăng — auto-classify (spam/ne
 2. THE Comment_Manager SHALL hỗ trợ manual reply, hide, unhide
 3. THE Comment_Manager SHALL show classification stats (accuracy, volume)
 
+### Requirement 4: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn tự động ẩn bình luận vi phạm hoặc phản cảm thông qua giao thức MCP.
+
+#### Acceptance Criteria
+1. THE Comment_Manager SHALL expose một endpoint HTTP/SSE tương thích Model Context Protocol (MCP) tại `/api/v1/comments/mcp`.
+2. THE Comment_Manager SHALL cung cấp công cụ `hide_comment` để ẩn bình luận được chỉ định.
+3. THE Comment_Manager SHALL thực thi bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` và tự động tiêm giá trị này để lọc/ẩn bình luận trong cơ sở dữ liệu và gọi API platform tương ứng.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Comment Manager Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Comment Manager Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `comment-manager`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Comment Manager Service.
-- **Tenant Isolation:** Dữ liệu Comment Manager **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Comment Manager và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

@@ -40,6 +40,11 @@ notifications_unread: Gauge [tenant_id]
 // SLA tracking
 notifications_sla_met_total: Counter [priority] // delivered within SLA
 notifications_sla_breached_total: Counter [priority] // exceeded SLA
+
+// Model Context Protocol (MCP) Metrics
+notifications_mcp_connections_active: Gauge [tenant_id]
+notifications_mcp_requests_total: Counter [tool_name, status] // status: success/error
+notifications_mcp_execution_duration_seconds: Histogram [tool_name]
 ```
 
 ## Health Endpoints

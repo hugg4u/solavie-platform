@@ -425,3 +425,48 @@ class QdrantManager:
 | Search: no results found | Return empty list (caller decides handoff) |
 | Document too large (> 50MB) | Reject at upload, return 413 |
 | Tenant quota exceeded | Reject, return 429 with quota info |
+
+---
+
+## Luồng xử lý MCP Server Tool Execution
+
+Khi AI Core gửi yêu cầu gọi công cụ `knowledge_base_search` tới `/api/v1/kb/mcp/messages`, hệ thống xử lý theo quy trình dưới đây:
+
+### Luồng tìm kiếm tri thức qua MCP
+
+```
+Incoming POST /api/v1/kb/mcp/messages (JSON-RPC)
+│
+▼
+┌──────────────────────────────────────────┐
+│ 1. ĐỌC JWT & XÁC THỰC NGƯỜI DÙNG         │
+│    - Kiểm tra Bearer Token               │
+│    - Trích xuất tenant_id từ JWT         │
+└──────────────────┬───────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────┐
+│ 2. KIỂM TRA ĐA THUÊ BAO (SECURITY CHECK)  │
+│    - So khớp 'tenant_id' trích xuất với  │
+│      tham số 'tenant_id' trong tool call │
+└──────────────────┬───────────────────────┘
+                   │
+                   ├─► [KHÔNG KHỚP] ──► Trả về lỗi JSON-RPC -32602 (Invalid params)
+                   │
+                   └─► [HỢP LỆ]
+                               │
+                               ▼
+┌──────────────────────────────────────────┐
+│ 3. THỰC THI HYBRID SEARCH                │
+│    - Gọi search_with_cache(query,        │
+│      tenant_id, top_k)                   │
+│    - Kết quả lọc RLS Qdrant & Postgres   │
+└──────────────────┬───────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────┐
+│ 4. ĐÓNG GÓI PHẢN HỒI (MCP FORMAT)        │
+│    - Trả về JSON-RPC response            │
+│      chứa nội dung văn bản (text)        │
+└──────────────────────────────────────────┘
+```

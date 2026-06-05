@@ -86,3 +86,12 @@ This document tracks the implementation checklist for **MESSAGING Service** base
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `messaging`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 6: Custom MCP Server Integration
+- [ ] Khởi tạo thư viện `@modelcontextprotocol/sdk` và tích hợp vào dự án NestJS.
+- [ ] Định nghĩa Controller cho các MCP endpoints: `GET /api/v1/messaging/mcp` (SSE stream) và `POST /api/v1/messaging/mcp/messages` (JSON-RPC handler).
+- [ ] Đăng ký công cụ `send_message` với schema validation (Zod) cho `conversation_id`, `content`, `content_type`.
+- [ ] Đăng ký công cụ `handoff_to_agent` với schema validation (Zod) cho `conversation_id`, `reason`.
+- [ ] Thiết lập logic tiêm `tenant_id` từ header `X-Tenant-ID` vào tham số của công cụ và áp dụng cơ chế cô lập trong cơ sở dữ liệu.
+- [ ] Viết unit tests và integration tests kiểm thử tính chính xác của các công cụ MCP và kiểm soát truy cập chéo giữa các tenant.
+

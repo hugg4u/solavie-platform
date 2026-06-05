@@ -285,6 +285,98 @@ SELECT add_retention_policy('metrics', INTERVAL '30 days');
 
 ---
 
+### Luồng 5: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Analytics Service (Spring Boot)
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/analytics/│
+                                                          │    mcp               │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    SseEmitter Stream │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼ (POST /messages)
+                                                          ┌──────────────────────┐
+                                                          │ 4. OVERWRITE TENANT  │
+                                                          │    Inject tenant_id  │
+                                                          │    into query params │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 5. TIMESCALEDB QUERY │
+                                                          │    Query continuous  │
+                                                          │    aggregates view   │
+                                                          │    where tenant_id=  │
+                                                          │    T_ID              │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 6. RESPONSE          │
+                                                          │    Return JSON-RPC   │
+                                                          │    success payload   │
+                                                          │    via SseEmitter    │
+                                                          └──────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP Spring Boot Endpoint:**
+```java
+@RestController
+@RequestMapping("/api/v1/analytics/mcp")
+public class McpController {
+
+    private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
+    private final AnalyticsMcpService analyticsMcpService;
+
+    @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter connectMcp(@RequestHeader("X-Tenant-ID") String tenantId) {
+        SseEmitter emitter = new SseEmitter(600000L); // 10 minutes timeout
+        emitters.put(tenantId, emitter);
+        
+        emitter.onCompletion(() -> emitters.remove(tenantId));
+        emitter.onTimeout(() -> emitters.remove(tenantId));
+        
+        // Gửi handshake event thành công
+        try {
+            emitter.send(SseEmitter.event().name("endpoint").data("/api/v1/analytics/mcp/messages"));
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+        }
+        return emitter;
+    }
+
+    @PostMapping("/messages")
+    public ResponseEntity<Void> handleMessage(
+            @RequestHeader("X-Tenant-ID") String tenantId,
+            @RequestBody String jsonRpcMessage) {
+        
+        // BẢO MẬT: Bắt buộc inject tenantId và phân tích JSON-RPC message
+        analyticsMcpService.processJsonRpc(tenantId, jsonRpcMessage, emitters.get(tenantId));
+        return ResponseEntity.accepted().build();
+    }
+}
+```
+
+---
+
 ## Error Handling
 
 | Scenario | Xử lý |
@@ -295,3 +387,6 @@ SELECT add_retention_policy('metrics', INTERVAL '30 days');
 | AI insight generation fail | Skip this week, retry next day |
 | Report generation timeout | Async job, notify when ready |
 | Missing data gaps | Mark in report, don't interpolate |
+| MCP SSE Emitter Timeout | Đóng emitter, giải phóng session của tenant |
+| Unauthorized Tenant Access | Trả về HTTP 403 ngay từ tầng controller và log lỗi bảo mật |
+

@@ -134,3 +134,10 @@ This document tracks the implementation checklist for **CRM Service** based on t
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `crm`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 10: Custom MCP Server Integration (MỚI)
+- [ ] Thiết lập SSE transport endpoints `/api/v1/mcp/solar`, `/api/v1/mcp/crm`, `/api/v1/mcp/om` bằng `@modelcontextprotocol/sdk` trong NestJS.
+- [ ] Đăng ký các schema tools tương ứng (`calculate_solar_roi`, `get_contact_360`, `create_om_ticket`, v.v.).
+- [ ] Triển khai middleware xác thực JWT và so khớp chéo `tenant_id` từ arguments của tool call với JWT payload.
+- [ ] Thực thi ghi nhận Prometheus metrics: `crm_mcp_tool_executions_total` và `crm_mcp_security_violations_total`.
+- [ ] Viết unit tests kiểm tra việc chặn truy cập trái phép khi gửi lệch `tenant_id` trong tool call.

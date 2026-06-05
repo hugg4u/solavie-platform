@@ -39,6 +39,11 @@ schedules_overdue: Gauge [] // schedules past due but not published
 automations_executed_total: Counter [status, trigger_type]
 automations_active: Gauge [tenant_id]
 quartz_jobs_running: Gauge []
+
+// Model Context Protocol (MCP) Metrics
+scheduler_mcp_connections_active: Gauge [tenant_id]
+scheduler_mcp_requests_total: Counter [tool_name, status] // status: success/error
+scheduler_mcp_execution_duration_seconds: Timer [tool_name]
 ```
 
 ## Alert Rules

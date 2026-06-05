@@ -471,34 +471,34 @@ agent = workflow.compile()
 ## Tool Executor — Gọi services qua MCP
 
 ```python
+from gateway.mcp.manager import MCPClientManager
+
 class ToolExecutor:
     """
-    Thực thi tool calls bằng cách gọi đến service tương ứng.
-    Mỗi tool map đến 1 service endpoint.
+    Thực thi tool calls động bằng cách định tuyến tới Custom MCP Servers nội bộ.
     """
     
     def __init__(self):
-        self.tool_registry = load_tool_registry()
+        self.mcp_manager = MCPClientManager()
         self.http_client = httpx.AsyncClient(timeout=10.0)
-        self.grpc_clients = {}
     
-    async def execute(self, tool_name: str, args: dict, tenant_id: str) -> str:
-        tool_def = self.tool_registry[tool_name]
-        
-        # Inject tenant_id into args (security: always use authenticated tenant)
+    async def execute(self, tool_name: str, args: dict, tenant_id: str, db_session) -> str:
+        # BẢO MẬT: Inject tenant_id từ JWT xác thực vào arguments để đảm bảo cô lập dữ liệu
         args["tenant_id"] = tenant_id
         
-        if tool_def["service"] == "internal":
-            # Internal tools (embed, summarize, translate) — handle locally
-            return await self._execute_internal(tool_name, args)
+        # Nếu là các tool local hoặc search hệ thống được cấu hình sẵn
+        if tool_name in ["web_search", "fetch_url", "embed_text", "summarize", "translate", "analyze_sentiment"]:
+            return await self._execute_local_system_tool(tool_name, args, tenant_id)
         
-        elif tool_def["service"] == "external":
-            # External APIs (web search, social trends)
-            return await self._execute_external(tool_name, args, tool_def["provider"])
-        
+        # Định tuyến các cuộc gọi tool động tới Custom MCP Servers nội bộ (solar_calc, crm, om_ticket)
+        # Tên tool định dạng: "{server_name}__{tool_name}" (ví dụ: "solar_calc__calculate_solar_roi")
         else:
-            # Internal service call (KB, CRM, Analytics, etc.)
-            return await self._execute_service_call(tool_name, args, tool_def)
+            return await self.mcp_manager.execute_mcp_tool(
+                tenant_id=tenant_id,
+                full_tool_name=tool_name,
+                arguments=args,
+                db_session=db_session
+            )
     
     async def _execute_service_call(self, tool_name: str, args: dict, tool_def: dict) -> str:
         """Call internal microservice via REST."""

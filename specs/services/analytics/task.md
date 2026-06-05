@@ -85,3 +85,12 @@ This document tracks the implementation checklist for **ANALYTICS Service** base
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `analytics`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 6: Custom MCP Server Integration
+- [ ] Thiết kế endpoint SSE `GET /api/v1/analytics/mcp` sử dụng `SseEmitter` trong Spring Boot.
+- [ ] Thiết kế endpoint nhận thông điệp JSON-RPC `POST /api/v1/analytics/mcp/messages`.
+- [ ] Xây dựng bộ phân tích và xử lý JSON-RPC cho MCP tools.
+- [ ] Đăng ký công cụ `analytics_query` với các thuộc tính: `query_type`, `start_date`, `end_date`, `campaign_id`.
+- [ ] Cấu hình cơ chế tiêm `tenant_id` từ header `X-Tenant-ID` trực tiếp vào câu lệnh SQL/JPA truy vấn TimescaleDB.
+- [ ] Viết các bài kiểm thử đơn vị và kiểm thử tích hợp đảm bảo cô lập tenant trên TimescaleDB.
+

@@ -171,10 +171,12 @@ graph TD
         end
     end
 
-    subgraph "External Databases & MCP Servers"
+    subgraph "Databases & Custom MCP Servers"
         pg_db[(PostgreSQL DB CRM/O&M)]
         qdrant[(Qdrant Vector DB)]
-        mcp_iot[MCP IoT Inverter Server]
+        mcp_solar[Custom Solar Calc MCP Server]
+        mcp_crm[Custom CRM MCP Server]
+        mcp_om[Custom O&M Ticket MCP Server]
     end
 
     ws_gate --> msg_service
@@ -204,8 +206,10 @@ graph TD
     
     %% Thực thi Tool và Phân giải PII
     mcp_host -->|18. Re-id PII map| re_id
-    re_id -->|19. Call SQL DB tool| pg_db
-    re_id -->|20. Call Inverter tool| mcp_iot
+    re_id -->|19. Call Solar Calc| mcp_solar
+    re_id -->|20. Call CRM API| mcp_crm
+    re_id -->|21. Call O&M Ticket| mcp_om
+    mcp_crm & mcp_om --> pg_db
 
     %% Kiểm soát đầu ra
     langgraph_core -->|21. Validate Hallucination| nli_val

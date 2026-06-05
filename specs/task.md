@@ -7,32 +7,32 @@ This master checklist tracks the development and deployment of the entire Solavi
 
 ### [x] Phase 1: Core Infrastructure & Gateway (Foundation) ✅
 *Goal: Set up database clustering, identity management, API Gateway routing, LLM gateway, and vector knowledge base.*
-  - [x] [**AUTH Service**](specs/solavie-system/services/auth/task.md) (5 requirements) ✅ — Keycloak 24+, RBAC, Dynamic Password Policy & Brute Force Sync
-  - [x] [**GATEWAY Service**](specs/solavie-system/services/gateway/task.md) (5 requirements) ✅ — Kong OSS 3.x, dynamic-policy plugin, Dynamic CORS & Rate Limit
-  - [x] [**AI-CORE Service**](specs/solavie-system/services/ai-core/task.md) (10 requirements) ✅ - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
-  - [ ] [**KNOWLEDGE-BASE Service**](specs/solavie-system/services/knowledge-base/task.md) (6 requirements) - Tech: Python 3.12 (FastAPI)
+  - [x] [**AUTH Service**](file:///d:/workspace/project/solavie-system/specs/services/auth/task.md) (5 requirements) ✅ — Keycloak 24+, RBAC, Dynamic Password Policy & Brute Force Sync
+  - [x] [**GATEWAY Service**](file:///d:/workspace/project/solavie-system/specs/services/gateway/task.md) (6 requirements - Tích hợp MCP) ✅ — Kong OSS 3.x, dynamic-policy plugin, Dynamic CORS & Rate Limit
+  - [x] [**AI-CORE Service**](file:///d:/workspace/project/solavie-system/specs/services/ai-core/task.md) (11 requirements - Tích hợp MCP) ✅ - Tech: Python 3.12 (FastAPI + gRPC + LangGraph)
+  - [ ] [**KNOWLEDGE-BASE Service**](file:///d:/workspace/project/solavie-system/specs/services/knowledge-base/task.md) (7 requirements - Tích hợp MCP) - Tech: Python 3.12 (FastAPI)
 
 ### [ ] Phase 2: Core Messaging & Engagement (Interactions)
 *Goal: Connect social channels, unify messaging inbox, and deploy chatbot dialog engine.*
-  - [ ] [**CHANNEL-CONNECTOR Service**](specs/solavie-system/services/channel-connector/task.md) (5 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**MESSAGING Service**](specs/solavie-system/services/messaging/task.md) (4 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**CHATBOT Service**](specs/solavie-system/services/chatbot/task.md) (13 requirements) - Tech: Python 3.12, FastAPI + LangGraph + gRPC
+  - [ ] [**CHANNEL-CONNECTOR Service**](file:///d:/workspace/project/solavie-system/specs/services/channel-connector/task.md) (5 requirements) - Tech: Node.js 20 (NestJS)
+  - [ ] [**MESSAGING Service**](file:///d:/workspace/project/solavie-system/specs/services/messaging/task.md) (5 requirements - Tích hợp MCP) - Tech: Node.js 20 (NestJS)
+  - [ ] [**CHATBOT Service**](file:///d:/workspace/project/solavie-system/specs/services/chatbot/task.md) (13 requirements) - Tech: Python 3.12, FastAPI + LangGraph + gRPC
 
 ### [ ] Phase 3: Content & Scheduling (Automation)
 *Goal: Create AI content generation assistant and scheduler for queue postings.*
-  - [ ] [**CONTENT Service**](specs/solavie-system/services/content/task.md) (5 requirements) - Tech: Python 3.12 (FastAPI)
-  - [ ] [**SCHEDULER Service**](specs/solavie-system/services/scheduler/task.md) (4 requirements) - Tech: Java 21 (Spring Boot 3 + Quartz Scheduler)
+  - [ ] [**CONTENT Service**](file:///d:/workspace/project/solavie-system/specs/services/content/task.md) (6 requirements - Tích hợp MCP) - Tech: Python 3.12 (FastAPI)
+  - [ ] [**SCHEDULER Service**](file:///d:/workspace/project/solavie-system/specs/services/scheduler/task.md) (5 requirements - Tích hợp MCP) - Tech: Java 21 (Spring Boot 3 + Quartz Scheduler)
 
 ### [ ] Phase 4: Business Logic & Analytics (Operations)
 *Goal: Setup analytics aggregations, CRM solar deal pipeline, and marketing campaign A/B testing.*
-  - [ ] [**ANALYTICS Service**](specs/solavie-system/services/analytics/task.md) (4 requirements) - Tech: Java 21 (Spring Boot 3)
-  - [ ] [**CRM Service**](specs/solavie-system/services/crm/task.md) (8 requirements) - Tech: Node.js 20, NestJS, PostgreSQL crm_db
-  - [ ] [**CAMPAIGN Service**](specs/solavie-system/services/campaign/task.md) (3 requirements) - Tech: Java 21 (Spring Boot 3)
+  - [ ] [**ANALYTICS Service**](file:///d:/workspace/project/solavie-system/specs/services/analytics/task.md) (5 requirements - Tích hợp MCP) - Tech: Java 21 (Spring Boot 3)
+  - [ ] [**CRM Service**](file:///d:/workspace/project/solavie-system/specs/services/crm/task.md) (9 requirements - Tích hợp MCP) - Tech: Node.js 20, NestJS, PostgreSQL crm_db
+  - [ ] [**CAMPAIGN Service**](file:///d:/workspace/project/solavie-system/specs/services/campaign/task.md) (3 requirements) - Tech: Java 21 (Spring Boot 3)
 
 ### [ ] Phase 5: Auxiliary Services (Supporting)
 *Goal: Complete supporting features: comments integration, multi-channel notifications, tenant config reload, DMS files, link shortener, and media workers.*
-  - [ ] [**COMMENT-MANAGER Service**](specs/solavie-system/services/comment-manager/task.md) (3 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**NOTIFICATION Service**](specs/solavie-system/services/notification/task.md) (3 requirements) - Tech: Node.js 20 (NestJS)
+  - [ ] [**COMMENT-MANAGER Service**](file:///d:/workspace/project/solavie-system/specs/services/comment-manager/task.md) (4 requirements - Tích hợp MCP) - Tech: Node.js 20 (NestJS)
+  - [ ] [**NOTIFICATION Service**](file:///d:/workspace/project/solavie-system/specs/services/notification/task.md) (4 requirements - Tích hợp MCP) - Tech: Node.js 20 (NestJS)
   - [ ] [**TENANT-CONFIG Service**](specs/solavie-system/services/tenant-config/task.md) (10 requirements) - Tech: Node.js 20 (NestJS)
   - [ ] [**DMS Service**](specs/solavie-system/services/dms/task.md) (9 requirements) - Tech: Node.js 20 (NestJS)
   - [ ] [**LINK-SHORTENER Service**](specs/solavie-system/services/link-shortener/task.md) (5 requirements) - Tech: Node.js 20 (Fastify)

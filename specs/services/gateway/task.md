@@ -131,5 +131,17 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Logs are formatted as structured JSON and trace context is propagated.
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 
+### Task 6: MCP Route Configuration (MỚI)
+- [ ] Cập nhật tệp cấu hình Kong `kong.yml` để định tuyến các đường dẫn MCP SSE:
+  - `/api/v1/mcp` về dịch vụ CRM (`http://crm:3003`)
+  - `/api/v1/kb/mcp` về dịch vụ Knowledge Base (`http://knowledge-base:8004`)
+  - `/api/v1/messaging/mcp` về dịch vụ Messaging (`http://messaging:3002`)
+  - `/api/v1/notification/mcp` về dịch vụ Notification (`http://notification:3004`)
+  - `/api/v1/comments/mcp` về dịch vụ Comment Manager (`http://comment-manager:3005`)
+  - `/api/v1/content/mcp` về dịch vụ Content (`http://content:8002`)
+  - `/api/v1/scheduler/mcp` về dịch vụ Scheduler (`http://scheduler:8003`)
+  - `/api/v1/analytics/mcp` về dịch vụ Analytics (`http://analytics:8006`)
+- [ ] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
+
 ---
-*Last updated: 2026-06-01 — All core tasks COMPLETED*
+*Last updated: 2026-06-06 — Core tasks completed; MCP tasks added.*

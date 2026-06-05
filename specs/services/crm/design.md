@@ -416,3 +416,161 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `crm`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+## MCP Server Integration
+
+Để hỗ trợ AI Core (vai trò MCP Host) gọi các công cụ nghiệp vụ một cách bảo mật và cô lập đa thuê bao, CRM Service triển khai 3 MCP Server tương ứng với các phân hệ nghiệp vụ chính của mình. Các Server này chạy dưới dạng SSE (Server-Sent Events) Endpoint của NestJS/Fastify.
+
+### 1. Phân chia MCP Servers & Các Tools Cung Cấp
+
+#### 1.1. Solar Calc MCP Server (`solar_calc`)
+*   **SSE Endpoint:** `/api/v1/mcp/solar`
+*   **Danh sách Tools:**
+    1.  `calculate_solar_roi`:
+        *   **Mô tả:** Tính toán công suất khuyên dùng, sản lượng điện dự kiến, mức tiết kiệm tháng và năm hoàn vốn dựa trên tiền điện và diện tích mái.
+        *   **Tham số (Input Schema):**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "monthly_bill": { "type": "number", "description": "Hóa đơn điện trung bình/tháng (VND)" },
+                "roof_area_sqm": { "type": "number", "description": "Diện tích mái nhà khả dụng (m2)" },
+                "location_zone": { "type": "string", "enum": ["south", "central", "north"], "description": "Khu vực địa lý để tính giờ nắng" }
+              },
+              "required": ["monthly_bill", "roof_area_sqm", "location_zone"]
+            }
+            ```
+    2.  `get_proposal_preview`:
+        *   **Mô tả:** Lấy thông tin tóm tắt của một đề xuất báo giá cũ để AI tổng hợp phản hồi khách hàng.
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "deal_id": { "type": "string", "format": "uuid", "description": "ID của Deal liên kết" }
+              },
+              "required": ["deal_id"]
+            }
+            ```
+
+#### 1.2. CRM MCP Server (`crm`)
+*   **SSE Endpoint:** `/api/v1/mcp/crm`
+*   **Danh sách Tools:**
+    1.  `get_contact_360`:
+        *   **Mô tả:** Lấy thông tin chi tiết 360 độ của khách hàng (display_name, phone, email, tags, lead_score, deals, tickets).
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "contact_id": { "type": "string", "format": "uuid", "description": "ID khách hàng" }
+              },
+              "required": ["contact_id"]
+            }
+            ```
+    2.  `create_lead_deal`:
+        *   **Mô tả:** Tạo một Deal mới cho khách hàng tiềm năng khi họ đồng ý tư vấn.
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "contact_id": { "type": "string", "format": "uuid", "description": "ID khách hàng" },
+                "title": { "type": "string", "description": "Tiêu đề deal bán hàng" }
+              },
+              "required": ["contact_id", "title"]
+            }
+            ```
+    3.  `update_deal_stage`:
+        *   **Mô tả:** Cập nhật giai đoạn của Deal (ví dụ từ lead sang consult).
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "deal_id": { "type": "string", "format": "uuid", "description": "ID của Deal" },
+                "stage": { "type": "string", "enum": ["lead", "consult", "survey", "proposal", "negotiation", "contract_signed", "closed_lost"], "description": "Giai đoạn mới" }
+              },
+              "required": ["deal_id", "stage"]
+            }
+            ```
+
+#### 1.3. O&M Ticket MCP Server (`om_ticket`)
+*   **SSE Endpoint:** `/api/v1/mcp/om`
+*   **Danh sách Tools:**
+    1.  `create_om_ticket`:
+        *   **Mô tả:** Tạo một Ticket O&M tiếp nhận sự cố báo hỏng inverter hoặc hệ thống của khách hàng.
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "contact_id": { "type": "string", "format": "uuid", "description": "ID khách hàng" },
+                "title": { "type": "string", "description": "Tên sự cố" },
+                "description": { "type": "string", "description": "Mô tả chi tiết sự cố" },
+                "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Mức độ ưu tiên" }
+              },
+              "required": ["contact_id", "title", "description"]
+            }
+            ```
+    2.  `get_ticket_status`:
+        *   **Mô tả:** Lấy thông tin trạng thái và cập nhật xử lý của O&M ticket.
+        *   **Tham số:**
+            ```json
+            {
+              "type": "object",
+              "properties": {
+                "ticket_id": { "type": "string", "format": "uuid", "description": "ID của ticket" }
+              },
+              "required": ["ticket_id"]
+            }
+            ```
+
+---
+
+### 2. Thiết Kế Cơ Chế Bảo Mật & Đa Thuê Bao (Multi-tenancy Security Design)
+
+Mặc dù AI Core Gateway đã kiểm soát whitelisting và tiêm tham số, CRM Service vẫn thực thi cơ chế phòng thủ chiều sâu (Defense-in-depth) như sau:
+
+1.  **JWT Verification:** Mọi HTTP Request thiết lập kết nối SSE hoặc gọi method qua JSON-RPC **PHẢI** mang Bearer Token hợp lệ. NestJS Guard sẽ validate token này thông qua Keycloak Public Key.
+2.  **Tenant Bound:** Lấy `tenant_id` từ header `X-Tenant-ID` do Gateway inject (hoặc giải mã trực tiếp từ JWT claim `tenant_id`). Mọi câu lệnh SQL thông qua Prisma **PHẢI** lọc chặt chẽ theo `tenant_id` này.
+3.  **Cross-tenant Parameter Validation:**
+    *   Đối với mọi Tool Call nhận vào từ AI Core: `tenant_id` được tự động tiêm từ Gateway dưới dạng một tham số bắt buộc ẩn (đã được định nghĩa trong schema hoặc ghi đè động).
+    *   CRM Service **PHẢI** so khớp giá trị `tenant_id` nhận được trong tham số của tool call với `tenant_id` lấy từ JWT của Request. Nếu phát hiện sai lệch (ví dụ: AI Core hoặc Kẻ tấn công cố gắng gửi tham số `tenant_id` của Tenant B trong khi JWT thuộc về Tenant A), CRM Service lập tức từ chối thực thi và trả về mã lỗi JSON-RPC `-32602` (Invalid params).
+
+---
+
+### 3. Sơ đồ Tương Tác luồng MCP SSE
+
+```mermaid
+sequenceDiagram
+    participant AI as AI Core (MCP Host)
+    participant GW as Kong Gateway
+    participant CRM as CRM Service (MCP Server)
+    participant DB as crm_db (PostgreSQL)
+
+    AI->>GW: POST /api/v1/mcp/solar/tools (List Tools)
+    Note over GW: Validate JWT & Inject X-Tenant-ID
+    GW->>CRM: GET /api/v1/mcp/solar/tools (X-Tenant-ID: tenant_A)
+    CRM-->>GW: Return Tools Schema (calculate_solar_roi)
+    GW-->>AI: Return Tools Schema
+
+    Note over AI: Agent quyết định gọi tool calculate_solar_roi
+    AI->>GW: POST /api/v1/mcp/solar/call (Tool Call)
+    Note over AI: Inject tenant_id: tenant_A into arguments
+    Note over GW: Validate JWT & Inject X-Tenant-ID
+    GW->>CRM: POST /api/v1/mcp/solar/call (X-Tenant-ID: tenant_A, Payload: tenant_id=tenant_A, ...)
+    
+    CRM->>CRM: So khớp tenant_id trong arguments với JWT/Header
+    alt Hợp lệ
+        CRM->>DB: Query bảng giá pin, bức xạ (tenant_id = tenant_A)
+        DB-->>CRM: Data
+        CRM->>CRM: Chạy thuật toán ROI
+        CRM-->>GW: Trả về kết quả MCP (ROI text/json)
+        GW-->>AI: Trả về kết quả
+    else Lệch tenant_id (Tấn công chéo)
+        CRM-->>GW: Trả về JSON-RPC Error (-32602 Invalid Params)
+        GW-->>AI: Trả về Error
+    end
+```
+

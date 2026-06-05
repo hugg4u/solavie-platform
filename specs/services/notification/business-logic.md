@@ -245,6 +245,118 @@ class SLATracker {
 
 ---
 
+### Luồng 4: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Notification Service
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/          │
+                                                          │    notification/mcp  │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    Stream Transport  │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼ (POST /messages)
+                                                          ┌──────────────────────┐
+                                                          │ 4. OVERWRITE TENANT  │
+                                                          │    Inject tenant_id  │
+                                                          │    into tool arguments│
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 5. DISPATCH NOTIF    │
+                                                          │    Send notification │
+                                                          │    & save DB where   │
+                                                          │    tenant_id=T_ID    │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 6. RESPONSE          │
+                                                          │    Return JSON-RPC   │
+                                                          │    success payload   │
+                                                          └──────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP NestJS Controller (Notification):**
+```typescript
+@Controller('api/v1/notification/mcp')
+export class NotificationMcpController {
+  private mcpServer: McpServer;
+
+  constructor(private readonly notificationService: NotificationService) {
+    this.initMcpServer();
+  }
+
+  private initMcpServer() {
+    this.mcpServer = new McpServer({ name: 'notification_dispatcher', version: '1.0.0' });
+    this.mcpServer.tool(
+      'send_notification',
+      {
+        user_id: z.string().uuid().describe('ID người nhận thông báo'),
+        title: z.string().describe('Tiêu đề thông báo'),
+        message: z.string().describe('Nội dung thông báo'),
+        channel: z.enum(['in-app', 'slack', 'email']).optional().describe('Kênh gửi ưu tiên'),
+        priority: z.enum(['critical', 'high', 'normal', 'low']).optional().describe('Độ ưu tiên')
+      },
+      async ({ user_id, title, message, channel, priority }, extra) => {
+        const tenantId = extra.tenantId;
+
+        // BẢO MẬT: Bắt buộc inject tenantId và xác minh user thuộc tenant trước khi gửi
+        const userExists = await this.notificationService.verifyUserInTenant(user_id, tenantId);
+        if (!userExists) {
+          throw new Error(`User ${user_id} does not belong to tenant ${tenantId}`);
+        }
+
+        // Thực thi gửi thông báo
+        const result = await this.notificationService.sendDirect({
+          tenantId,
+          userId: user_id,
+          title,
+          body: message,
+          channel: channel || 'in-app',
+          priority: priority || 'normal'
+        });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, notification_id: result.id }) }] };
+      }
+    );
+  }
+
+  @Sse()
+  connect(@Req() req, @Headers('X-Tenant-ID') tenantId: string): Observable<MessageEvent> {
+    const transport = new SSEServerTransport(`/api/v1/notification/mcp/messages`, req.res);
+    this.mcpServer.connect(transport);
+    return transport.sseStream;
+  }
+
+  @Post('messages')
+  async handleMessage(@Req() req, @Body() body: any, @Headers('X-Tenant-ID') tenantId: string) {
+    const transport = this.getTransportForTenant(tenantId);
+    await transport.handleMessage(body, { tenantId });
+  }
+}
+```
+
+---
+
 ## Error Handling
 
 | Scenario | Xử lý |
@@ -255,3 +367,6 @@ class SLATracker {
 | All channels fail | Queue for retry (max 3x, 5min interval) |
 | User has no preferences | Use defaults: all channels enabled |
 | Recipient not found | Log error, skip (don't crash) |
+| MCP Session timeout | Hủy session và giải phóng tài nguyên transport của tenant tương ứng |
+| MCP Cross-tenant access attempt | Báo lỗi JSON-RPC Invalid Request và ghi nhận vi phạm an ninh |
+

@@ -39,6 +39,11 @@ comments_escalated_total: Counter [platform] // negative → agent
 comments_overrides_total: Counter [from_class, to_class] // human corrections
 comments_classification_accuracy: Gauge [] // based on override rate
 comments_kafka_consumed_total: Counter [topic]
+
+// Model Context Protocol (MCP) Metrics
+comments_mcp_connections_active: Gauge [tenant_id]
+comments_mcp_requests_total: Counter [tool_name, status] // status: success/error
+comments_mcp_execution_duration_seconds: Histogram [tool_name]
 ```
 
 ## Health Endpoints

@@ -219,6 +219,109 @@ class ContentVersionManager:
 
 ---
 
+### Luồng 4: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Content Service (FastAPI)
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/content/  │
+                                                          │    mcp               │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    EventSource Stream│
+                                                          └──────────┬───────────┘
+                                                                     │
+                                         ┌───────────────────────────┴───────────────────────────┐
+                                         ▼ (POST /messages)                                      ▼ (POST /messages)
+                                 Tool: generate_content                                  Tool: adapt_content
+                                         │                                                       │
+                                         ▼                                                       ▼
+                            ┌────────────────────────┐                              ┌────────────────────────┐
+                            │ 4.1 OVERWRITE TENANT   │                              │ 5.1 OVERWRITE TENANT   │
+                            │     Inject tenant_id   │                              │     Inject tenant_id   │
+                            │     into arguments     │                              │     into arguments     │
+                            └──────────┬─────────────┘                              └──────────┬─────────────┘
+                                       │                                                       │
+                                       ▼                                                       ▼
+                            ┌────────────────────────┐                              ┌────────────────────────┐
+                            │ 4.2 GENERATION LOGIC   │                              │ 5.2 ADAPTATION LOGIC   │
+                            │     Call Generator,    │                              │     Call Adapter,      │
+                            │     RAG brand voice,   │                              │     check constraints, │
+                            │     where tenant_id=   │                              │     where tenant_id=   │
+                            │     T_ID               │                              │     T_ID               │
+                            └──────────┬─────────────┘                              └──────────┬─────────────┘
+                                       │                                                       │
+                                       ▼                                                       ▼
+                            ┌────────────────────────┐                              ┌────────────────────────┐
+                            │ 4.3 RESPONSE           │                              │ 5.3 RESPONSE           │
+                            │     Return JSON-RPC    │                              │     Return JSON-RPC    │
+                            │     success payload    │                              │     success payload    │
+                            └────────────────────────┘                              └────────────────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP FastAPI Endpoint (Content):**
+```python
+import asyncio
+from fastapi import APIRouter, Request, Header, HTTPException
+from sse_starlette.sse import EventSourceResponse
+from mcp.server.fastapi import McpServerTransport
+
+router = APIRouter(prefix="/api/v1/content/mcp")
+
+# Giả định mcp_server đã được khai báo
+@router.get("")
+async def connect_mcp(request: Request, x_tenant_id: str = Header(...)):
+    # Đăng ký sse transport kết nối
+    transport = McpServerTransport(request)
+    
+    # BẢO MẬT: Ghi nhận context tenantId cho phiên kết nối này
+    request.state.tenant_id = x_tenant_id
+    
+    async def event_generator():
+        async for event in transport.connect():
+            yield event
+            
+    return EventSourceResponse(event_generator())
+
+@router.post("/messages")
+async def handle_message(request: Request, x_tenant_id: str = Header(...)):
+    # BẢO MẬT: Ràng buộc tenantId vào logic xử lý JSON-RPC
+    extra_context = {"tenant_id": x_tenant_id}
+    await mcp_server.handle_message(await request.json(), extra_context)
+    return {"status": "accepted"}
+
+# Định nghĩa Tool Handler
+@mcp_server.tool("generate_content")
+async def generate_content_handler(topic: str, platform: str = None, context: str = None, extra: dict = None):
+    tenant_id = extra["tenant_id"]
+    
+    # Thực hiện gọi RAG và AI Core để tạo bài viết cô lập theo tenant_id
+    post = await content_generator.generate(
+        tenant_id=tenant_id,
+        topic=topic,
+        platform=platform,
+        context=context
+    )
+    return {"content": [{"type": "text", "text": post.body}]}
+```
+
+---
+
 ## Error Handling
 
 | Scenario | Xử lý |
@@ -229,3 +332,6 @@ class ContentVersionManager:
 | All regenerations fail | Save best attempt as draft, flag for manual edit |
 | Approval timeout (> 7 days) | Notify approver reminder |
 | Platform publish fail | Handled by Scheduler (retry), Content just tracks status |
+| MCP SSE Stream Failure | Hủy phiên làm việc và dọn dẹp bộ nhớ đệm tạo bài nháp của tenant |
+| Unauthorized Cross-Tenant Access | Báo lỗi JSON-RPC Method Error và lưu vết cảnh báo bảo mật hệ thống |
+

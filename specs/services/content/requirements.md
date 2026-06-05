@@ -60,7 +60,18 @@ Dịch vụ quản lý bài đăng và tạo nội dung AI — generate content 
 2. THE Content_Service SHALL track who changed what và when
 3. THE Content_Service SHALL hỗ trợ rollback to previous version
 
+### Requirement 6: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn tự động ra lệnh sinh nội dung hoặc thích ứng nội dung cho các nền tảng mạng xã hội khác nhau thông qua giao thức MCP.
+
+#### Acceptance Criteria
+1. THE Content_Service SHALL expose một endpoint HTTP/SSE tương thích Model Context Protocol (MCP) tại `/api/v1/content/mcp`.
+2. THE Content_Service SHALL cung cấp công cụ `generate_content` để sinh nội dung quảng cáo hoặc bài viết mới dựa trên thương hiệu của tenant.
+3. THE Content_Service SHALL cung cấp công cụ `adapt_content` để tự động điều chỉnh văn bản phù hợp với giới hạn và văn phong của kênh đích.
+4. THE Content_Service SHALL bảo đảm cách ly dữ liệu thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` và tự động tiêm giá trị này để bảo vệ dữ liệu trong cơ sở dữ liệu PostgreSQL và MinIO.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Content Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Content Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `content`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Content Service.
-- **Tenant Isolation:** Dữ liệu Content **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Content và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

@@ -53,7 +53,18 @@ Dịch vụ quản lý hộp thư hợp nhất (unified inbox), conversation lif
 3. THE Messaging_Service SHALL auto-close conversations sau 24h không hoạt động
 4. WHEN conversation được assign, THE Messaging_Service SHALL notify agent qua Notification_Service
 
+### Requirement 5: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn gọi các công cụ nghiệp vụ của Messaging Service trực tiếp thông qua giao thức MCP để gửi tin nhắn hoặc chuyển hướng hội thoại tự động.
+
+#### Acceptance Criteria
+1. THE Messaging_Service SHALL expose một endpoint HTTP/SSE tương thích giao thức Model Context Protocol (MCP) tại `/api/v1/messaging/mcp`.
+2. THE Messaging_Service SHALL cung cấp công cụ `send_message` để gửi tin nhắn của bot hoặc hệ thống đến cuộc hội thoại cụ thể.
+3. THE Messaging_Service SHALL cung cấp công cụ `handoff_to_agent` để chuyển hướng cuộc hội thoại sang chế độ thủ công (manual) và gán cho Agent phù hợp.
+4. THE Messaging_Service SHALL thực thi ràng buộc bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` hợp lệ và tự động áp dụng `tenant_id` này cho mọi thao tác truy vấn cơ sở dữ liệu và gọi công cụ.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Messaging Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Messaging Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `messaging`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Messaging Service.
-- **Tenant Isolation:** Dữ liệu Messaging **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Messaging và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

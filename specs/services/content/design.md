@@ -64,6 +64,8 @@ POST   /api/v1/content/:id/reject        — Reject with feedback
 GET    /api/v1/content/:id/versions      — Version history
 POST   /api/v1/content/:id/rollback      — Rollback to version
 POST   /api/v1/media/upload              — Upload media file
+GET    /api/v1/content/mcp               — SSE connection endpoint for MCP Server
+POST   /api/v1/content/mcp/messages       — JSON-RPC message transport for MCP Server
 ```
 
 ## Content Generation Flow
@@ -156,6 +158,25 @@ CREATE INDEX idx_versions_post ON content_versions(post_id, version_number DESC)
 }
 ```
 
+
+## Model Context Protocol (MCP) Tools
+
+Dịch vụ Content Service đóng vai trò là một MCP SSE Server đăng ký các công cụ sau:
+
+### 1. Tool: `generate_content`
+* **Mô tả:** Sinh bài viết marketing, nội dung quảng cáo mới tự động dựa trên thương hiệu và sản phẩm của tenant.
+* **Tham số đầu vào (Schema):**
+  * `topic` (string, required): Chủ đề của nội dung cần viết.
+  * `platform` (string, optional, enum: `['facebook', 'zalo', 'tiktok', 'instagram']`): Kênh mạng xã hội đích để tối ưu hóa ban đầu.
+  * `context` (string, optional): Thông tin ngữ cảnh bổ sung để AI Core tham khảo.
+* **Bảo mật:** Tham số `tenant_id` sẽ được tự động tiêm từ header `X-Tenant-ID` vào tham số thực thi hàm nghiệp vụ để thực hiện RAG tìm kiếm thông tin brand voice và lưu bài đăng mới trên DB PostgreSQL của tenant.
+
+### 2. Tool: `adapt_content`
+* **Mô tả:** Điều chỉnh nội dung văn bản cho phù hợp với đặc thù kênh mạng xã hội cụ thể (giới hạn ký tự, hashtags, văn phong).
+* **Tham số đầu vào (Schema):**
+  * `content` (string, required): Nội dung văn bản thô cần chuyển đổi.
+  * `target_platform` (string, required, enum: `['facebook', 'zalo', 'tiktok', 'instagram']`): Kênh mạng xã hội đích cần thích ứng.
+* **Bảo mật:** Tương tự, `tenant_id` được inject trực tiếp từ header để cô lập an toàn đa thuê.
 
 ## Correctness Properties
 

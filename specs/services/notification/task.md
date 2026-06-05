@@ -66,3 +66,11 @@ This document tracks the implementation checklist for **NOTIFICATION Service** b
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `notification`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 5: Custom MCP Server Integration
+- [ ] Tích hợp `@modelcontextprotocol/sdk` vào dự án NestJS.
+- [ ] Thiết kế endpoint SSE `GET /api/v1/notification/mcp` và endpoint nhận thông điệp `POST /api/v1/notification/mcp/messages`.
+- [ ] Đăng ký công cụ `send_notification` nhận tham số: `user_id`, `title`, `message`, `channel`, `priority`.
+- [ ] Triển khai cơ chế bảo mật tiêm `tenant_id` từ header và kiểm tra tính hợp lệ của user trước khi gửi.
+- [ ] Viết unit tests và integration tests nhằm bảo vệ chống rò rỉ thông báo chéo giữa các tenant.
+

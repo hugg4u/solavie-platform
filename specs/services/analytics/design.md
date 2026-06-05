@@ -33,6 +33,8 @@ GET    /api/v1/insights                 — AI-generated insights
 GET    /api/v1/reports                  — List generated reports
 POST   /api/v1/reports/generate         — Generate report (async)
 GET    /api/v1/reports/:id/download     — Download report file
+GET    /api/v1/analytics/mcp            — SSE connection endpoint for MCP Server
+POST   /api/v1/analytics/mcp/messages   — JSON-RPC message transport for MCP Server
 ```
 
 ## Data Models
@@ -90,6 +92,19 @@ CREATE TABLE reports (
 | `messaging.handoff.requested` | handoff_rate |
 | `crm.lead.score.changed` | lead_conversion |
 
+
+## Model Context Protocol (MCP) Tools
+
+Dịch vụ Analytics Service đóng vai trò là một MCP SSE Server (sử dụng thư viện tương thích Java/Spring Boot) đăng ký các công cụ sau:
+
+### 1. Tool: `analytics_query`
+* **Mô tả:** Truy vấn dữ liệu phân tích chi tiết của tenant về engagement, reach, hiệu suất chiến dịch hoặc phát hiện bất thường.
+* **Tham số đầu vào (Schema):**
+  * `query_type` (string, required, enum: `['engagement', 'reach', 'campaign_performance', 'anomaly_detection']`): Loại báo cáo cần truy vấn.
+  * `start_date` (string, ISO-8601 offset date-time format, optional): Ngày bắt đầu.
+  * `end_date` (string, ISO-8601 offset date-time format, optional): Ngày kết thúc.
+  * `campaign_id` (string, UUID, optional): ID chiến dịch nếu muốn lọc theo chiến dịch cụ thể.
+* **Bảo mật:** Tham số `tenant_id` sẽ được trích xuất từ header `X-Tenant-ID` và tự động tiêm vào câu lệnh truy vấn TimescaleDB, cấm hoàn toàn LLM sửa đổi.
 
 ## Correctness Properties
 

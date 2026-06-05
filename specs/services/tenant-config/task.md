@@ -57,7 +57,8 @@ This document tracks the implementation checklist for **TENANT-CONFIG Service** 
 - [ ] AC 2.22: allowed_cors_origins: danh sách chuỗi (array string)
 - [ ] AC 2.23: auth_password_min_length: số nguyên trong khoảng [6, 30]
 - [ ] AC 2.24: auth_max_login_attempts: số nguyên trong khoảng [3, 20]
-- [ ] AC 2.25: IF bất kỳ giá trị nào không hợp lệ, THEN THE Tenant_Config SHALL từ chối toàn bộ PATCH request và trả về HTTP 422 với danh sách chi tiết các field lỗi và lý do
+- [ ] AC 2.25: mcp_server_whitelist: danh sách các Custom MCP SSE Servers được phê duyệt, chứa server_name, sse_url, status, description, custom_headers
+- [ ] AC 2.26: IF bất kỳ giá trị nào không hợp lệ, THEN THE Tenant_Config SHALL từ chối toàn bộ PATCH request và trả về HTTP 422 với danh sách chi tiết các field lỗi và lý do
 - [ ] AC 2.26: THE Tenant_Config SHALL validate kiểu dữ liệu: boolean fields phải là true/false, không chấp nhận 0/1 hoặc "true"/"false" dạng string
 
 ### Task 3: 3: Hot Reload qua Redis Pub/Sub
@@ -98,6 +99,7 @@ This document tracks the implementation checklist for **TENANT-CONFIG Service** 
 - [ ] AC 5.12: auto_approve_quality_threshold: 0.85
 - [ ] AC 5.13: data_masking_enabled: true
 - [ ] AC 5.14: session_timeout_minutes: 60
+- [ ] AC 5.15: mcp_server_whitelist: mặc định là mảng rỗng []
 - [ ] AC 5.15: audit_log_retention_days: 90
 - [ ] AC 5.16: dms_max_storage_mb: 5000
 - [ ] AC 5.17: dms_max_file_versions: 5
