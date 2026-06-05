@@ -75,6 +75,10 @@ async def usage_summary(
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     result = await db.execute(
         select(
+            LLMUsageLog.tenant_id,
+            LLMUsageLog.use_case,
+            LLMUsageLog.model,
+            LLMUsageLog.provider,
             func.sum(LLMUsageLog.prompt_tokens).label("prompt"),
             func.sum(LLMUsageLog.completion_tokens).label("completion"),
             func.sum(LLMUsageLog.cost_usd).label("cost"),
@@ -84,17 +88,55 @@ async def usage_summary(
                 LLMUsageLog.tenant_id == tenant_uuid,
                 LLMUsageLog.created_at >= cutoff
             )
+        ).group_by(
+            LLMUsageLog.tenant_id,
+            LLMUsageLog.use_case,
+            LLMUsageLog.model,
+            LLMUsageLog.provider
         )
     )
-    row = result.fetchone()
+    rows = result.fetchall()
+    
+    total_prompt = 0
+    total_completion = 0
+    total_cost = 0.0
+    total_latency_sum = 0.0
+    count = 0
+    
+    breakdown = []
+    for r in rows:
+        prompt_val = r.prompt or 0
+        completion_val = r.completion or 0
+        cost_val = float(r.cost) if r.cost is not None else 0.0
+        latency_val = float(r.latency) if r.latency is not None else 0.0
+        
+        total_prompt += prompt_val
+        total_completion += completion_val
+        total_cost += cost_val
+        total_latency_sum += latency_val
+        count += 1
+        
+        breakdown.append({
+            "tenant_id": str(r.tenant_id),
+            "use_case": r.use_case,
+            "model": r.model,
+            "provider": r.provider,
+            "prompt_tokens": prompt_val,
+            "completion_tokens": completion_val,
+            "cost_usd": cost_val,
+            "avg_latency_ms": latency_val
+        })
+        
+    avg_latency = total_latency_sum / count if count > 0 else 0.0
     
     return {
         "tenant_id": str(tenant_uuid),
         "days_limit": 30,
-        "total_prompt_tokens": row.prompt or 0 if row else 0,
-        "total_completion_tokens": row.completion or 0 if row else 0,
-        "total_cost_usd": float(row.cost) if row and row.cost is not None else 0.0,
-        "avg_latency_ms": float(row.latency) if row and row.latency is not None else 0.0
+        "total_prompt_tokens": total_prompt,
+        "total_completion_tokens": total_completion,
+        "total_cost_usd": total_cost,
+        "avg_latency_ms": avg_latency,
+        "breakdown": breakdown
     }
 
 @router.post("/analytics/simulate-cost")

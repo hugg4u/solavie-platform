@@ -212,7 +212,12 @@ async def summarize_text(
             call_kwargs["api_key"] = creds["api_key"]
         if creds.get("api_base"):
             call_kwargs["api_base"] = creds["api_base"]
-            
+
+        # Strategy Pattern: Use ProviderAdapter to clean up parameters dynamically
+        from gateway.providers.factory import ProviderFactory
+        adapter = ProviderFactory.get_adapter(provider)
+        call_kwargs = adapter.sanitize_payload(call_kwargs)
+
         response = await litellm.acompletion(**call_kwargs)
         summary = response.choices[0].message.content or ""
         

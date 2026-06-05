@@ -29,24 +29,84 @@ async def test_history_compression():
     
     # We keep recent 5 messages. Older messages = messages[:-5] (indexes 0 to 4).
     # Total messages is 10 > keep_recent + 4. Length of older messages > 1600 > 1500 chars.
-    compressed = await gateway.compress_history("d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5)
-    assert len(compressed) == 6  # 1 summary message + 5 recent messages
-    assert compressed[0]["role"] == "system"
-    assert "Background summary" in compressed[0]["content"]
-    assert compressed[1]["content"] == "hi 3"
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history("d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5)
+        assert len(compressed) == 6  # 1 summary message + 5 recent messages
+        assert compressed[0]["role"] == "system"
+        assert "Background summary" in compressed[0]["content"]
+        assert compressed[1]["content"] == "hi 3"
+
+@pytest.mark.asyncio
+async def test_history_compression_with_tool_messages():
+    gateway = LLMGateway()
+    messages = [
+        {"role": "user", "content": "hello 1" + "a" * 800},
+        {"role": "assistant", "content": "hi 1" + "b" * 800},
+        {"role": "user", "content": "hello 2"},
+        {"role": "assistant", "content": "hi 2"},
+        {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "name": "web_search", "content": "search result"},
+        {"role": "assistant", "content": "final answer"},
+        {"role": "user", "content": "thanks"},
+        {"role": "assistant", "content": "welcome"},
+        {"role": "user", "content": "bye"}
+    ]
+    
+    # Natural split_index=5 would land on the orphaned 'tool' message at [5].
+    # PASS 1 pulls it back to index=4 (the assistant+tool_calls at [4]).
+    # PASS 2 (FIX-1A) then also sees that recent[0] is assistant+tool_calls and pulls
+    # split_index back further to index=3 (the plain 'assistant' at [3]).
+    # So older=[0..2], recent=[3..9] = 7 messages, plus 1 summary = 8 total.
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history("d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5)
+        
+        # After both passes: 1 summary + 7 recent messages
+        assert len(compressed) == 8
+        assert compressed[0]["role"] == "system"
+        # CRITICAL: first non-system message must NOT be assistant+tool_calls
+        first_non_system = next(m for m in compressed if m["role"] != "system")
+        assert not (first_non_system.get("role") == "assistant" and bool(first_non_system.get("tool_calls"))), (
+            "FIX-1A: first non-system must not be assistant+tool_calls"
+        )
+        # The assistant+tool_calls is present in the recent slice (not orphaned)
+        has_tool_call_in_recent = any(
+            m.get("role") == "assistant" and m.get("tool_calls") for m in compressed
+        )
+        assert has_tool_call_in_recent
+        # The matching tool message is also present
+        has_tool_result = any(m.get("role") == "tool" for m in compressed)
+        assert has_tool_result
+
 
 @pytest.mark.asyncio
 async def test_context_optimization():
     gateway = LLMGateway()
     long_content = "a" * 5000
     messages = [
-        {"role": "context", "content": long_content},
-        {"role": "user", "content": "hi"}
+        {"role": "context", "content": long_content, "metadata": {"source": "doc1"}},
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "checking...",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "kb_search", "arguments": "{}"}}]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "kb_search",
+            "content": "doc result"
+        }
     ]
     optimized = gateway.optimize_context(messages, max_context_chars=1000)
-    assert len(optimized) == 2
+    assert len(optimized) == 4
     assert "[TRUNCATED FOR TOKEN OPTIMIZATION]" in optimized[0]["content"]
     assert len(optimized[0]["content"]) < 2000
+    assert optimized[0]["metadata"] == {"source": "doc1"}
+    
+    # Assert other roles are preserved untouched
+    assert optimized[1] == messages[1]
+    assert optimized[2] == messages[2]
+    assert optimized[3] == messages[3]
 
 # --- Permission Manager Tests ---
 def test_tool_permissions():
@@ -137,6 +197,12 @@ async def test_model_formatting_and_breakers():
     assert format_litellm_model("deepseek-chat", "deepseek") == "deepseek/deepseek-chat"
     assert format_litellm_model("gpt-4o-mini", "openai") == "gpt-4o-mini"
     
+    # Assert formatting for new UI providers and alias resolution
+    assert format_litellm_model("gpt-4o", "azure") == "azure/gpt-4o"
+    assert format_litellm_model("grok-2", "xai") == "xai/grok-2"
+    assert format_litellm_model("Llama-3-70b", "together") == "together_ai/llama-3-70b"
+    assert format_litellm_model("gemini-2.5-flash", "gemini") == "gemini/gemini-2.5-flash"
+    
     # Exclude client errors in pybreaker
     import litellm.exceptions
     from gateway.router import PROVIDER_BREAKERS
@@ -155,7 +221,7 @@ async def test_model_formatting_and_breakers():
 async def test_history_compression_redis():
     gateway = LLMGateway()
     messages = [
-        {"role": "user", "content": "hello 1" + "a" * 800},
+        {"role": "user", "content": "chào bạn 1" + "a" * 800},
         {"role": "assistant", "content": "hi 1" + "b" * 800},
         {"role": "user", "content": "hello 2"},
         {"role": "assistant", "content": "hi 2"},
@@ -199,7 +265,7 @@ async def test_history_compression_redis():
                         compressed1 = await gateway.compress_history(tenant_id, messages, keep_recent=5)
                         
                         assert len(compressed1) == 6
-                        assert "Background summary" in compressed1[0]["content"]
+                        assert "Tóm tắt lịch sử" in compressed1[0]["content"]
                         
                         # Wait briefly for background task to execute
                         await asyncio.sleep(0.1)
@@ -251,10 +317,10 @@ async def test_dynamic_cheapest_model_resolution():
     # 1. Test LiteLLM registry parsing and dynamic caching for google
     model_google = gateway._get_cheapest_model_from_registry("google")
     assert model_google is not None
-    assert "google" in gateway._cheapest_models_cache
+    assert "google:chat" in gateway._cheapest_models_cache
     
     # 2. Test cache hit path (must return immediately from cache dict)
-    gateway._cheapest_models_cache["google"] = "mocked-cheapest-gemini"
+    gateway._cheapest_models_cache["google:chat"] = "mocked-cheapest-gemini"
     model_cached = gateway._get_cheapest_model_from_registry("google")
     assert model_cached == "mocked-cheapest-gemini"
     
@@ -379,13 +445,13 @@ async def test_auto_create_routes_on_first_api_key():
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     
-    # Check if 5 routes were automatically created
+    # Check if 7 routes were automatically created
     async with SessionLocal() as db:
         res = await db.execute(
             select(LLMRouteConfig).where(LLMRouteConfig.tenant_id == uuid.UUID(tenant_id))
         )
         routes = res.scalars().all()
-        assert len(routes) == 5
+        assert len(routes) == 7
         use_cases = [r.use_case for r in routes]
         assert "chatbot" in use_cases
         assert "content_generation" in use_cases
@@ -441,7 +507,7 @@ async def test_auto_create_routes_on_first_api_key_sync():
             select(LLMRouteConfig).where(LLMRouteConfig.tenant_id == tenant_uuid)
         )
         routes = res.scalars().all()
-        assert len(routes) == 5
+        assert len(routes) == 7
         
         # Cleanup
         await db.execute(APIKeyConfig.__table__.delete().where(APIKeyConfig.tenant_id == tenant_uuid))
@@ -472,4 +538,352 @@ async def test_dynamic_models_endpoint():
     assert "llama3" in model_ids
 
 
+# ===========================================================================
+# NEW TESTS — Covering FIX-1A, FIX-1B, FIX-2, FIX-6
+# ===========================================================================
 
+@pytest.mark.asyncio
+async def test_compress_history_gemini_fix_leading_tool_call():
+    """
+    FIX-1A (CRITICAL): Verifies that after compression, the first non-system message
+    is NEVER 'assistant+tool_calls'. This prevents Gemini INVALID_ARGUMENT 400.
+
+    History (10 messages, keep_recent=5):
+      [0] user: long
+      [1] assistant: long
+      [2] user
+      [3] assistant
+      [4] user: "invoke tool please"       <- PASS 2 must include this
+      [5] assistant: tool_calls=[call_X]   <- natural split_index=5 -> INVALID
+      [6] tool: result
+      [7] assistant: final answer
+      [8] user
+      [9] assistant
+    """
+    gateway = LLMGateway()
+    messages = [
+        {"role": "user", "content": "question A" + "a" * 800},
+        {"role": "assistant", "content": "answer A" + "b" * 800},
+        {"role": "user", "content": "question B"},
+        {"role": "assistant", "content": "answer B"},
+        {"role": "user", "content": "invoke tool please"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_X", "type": "function", "function": {"name": "kb_search", "arguments": "{}"}}],
+            "content": None,
+        },
+        {"role": "tool", "tool_call_id": "call_X", "name": "kb_search", "content": "search result content"},
+        {"role": "assistant", "content": "Based on the results, here is the answer."},
+        {"role": "user", "content": "follow up question"},
+        {"role": "assistant", "content": "Sure, follow-up answer."},
+    ]
+
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history(
+            "d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5
+        )
+
+    assert compressed[0]["role"] == "system", "First message must be system summary"
+    first_non_system = next(m for m in compressed if m["role"] != "system")
+    is_invalid_assistant_toolcall = (
+        first_non_system.get("role") == "assistant" and bool(first_non_system.get("tool_calls"))
+    )
+    assert not is_invalid_assistant_toolcall, (
+        f"FIX-1A FAILED: first non-system = assistant+tool_calls. "
+        f"Would cause Gemini 400 INVALID_ARGUMENT. msg={first_non_system}"
+    )
+    assert first_non_system["role"] == "user"
+    assert first_non_system["content"] == "invoke tool please"
+
+
+@pytest.mark.asyncio
+async def test_compress_history_gemini_fix_no_tool_calls_regression():
+    """
+    FIX-1A regression: When history has NO tool_calls in assistant messages,
+    PASS 2 is a no-op. Compression still works: 1 summary + 5 recent messages.
+    Note: A plain 'assistant' message (without tool_calls) at the start of 'recent'
+    is perfectly valid for Gemini — only 'assistant+tool_calls' is the problem.
+    """
+    gateway = LLMGateway()
+    messages = [
+        {"role": "user", "content": "hello " + "a" * 800},
+        {"role": "assistant", "content": "hi " + "b" * 800},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "q3"},
+        {"role": "assistant", "content": "a3"},
+        {"role": "user", "content": "q4"},
+        {"role": "assistant", "content": "a4"},
+        {"role": "user", "content": "q5"},
+        {"role": "assistant", "content": "a5"},
+    ]
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history(
+            "d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5
+        )
+    assert len(compressed) == 6
+    assert compressed[0]["role"] == "system"
+    # First chat message after summary: plain 'assistant' is valid for Gemini (no tool_calls)
+    first_non_system = next(m for m in compressed if m["role"] != "system")
+    assert not (first_non_system.get("role") == "assistant" and bool(first_non_system.get("tool_calls"))), (
+        "PASS 2 should NOT block a plain assistant message (without tool_calls)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compress_history_summary_excludes_tool_and_system_roles():
+    """
+    FIX-2: The baseline summary text must only include user/assistant messages.
+    Tool messages (raw JSON) and system messages must be excluded.
+    """
+    gateway = LLMGateway()
+    tool_json = '{"results": [{"url": "http://solar.com", "content": "' + "x" * 500 + '"}]}'
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "search for solar panels" + "a" * 800},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}],
+            "content": None,
+        },
+        {"role": "tool", "tool_call_id": "tc1", "name": "web_search", "content": tool_json},
+        {"role": "assistant", "content": "Here is what I found."},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "q3"},
+        {"role": "assistant", "content": "a3"},
+        {"role": "user", "content": "q4"},
+        {"role": "assistant", "content": "a4"},
+        {"role": "user", "content": "q5"},
+        {"role": "assistant", "content": "a5"},
+    ]
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history(
+            "d3b07384-d113-4ec2-a5d8-7e30d1774e1d", messages, keep_recent=5
+        )
+
+    # Find the summary system message (different from the original system prompt)
+    summary_msgs = [m for m in compressed if m["role"] == "system" and (
+        "summary" in m["content"].lower() or "tóm tắt" in m["content"].lower()
+    )]
+    # If compression occurred, there should be a summary message
+    if summary_msgs:
+        summary_content = summary_msgs[0]["content"]
+        assert '{"results"' not in summary_content, "FIX-2 FAILED: raw tool JSON found in summary"
+        assert "- tool:" not in summary_content, "FIX-2 FAILED: 'tool' role found in summary"
+
+
+@pytest.mark.asyncio
+async def test_chatbot_complete_injects_repetition_penalties():
+    """
+    FIX-6: complete(use_case='chatbot') must pass frequency_penalty=0.3
+    and presence_penalty=0.1 to litellm.acompletion. Other use cases must not.
+    """
+    gateway = LLMGateway()
+    captured = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = "OK"
+        resp.choices[0].message.tool_calls = None
+        resp.usage.prompt_tokens = 10
+        resp.usage.completion_tokens = 5
+        resp.cache_hit = False
+        return resp
+
+    msgs = [{"role": "user", "content": "Hello"}]
+
+    with patch("gateway.router.acompletion", side_effect=fake_acompletion):
+        with patch.object(gateway, "get_routing", return_value={
+            "primary_model": "gpt-4o-mini", "fallback_model": "gpt-4o-mini",
+            "provider": "openai", "fallback_provider": "openai",
+            "temperature": 0.7, "max_tokens": 500,
+        }):
+            with patch.object(gateway, "compress_history", return_value=msgs):
+                with patch.object(gateway, "get_provider_credentials", return_value={"api_key": "sk-x"}):
+                    with patch.object(gateway, "resolve_active_default_model", side_effect=lambda t, p, m: m):
+                        await gateway.complete("tenant", "chatbot", msgs)
+
+    assert captured.get("frequency_penalty") == 0.3, "FIX-6: frequency_penalty must be 0.3 for chatbot"
+    assert captured.get("presence_penalty") == 0.1, "FIX-6: presence_penalty must be 0.1 for chatbot"
+
+
+@pytest.mark.asyncio
+async def test_non_chatbot_complete_no_repetition_penalties():
+    """FIX-6 negative: summarization/content_generation must NOT have repetition penalties."""
+    gateway = LLMGateway()
+    captured = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = "Done"
+        resp.choices[0].message.tool_calls = None
+        resp.usage.prompt_tokens = 10
+        resp.usage.completion_tokens = 5
+        resp.cache_hit = False
+        return resp
+
+    msgs = [{"role": "user", "content": "Summarize this."}]
+
+    with patch("gateway.router.acompletion", side_effect=fake_acompletion):
+        with patch.object(gateway, "get_routing", return_value={
+            "primary_model": "gpt-4o-mini", "fallback_model": "gpt-4o-mini",
+            "provider": "openai", "fallback_provider": "openai",
+            "temperature": 0.3, "max_tokens": 300,
+        }):
+            with patch.object(gateway, "get_provider_credentials", return_value={"api_key": "sk-x"}):
+                with patch.object(gateway, "resolve_active_default_model", side_effect=lambda t, p, m: m):
+                    await gateway.complete("tenant", "summarization", msgs)
+
+    assert "frequency_penalty" not in captured, "Non-chatbot must NOT have frequency_penalty"
+    assert "presence_penalty" not in captured, "Non-chatbot must NOT have presence_penalty"
+
+
+def test_modify_params_enabled_on_init():
+    """
+    FIX-1B: LLMGateway.__init__ must set litellm.modify_params = True.
+    This enables LiteLLM auto-sanitization of invalid message sequences.
+    """
+    import litellm as _litellm
+    _litellm.modify_params = False  # reset first
+    _ = LLMGateway()
+    assert _litellm.modify_params is True, (
+        "FIX-1B FAILED: litellm.modify_params must be True after LLMGateway()"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compress_history_only_system_messages():
+    """Edge case: All messages are system -> no chat_messages -> return as-is."""
+    gateway = LLMGateway()
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "system", "content": "Focus on solar energy topics."},
+    ]
+    compressed = await gateway.compress_history("test-tenant", messages, keep_recent=5)
+    assert len(compressed) == 2
+    assert all(m["role"] == "system" for m in compressed)
+
+
+@pytest.mark.asyncio
+async def test_compress_history_combined_passes_no_orphans():
+    """
+    FIX-1A + PASS 1 combined: Multiple tool rounds at boundary.
+    After compression, recent slice must have: no leading assistant+tool_calls,
+    and no orphaned tool results.
+    """
+    gateway = LLMGateway()
+    messages = [
+        {"role": "user", "content": "A" * 400},           # [0]
+        {"role": "assistant", "content": "B" * 400},       # [1]
+        {"role": "user", "content": "round 2"},            # [2]
+        {"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "s", "arguments": "{}"}}], "content": None},  # [3]
+        {"role": "tool", "tool_call_id": "c1", "name": "s", "content": "r1"},  # [4]
+        {"role": "assistant", "content": "ans2"},          # [5]
+        {"role": "user", "content": "round 3"},            # [6]
+        {"role": "assistant", "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "k", "arguments": "{}"}}], "content": None},  # [7]
+        {"role": "tool", "tool_call_id": "c2", "name": "k", "content": "r2"},  # [8]
+        {"role": "assistant", "content": "ans3"},          # [9]
+        {"role": "user", "content": "q10"},                # [10]
+        {"role": "assistant", "content": "a10"},           # [11]
+        {"role": "user", "content": "q11"},                # [12]
+        {"role": "assistant", "content": "a11"},           # [13]
+    ]
+    with patch("gateway.router.redis_client.get", return_value=None):
+        compressed = await gateway.compress_history("test-tenant", messages, keep_recent=6)
+
+    first_non_system = next(m for m in compressed if m["role"] != "system")
+    assert not (first_non_system.get("role") == "assistant" and bool(first_non_system.get("tool_calls"))), (
+        f"Combined test FAILED: first non-system is assistant+tool_calls: {first_non_system}"
+    )
+
+    # No orphaned tool results
+    tc_ids_in_slice = set()
+    for m in compressed:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                tc_ids_in_slice.add(tc.get("id"))
+    for m in compressed:
+        if m.get("role") == "tool":
+            assert m.get("tool_call_id") in tc_ids_in_slice, (
+                f"Orphaned tool message found: tool_call_id={m.get('tool_call_id')}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_active_verification_allows_new_and_custom_models():
+    gateway = LLMGateway()
+    tenant_id = "d3b07384-d113-4ec2-a5d8-7e30d1774e1d"
+    
+    # 1. Cohere new model with year suffix
+    resolved_cohere = gateway.resolve_active_default_model(tenant_id, "cohere", "command-a-plus-05-2026")
+    assert resolved_cohere == "command-a-plus-05-2026"
+    
+    # 2. OpenAI fine-tuned model
+    resolved_ft = gateway.resolve_active_default_model(tenant_id, "openai", "ft:gpt-4o-mini:solavie-v1")
+    assert resolved_ft == "ft:gpt-4o-mini:solavie-v1"
+
+
+@pytest.mark.asyncio
+async def test_cohere_cheapest_model_resolution():
+    gateway = LLMGateway()
+    gateway._cheapest_models_cache = {}
+    
+    cheapest = gateway._get_cheapest_model_from_registry("cohere")
+    assert cheapest is not None
+    assert cheapest != "cohere-default"
+    assert "command-r" in cheapest or "command-light" in cheapest or "command-a" in cheapest
+
+
+def test_provider_adapters_basic_sanitization():
+    from gateway.providers.factory import ProviderFactory
+
+    # 1. Cohere Adapter should remove 'name' field
+    cohere_adapter = ProviderFactory.get_adapter("cohere")
+    payload = {
+        "messages": [
+            {"role": "user", "content": "hello", "name": "user1"},
+            {"role": "tool", "tool_call_id": "123", "name": "search", "content": "result"}
+        ],
+        "temperature": 0.5
+    }
+    sanitized = cohere_adapter.sanitize_payload(payload)
+    for m in sanitized["messages"]:
+        assert "name" not in m
+    # Original payload must remain untouched (deep copy verification)
+    assert "name" in payload["messages"][0]
+
+    # 2. Perplexity Adapter should remove 'tools'
+    perp_adapter = ProviderFactory.get_adapter("perplexity")
+    payload_perp = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function"}]
+    }
+    sanitized_perp = perp_adapter.sanitize_payload(payload_perp)
+    assert "tools" not in sanitized_perp
+    assert "tools" in payload_perp
+
+    # 3. Mistral Adapter should clean None values in tools
+    mistral_adapter = ProviderFactory.get_adapter("mistral")
+    payload_mistral = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test",
+                    "description": None,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"arg": {"type": "string", "description": None}}
+                    }
+                }
+            }
+        ]
+    }
+    sanitized_mistral = mistral_adapter.sanitize_payload(payload_mistral)
+    assert "description" not in sanitized_mistral["tools"][0]["function"]
+    assert "description" not in sanitized_mistral["tools"][0]["function"]["parameters"]["properties"]["arg"]

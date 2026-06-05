@@ -17,7 +17,22 @@ class Settings(BaseSettings):
     
     # Encryption & Sync Configuration
     ENCRYPTION_SECRET_KEY: str | None = "solavie_super_secret_master_key_change_me_in_production"
-    TENANT_CONFIG_SERVICE_URL: str = "http://localhost:3006"
+    TENANT_CONFIG_SERVICE_URL: str = "http://tenant-config-service:3006"
+    
+    # External Service URLs
+    TAVILY_API_URL: str = "https://api.tavily.com/search"
+    JINA_READER_URL: str = "https://r.jina.ai"
+    SOCIAL_TRENDS_API_URL: str = "https://api.socialtrends.mock/trends"
+
+    # Internal Service URLs
+    KNOWLEDGE_BASE_SERVICE_URL: str = "http://knowledge-base:8004/api/v1"
+    MESSAGING_SERVICE_URL: str = "http://messaging:8002/api/v1"
+    ANALYTICS_SERVICE_URL: str = "http://analytics:8005/api/v1"
+    CRM_SERVICE_URL: str = "http://crm:8003/api/v1"
+    SCHEDULER_SERVICE_URL: str = "http://scheduler:8007/api/v1"
+    COMMENT_MANAGER_SERVICE_URL: str = "http://comment-manager:8008/api/v1"
+    NOTIFICATION_SERVICE_URL: str = "http://notification:8009/api/v1"
+    CONTENT_SERVICE_URL: str = "http://content:8010/api/v1"
     
     # CORS Configuration
     CORS_ALLOWED_ORIGINS: list[str] = ["http://localhost:8006", "http://localhost:3000"]

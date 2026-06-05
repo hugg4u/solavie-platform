@@ -14,6 +14,11 @@ from core.redis_client import redis_client
 logger = logging.getLogger("solavie.ai_core.api.configs")
 router = APIRouter()
 
+from pydantic import BaseModel, Field
+
+class ABTestConfigPayload(BaseModel):
+    ab_test_weight: float = Field(..., ge=0.0, le=1.0, description="Weight for this prompt template in A/B testing (0.0 to 1.0)")
+
 # Routes Config Endpoints
 @router.get("/configs/routes")
 async def list_routes(
@@ -175,7 +180,8 @@ async def create_prompt(
         tenant_id=tenant_uuid,
         name=payload.name,
         use_case=payload.use_case,
-        system_prompt=payload.system_prompt
+        system_prompt=payload.system_prompt,
+        ab_test_weight=payload.ab_test_weight or 0.0
     )
     db.add(prompt)
     await db.commit()
@@ -196,7 +202,30 @@ async def update_prompt(
     if not prompt:
         raise HTTPException(status_code=404, detail="Prompt not found")
         
-    prompt.system_prompt = payload.system_prompt
+    if payload.system_prompt is not None:
+        prompt.system_prompt = payload.system_prompt
+    if payload.ab_test_weight is not None:
+        prompt.ab_test_weight = payload.ab_test_weight
+        
     prompt.version += 1
     await db.commit()
+    return prompt
+
+@router.post("/prompts/{prompt_id}/ab-test")
+async def configure_ab_test(
+    prompt_id: str,
+    payload: ABTestConfigPayload,
+    db: AsyncSession = Depends(get_db)
+):
+    prompt_uuid = uuid.UUID(prompt_id)
+    result = await db.execute(
+        select(PromptTemplate).where(PromptTemplate.id == prompt_uuid)
+    )
+    prompt = result.scalar_one_or_none()
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+        
+    prompt.ab_test_weight = payload.ab_test_weight
+    await db.commit()
+    await db.refresh(prompt)
     return prompt

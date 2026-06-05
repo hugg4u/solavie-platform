@@ -65,26 +65,78 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
             call_kwargs["api_key"] = creds["api_key"]
         if creds.get("api_base"):
             call_kwargs["api_base"] = creds["api_base"]
-            
+        call_kwargs["stream_options"] = {"include_usage": True}
+
+        # Strategy Pattern: Use ProviderAdapter to clean up parameters dynamically
+        from gateway.providers.factory import ProviderFactory
+        adapter = ProviderFactory.get_adapter(route["provider"])
+        call_kwargs = adapter.sanitize_payload(call_kwargs)
+
         try:
+            prompt_tokens = 0
+            completion_tokens = 0
+            full_text = ""
+            cache_hit = False
+
             # Call LiteLLM async stream
             response = await litellm.acompletion(**call_kwargs)
             async for chunk in response:
-                delta = chunk.choices[0].delta.content or ""
+                delta = ""
+                if hasattr(chunk, "choices") and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta.content or ""
                 if delta:
+                    full_text += delta
                     yield ai_core_pb2.CompletionChunk(
                         text=delta,
                         is_final=False
                     )
+                # LiteLLM returns usage in chunks if include_usage is enabled
+                if hasattr(chunk, "usage") and chunk.usage:
+                    u = chunk.usage
+                    if isinstance(u, dict):
+                        prompt_tokens = u.get("prompt_tokens", 0) or prompt_tokens
+                        completion_tokens = u.get("completion_tokens", 0) or completion_tokens
+                    else:
+                        prompt_tokens = getattr(u, "prompt_tokens", 0) or prompt_tokens
+                        completion_tokens = getattr(u, "completion_tokens", 0) or completion_tokens
+
+            # If usage was not returned in stream, estimate it
+            if prompt_tokens == 0:
+                prompt_tokens = sum(len(m["content"]) for m in messages) // 4
+            if completion_tokens == 0:
+                completion_tokens = len(full_text) // 4
+
+            cost_usd = 0.0001
+            try:
+                cost_usd = litellm.completion_cost(
+                    completion_response={
+                        "model": model,
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens
+                        }
+                    }
+                )
+            except Exception as ce_err:
+                logger.warning(f"Error calculating completion cost in StreamComplete: {ce_err}")
+                try:
+                    pricing = getattr(litellm, "model_prices_and_context_window", {})
+                    model_pricing = pricing.get(model, {})
+                    input_cost = model_pricing.get("input_cost_per_token", 0.0)
+                    output_cost = model_pricing.get("output_cost_per_token", 0.0)
+                    cost_usd = (prompt_tokens * input_cost) + (completion_tokens * output_cost)
+                except Exception:
+                    pass
+
             # Final empty chunk carrying stats
             yield ai_core_pb2.CompletionChunk(
                 text="",
                 is_final=True,
                 usage=ai_core_pb2.TokenUsage(
-                    prompt_tokens=100,
-                    completion_tokens=50,
-                    cost_usd=0.0001,
-                    cache_hit=False
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cost_usd=cost_usd,
+                    cache_hit=cache_hit
                 )
             )
         except Exception as e:
@@ -167,7 +219,12 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
             call_kwargs["api_key"] = creds["api_key"]
         if creds.get("api_base"):
             call_kwargs["api_base"] = creds["api_base"]
-            
+
+        # Strategy Pattern: Use ProviderAdapter to clean up parameters dynamically
+        from gateway.providers.factory import ProviderFactory
+        adapter = ProviderFactory.get_adapter(provider)
+        call_kwargs = adapter.sanitize_payload(call_kwargs)
+
         try:
             response = await litellm.acompletion(**call_kwargs)
             summary = response.choices[0].message.content or ""

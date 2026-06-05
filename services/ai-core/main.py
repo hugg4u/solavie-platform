@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from core.config import settings
 from db.database import engine, Base
 from core.sync_listener import sync_listener_loop
+from core.dynamic_cost import dynamic_cost_sync_loop
 from api.v1.router import api_router
 
 logger = logging.getLogger("solavie.ai_core")
@@ -62,12 +63,34 @@ async def startup_event():
     # 2. Start config sync background listener
     asyncio.create_task(sync_listener_loop())
 
-    # 3. Start gRPC server on port 50052
+    # 3. Start dynamic cost synchronization loop (AC 2.8)
+    asyncio.create_task(dynamic_cost_sync_loop())
+
+    # 4. Start gRPC server on port 50052
     try:
         from grpc_server.server import serve_grpc
         asyncio.create_task(serve_grpc())
     except ImportError:
         logger.warning("gRPC server not started: grpc_server module or proto stubs missing.")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Application shutdown initiated.")
+    
+    # Explicitly close Redis connection to avoid 'Event loop is closed' RuntimeError
+    try:
+        from core.redis_client import redis_client
+        await redis_client.aclose()
+        logger.info("Redis connection closed successfully.")
+    except Exception as e:
+        logger.error(f"Error closing Redis client on shutdown: {e}")
+        
+    try:
+        from grpc_server.server import stop_grpc
+        await stop_grpc()
+    except Exception as e:
+        logger.error(f"Error stopping gRPC server on shutdown: {e}")
 
 
 # ── System endpoints ──

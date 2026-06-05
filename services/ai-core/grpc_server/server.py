@@ -12,8 +12,13 @@ from grpc_server.servicer import AICoreServicer
 logger = logging.getLogger("solavie.ai_core.grpc.server")
 
 
+# Global reference to stop server on reload/shutdown
+server = None
+
+
 async def serve_grpc() -> None:
     """Launch the async gRPC server on port 50052."""
+    global server
     try:
         from proto import ai_core_pb2_grpc
     except ImportError:
@@ -33,3 +38,12 @@ async def serve_grpc() -> None:
     logger.info(f"Starting gRPC server on {listen_addr}")
     await server.start()
     await server.wait_for_termination()
+
+
+async def stop_grpc() -> None:
+    """Stop the running gRPC server cleanly."""
+    global server
+    if server:
+        logger.info("Stopping gRPC server...")
+        await server.stop(grace=1.0)
+        logger.info("gRPC server stopped.")

@@ -30,6 +30,8 @@ class PromptTemplateCreate(BaseModel):
     name: str = Field(..., description="Name of the prompt template")
     use_case: str = Field(..., description="Associated use case")
     system_prompt: str = Field(..., description="The system prompt content")
+    ab_test_weight: Optional[float] = Field(0.0, description="Weight for A/B testing (0.0 to 1.0)")
 
 class PromptTemplateUpdate(BaseModel):
-    system_prompt: str = Field(..., description="The new system prompt content")
+    system_prompt: Optional[str] = Field(None, description="The new system prompt content")
+    ab_test_weight: Optional[float] = Field(None, description="Weight for A/B testing (0.0 to 1.0)")

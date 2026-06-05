@@ -131,9 +131,13 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - WATCHFILES_FORCE_POLLING=true
     ports:
       - "8002:8000"
       - "50051:50051"
+    volumes:
+      - ./services/ai-core:/app
+    command: sh -c "python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/ai_core.proto && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       postgres-keycloak:
         condition: service_healthy
