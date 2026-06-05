@@ -25,6 +25,7 @@ from core.metrics import (
     ai_core_agent_iterations,
     ai_core_token_budget_exceeded_total,
 )
+from core.utils import detect_session_language
 
 logger = logging.getLogger("solavie.ai_core.agent.orchestrator")
 
@@ -107,6 +108,7 @@ class AgentOrchestrator:
         tenant_id = state["tenant_id"]
         use_case = state["use_case"]
         messages = state["messages"]
+        lang = detect_session_language(messages)
         iteration_count = state["iteration_count"]
         trace_id = state.get("trace_id", "unknown")
 
@@ -121,8 +123,12 @@ class AgentOrchestrator:
                     "iteration_count": iteration_count
                 }
             )
+            if lang == "vi":
+                resp = "Xin lỗi, tôi đã xử lý nhiều bước nhưng chưa tìm được câu trả lời phù hợp."
+            else:
+                resp = "Sorry, I have processed multiple steps but could not find a suitable answer."
             return {
-                "final_response": "Xin lỗi, tôi đã xử lý nhiều bước nhưng chưa tìm được câu trả lời phù hợp.",
+                "final_response": resp,
                 "confidence": 0.0
             }
 
@@ -145,11 +151,18 @@ class AgentOrchestrator:
                 "Request blocked by topic guardrail",
                 extra={"event": "topic_blocked", "tenant_id": tenant_id, "trace_id": trace_id}
             )
-            return {
-                "final_response": (
+            if lang == "vi":
+                resp = (
                     "Xin lỗi, chủ đề bạn hỏi nằm ngoài phạm vi tư vấn của tôi. "
                     "Tôi chỉ có thể hỗ trợ các vấn đề liên quan đến sản phẩm và dịch vụ của chúng tôi."
-                ),
+                )
+            else:
+                resp = (
+                    "Sorry, the topic you asked about is outside my scope of assistance. "
+                    "I can only support queries related to our products and services."
+                )
+            return {
+                "final_response": resp,
                 "confidence": 0.0
             }
 
@@ -210,9 +223,57 @@ class AgentOrchestrator:
                 )
                 nli_status = "pass" if nli_score >= 0.80 else "fail"
 
+                # Retry logic up to 2 times (AC 10.9 retry requirement)
+                nli_retry_count = 0
+                current_retry_messages = list(masked_messages)
+                while nli_score < 0.80 and nli_retry_count < 2:
+                    nli_retry_count += 1
+                    logger.info(
+                        f"NLI validation failed (score: {nli_score}). Retrying generation (attempt {nli_retry_count}/2)...",
+                        extra={"tenant_id": tenant_id, "trace_id": trace_id}
+                    )
+                    
+                    current_retry_messages.extend([
+                        {"role": "assistant", "content": raw_response},
+                        {"role": "user", "content": "⚠️ Your previous response contained statements not grounded in the provided context. Please generate a new response relying strictly ONLY on the provided context/tool documents. Do not add any outside information. Respond in the same language as the user's query."}
+                    ])
+                    
+                    llm_result = await self.gateway.complete(
+                        tenant_id=tenant_id,
+                        use_case=use_case,
+                        messages=current_retry_messages,
+                        temperature=0.0,
+                        tools=tools if tools else None
+                    )
+                    
+                    p_tok = llm_result.get("prompt_tokens", 0)
+                    c_tok = llm_result.get("completion_tokens", 0)
+                    update["total_tokens_used"] += p_tok + c_tok
+                    update["prompt_tokens"] += p_tok
+                    update["completion_tokens"] += c_tok
+                    update["cost_usd"] += llm_result.get("cost_usd", 0.0)
+                    update["latency_ms"] += llm_result.get("latency_ms", 0)
+                    
+                    if llm_result.get("tool_calls"):
+                        assistant_msg["content"] = llm_result.get("content")
+                        assistant_msg["tool_calls"] = llm_result.get("tool_calls")
+                        update["model_used"] = llm_result.get("model_used", "routed")
+                        update["provider"] = llm_result.get("provider", "openai")
+                        break
+                        
+                    raw_response = llm_result.get("content") or ""
+                    nli_score = await self.guardrail.validate_nli_grounding(
+                        raw_response,
+                        context_docs,
+                        tenant_id=tenant_id,
+                        use_case=use_case
+                    )
+                    nli_status = "pass" if nli_score >= 0.80 else "fail"
+                    assistant_msg["content"] = raw_response
+
                 if nli_score < 0.80:
                     logger.warning(
-                        "NLI grounding below threshold — escalating to human agent",
+                        "NLI grounding below threshold after retries — escalating to human agent",
                         extra={
                             "event": "nli_grounding_fail",
                             "tenant_id": tenant_id,
@@ -222,10 +283,17 @@ class AgentOrchestrator:
                             "agent_iterations": iteration_count
                         }
                     )
-                    raw_response = (
-                        "Tôi không tìm thấy thông tin chính xác trong hệ thống để trả lời câu hỏi của bạn. "
-                        "Đang chuyển kết nối sang nhân viên tư vấn con người hỗ trợ ngay..."
-                    )
+                    if lang == "vi":
+                        raw_response = (
+                            "Tôi không tìm thấy thông tin chính xác trong hệ thống để trả lời câu hỏi của bạn. "
+                            "Đang chuyển kết nối sang nhân viên tư vấn con người hỗ trợ ngay..."
+                        )
+                    else:
+                        raw_response = (
+                            "I could not find accurate information in the system to answer your question. "
+                            "Transferring you to a human support agent..."
+                        )
+                    assistant_msg["content"] = raw_response
 
             # Output Moderation + PII Restore (AC 10.10 + AC 10.7)
             final_response = await self.guardrail.process_output(
@@ -287,19 +355,78 @@ class AgentOrchestrator:
             # ── Anti-loop guardrail (AC 10.2) ──
             recent_tools = state["tools_called"] + new_tools_called
             consecutive_limit_reached = False
+            request_limit_exceeded = False
+            confirmation_required = False
+            
             if tool_name == "web_search":
-                if len(recent_tools) >= 2 and all(t == "web_search" for t in recent_tools[-2:]):
+                # Max 3 web_search calls per request (AC 9.4)
+                web_search_count = sum(1 for t in recent_tools if t == "web_search")
+                if web_search_count >= 3:
+                    request_limit_exceeded = True
+                elif len(recent_tools) >= 2 and all(t == "web_search" for t in recent_tools[-2:]):
                     consecutive_limit_reached = True
             elif tool_name == "knowledge_base_search":
                 if len(recent_tools) >= 3 and all(t == "knowledge_base_search" for t in recent_tools[-3:]):
                     consecutive_limit_reached = True
+            elif tool_name in ["create_schedule", "hide_comment", "generate_content"]:
+                # Check history to see if we already asked for confirmation and user confirmed (AC 10.1)
+                confirmed = False
+                asked_for_confirm = False
+                for msg in reversed(state["messages"][:-1]):
+                    content = msg.get("content") or ""
+                    if msg.get("role") == "assistant" and ("Tôi cần bạn xác nhận" in content or "I need your confirmation" in content):
+                        asked_for_confirm = True
+                        break
+                
+                if asked_for_confirm:
+                    last_user_text = next(
+                        (m.get("content", "").lower().strip(" .!?") for m in reversed(state["messages"]) if m.get("role") == "user"),
+                        ""
+                    )
+                    if last_user_text in ["có", "đồng ý", "yes", "confirm", "ok", "xác nhận", "chấp nhận", "co", "dong y", "xac nhan"]:
+                        confirmed = True
+                
+                if not confirmed:
+                    confirmation_required = True
 
-            if consecutive_limit_reached:
+            if request_limit_exceeded:
+                observation = f"Error: Web search limit reached — maximum 3 web_search calls allowed per request."
+                logger.warning(
+                    "Web search request limit reached",
+                    extra={
+                        "event": "web_search_request_limit_reached",
+                        "tenant_id": tenant_id,
+                        "trace_id": trace_id,
+                        "tool_name": tool_name
+                    }
+                )
+            elif consecutive_limit_reached:
                 observation = f"Error: Anti-loop protection triggered — too many consecutive calls to '{tool_name}'."
                 logger.warning(
                     "Anti-loop triggered",
                     extra={
                         "event": "anti_loop_triggered",
+                        "tenant_id": tenant_id,
+                        "trace_id": trace_id,
+                        "tool_name": tool_name
+                    }
+                )
+            elif confirmation_required:
+                lang = detect_session_language(state["messages"])
+                if lang == "vi":
+                    observation = (
+                        f"Error: Hành động '{tool_name}' yêu cầu xác nhận từ con người. "
+                        f"Vui lòng thông báo cho người dùng: 'Tôi cần bạn xác nhận để thực hiện hành động: {tool_name} (Tham số: {raw_args}). Hãy trả lời \"Đồng ý\" hoặc \"Có\" để thực hiện.'"
+                    )
+                else:
+                    observation = (
+                        f"Error: Action '{tool_name}' requires human confirmation. "
+                        f"Please notify the user: 'I need your confirmation to perform the action: {tool_name} (Arguments: {raw_args}). Please reply \"Yes\" or \"Confirm\" to proceed.'"
+                    )
+                logger.warning(
+                    "Human confirmation required for destructive tool",
+                    extra={
+                        "event": "confirmation_required",
                         "tenant_id": tenant_id,
                         "trace_id": trace_id,
                         "tool_name": tool_name
@@ -485,7 +612,7 @@ class AgentOrchestrator:
             "cache_hit": False,
             "cost_usd": 0.0,
             "model_used": "routed",
-            "provider": "openai",
+            "provider": "unknown",
             "pii_map": {},
             "trace_id": trace_id,
             "nli_grounding_score": 1.0,

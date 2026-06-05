@@ -47,6 +47,16 @@ USE_CASE_PARAMS = {
         "temperature": 0.0,
         "max_tokens": 50,
         "default_provider": "openai"
+    },
+    "utility": {
+        "temperature": 0.3,
+        "max_tokens": 1000,
+        "default_provider": "openai"
+    },
+    "embedding": {
+        "temperature": 0.0,
+        "max_tokens": 0,
+        "default_provider": "openai"
     }
 }
 

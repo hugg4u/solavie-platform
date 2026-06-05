@@ -1,26 +1,134 @@
 {
   "provider_priority": [
-    "local", "deepseek", "google", "openai", "groq", "together_ai", 
-    "openrouter", "qwen", "anthropic", "cohere", "perplexity", "mistral"
+    "local",
+    "deepseek",
+    "google",
+    "openai",
+    "groq",
+    "together_ai",
+    "openrouter",
+    "qwen",
+    "anthropic",
+    "cohere",
+    "perplexity",
+    "mistral",
+    "azure",
+    "xai"
   ],
   "aliases": {
     "gemini": "google",
     "vertex_ai": "google",
     "together": "together_ai",
-    "ollama": "local"
+    "ollama": "local",
+    "azure_openai": "azure"
   },
   "providers": {
-    "openai": { "keywords": ["gpt", "openai"], "fail_max": 5, "reset_timeout": 60.0 },
-    "anthropic": { "keywords": ["claude", "anthropic"], "fail_max": 5, "reset_timeout": 60.0 },
-    "google": { "keywords": ["gemini", "google"], "fail_max": 5, "reset_timeout": 60.0 },
-    "deepseek": { "keywords": ["deepseek"], "fail_max": 3, "reset_timeout": 30.0 },
-    "groq": { "keywords": ["groq"], "fail_max": 5, "reset_timeout": 30.0 },
-    "mistral": { "keywords": ["mistral", "mixtral"], "fail_max": 5, "reset_timeout": 30.0 },
-    "cohere": { "keywords": ["command", "cohere"], "fail_max": 5, "reset_timeout": 60.0 },
-    "perplexity": { "keywords": ["sonar", "perplexity"], "fail_max": 5, "reset_timeout": 60.0 },
-    "together_ai": { "keywords": ["together"], "fail_max": 5, "reset_timeout": 60.0 },
-    "openrouter": { "keywords": ["openrouter"], "fail_max": 5, "reset_timeout": 60.0 },
-    "qwen": { "keywords": ["qwen"], "fail_max": 5, "reset_timeout": 60.0 },
-    "local": { "keywords": ["llama", "qwen2.5-coder", "ollama"], "fail_max": 5, "reset_timeout": 60.0 }
+    "openai": {
+      "keywords": [
+        "gpt",
+        "openai"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "anthropic": {
+      "keywords": [
+        "claude",
+        "anthropic"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "google": {
+      "keywords": [
+        "gemini",
+        "google"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "deepseek": {
+      "keywords": [
+        "deepseek"
+      ],
+      "fail_max": 3,
+      "reset_timeout": 30.0
+    },
+    "groq": {
+      "keywords": [
+        "groq"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 30.0
+    },
+    "mistral": {
+      "keywords": [
+        "mistral",
+        "mixtral"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 30.0
+    },
+    "cohere": {
+      "keywords": [
+        "command",
+        "cohere"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "perplexity": {
+      "keywords": [
+        "sonar",
+        "perplexity"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "together_ai": {
+      "keywords": [
+        "together"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "openrouter": {
+      "keywords": [
+        "openrouter"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "qwen": {
+      "keywords": [
+        "qwen"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "local": {
+      "keywords": [
+        "llama",
+        "qwen2.5-coder",
+        "ollama"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "azure": {
+      "keywords": [
+        "azure"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 60.0
+    },
+    "xai": {
+      "keywords": [
+        "grok",
+        "xai"
+      ],
+      "fail_max": 5,
+      "reset_timeout": 30.0
+    }
   }
 }

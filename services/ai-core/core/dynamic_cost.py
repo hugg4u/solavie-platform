@@ -71,7 +71,7 @@ async def sync_dynamic_cost_registry() -> None:
     # 3. If we loaded pricing data, apply it to LiteLLM
     if pricing_data:
         try:
-            litellm.set_model_cost(pricing_data)
+            litellm.model_cost = pricing_data
         except Exception as e:
             logger.error(f"Failed to load pricing data into LiteLLM registry: {e}")
 
@@ -93,8 +93,10 @@ async def sync_system_default_configs(db: AsyncSession) -> None:
 
     # Map to hold list of chat models and their cost per provider: provider -> [(model_name, cost)]
     provider_chat_models = {p: [] for p in providers}
+    # Map to hold list of embedding models and their cost per provider
+    provider_embedding_models = {p: [] for p in providers}
 
-    # 1. Scan LiteLLM registry to collect all chat models with valid input costs
+    # 1. Scan LiteLLM registry to collect all chat and embedding models with valid input costs
     for model_name, info in pricing_registry.items():
         if not isinstance(info, dict):
             continue
@@ -108,40 +110,71 @@ async def sync_system_default_configs(db: AsyncSession) -> None:
             matched_provider = "local"
         elif model_provider == "gemini" and "google" in provider_chat_models:
             matched_provider = "google"
+        elif model_provider == "cohere_chat" and "cohere" in provider_chat_models:
+            matched_provider = "cohere"
 
         if not matched_provider:
             continue
         
-        # We only care about chat models
+        # We collect chat models
         if info.get("mode") == "chat":
             input_cost = info.get("input_cost_per_token")
             # Filter out models with no cost info or negative cost
             if input_cost is not None and input_cost > 0:
                 provider_chat_models[matched_provider].append((model_name, input_cost))
+        # We collect embedding models
+        elif info.get("mode") == "embedding":
+            input_cost = info.get("input_cost_per_token")
+            if input_cost is not None and input_cost > 0:
+                provider_embedding_models[matched_provider].append((model_name, input_cost))
 
     # 2. For each provider, determine primary (cheapest) and fallback (second cheapest or same)
     resolved_defaults = {}
+    resolved_embedding_defaults = {}
+    
     for provider in providers:
+        # Chat defaults
         models_list = provider_chat_models[provider]
         if models_list:
-            # Sort by input cost ascending
             models_list.sort(key=lambda x: x[1])
             cheapest = models_list[0][0]
             fallback = models_list[1][0] if len(models_list) > 1 else cheapest
             resolved_defaults[provider] = {"primary": cheapest, "fallback": fallback}
-            logger.debug(f"Resolved provider '{provider}': primary={cheapest}, fallback={fallback}")
+            logger.debug(f"Resolved provider '{provider}' chat: primary={cheapest}, fallback={fallback}")
         else:
-            # Fallback to dynamic bootstrap string naming if registry scanning returns nothing
             cheapest_fallback = f"{provider}-default"
             resolved_defaults[provider] = {"primary": cheapest_fallback, "fallback": cheapest_fallback}
             logger.warning(f"No chat models found in registry for provider '{provider}'. Using dynamic fallback model naming.")
 
-    # 3. Synchronize database records for each provider and use case
-    for provider, models in resolved_defaults.items():
-        primary = models["primary"]
-        fallback = models["fallback"]
+        # Embedding defaults
+        embed_list = provider_embedding_models[provider]
+        if embed_list:
+            embed_list.sort(key=lambda x: x[1])
+            cheapest_embed = embed_list[0][0]
+            fallback_embed = embed_list[1][0] if len(embed_list) > 1 else cheapest_embed
+            resolved_embedding_defaults[provider] = {"primary": cheapest_embed, "fallback": fallback_embed}
+            logger.debug(f"Resolved provider '{provider}' embedding: primary={cheapest_embed}, fallback={fallback_embed}")
+        else:
+            typical_embeddings = {
+                "openai": "text-embedding-3-small",
+                "google": "text-embedding-004",
+                "cohere": "embed-english-v3.0",
+                "local": "nomic-embed-text"
+            }
+            cheapest_embed = typical_embeddings.get(provider, f"{provider}-embedding-default")
+            resolved_embedding_defaults[provider] = {"primary": cheapest_embed, "fallback": cheapest_embed}
+            logger.warning(f"No embedding models found in registry for provider '{provider}'. Using static fallback: {cheapest_embed}")
 
+    # 3. Synchronize database records for each provider and use case
+    for provider in providers:
         for use_case, params in USE_CASE_PARAMS.items():
+            if use_case == "embedding":
+                primary = resolved_embedding_defaults[provider]["primary"]
+                fallback = resolved_embedding_defaults[provider]["fallback"]
+            else:
+                primary = resolved_defaults[provider]["primary"]
+                fallback = resolved_defaults[provider]["fallback"]
+
             # Check if record exists
             stmt = select(SystemDefaultRouteConfig).where(
                 SystemDefaultRouteConfig.provider == provider,

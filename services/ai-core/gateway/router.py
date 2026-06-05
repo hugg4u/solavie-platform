@@ -11,113 +11,16 @@ import litellm
 from litellm import acompletion, completion_cost
 from sqlalchemy import select
 
+from gateway.providers.factory import ProviderFactory
 from core.config import settings
 from core.crypto import decrypt_key
 from core.circuit_breaker import call_async
 from core.redis_client import redis_client
 from db.database import SessionLocal
 from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig
+from core.utils import is_vietnamese
 
 logger = logging.getLogger(__name__)
-
-def sanitize_mistral_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Clean Mistral tools schema by recursively removing None values or empty dicts."""
-    if not tools:
-        return tools
-    import copy
-    sanitized = copy.deepcopy(tools)
-    def clean_dict(d):
-        if not isinstance(d, dict):
-            return d
-        cleaned = {}
-        for k, v in d.items():
-            if v is None:
-                continue
-            if isinstance(v, dict):
-                cleaned[k] = clean_dict(v)
-            elif isinstance(v, list):
-                cleaned[k] = [clean_dict(item) if isinstance(item, dict) else item for item in v]
-            else:
-                cleaned[k] = v
-        return cleaned
-    return [clean_dict(t) for t in sanitized]
-
-def apply_anthropic_caching(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """AC 14.1: Inject ephemeral cache_control at static breakpoints (System Prompt, RAG Context)."""
-    import copy
-    new_msgs = copy.deepcopy(messages)
-    system_msgs = [m for m in new_msgs if m.get("role") == "system"]
-    if system_msgs:
-        system_msgs[-1]["cache_control"] = {"type": "ephemeral"}
-    context_msgs = [m for m in new_msgs if m.get("role") == "context"]
-    if context_msgs:
-        context_msgs[-1]["cache_control"] = {"type": "ephemeral"}
-    return new_msgs
-
-def apply_openai_caching(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    AC 14.1 — OpenAI Prompt Caching:
-    OpenAI (gpt-4o, gpt-4o-mini, o1, o3) automatically caches prompts > 1024 tokens
-    using a 128-token granularity suffix. No special headers required.
-    We set extra_headers to signal caching readiness and ensure system prompt
-    is placed first (static prefix) to maximize cache hit rate.
-    See: https://platform.openai.com/docs/guides/prompt-caching
-    """
-    import copy
-    cached = copy.deepcopy(kwargs)
-    messages = cached.get("messages", [])
-
-    # Reorder: ensure system message is first (acts as cached prefix)
-    system_msgs = [m for m in messages if m.get("role") == "system"]
-    non_system = [m for m in messages if m.get("role") != "system"]
-    if system_msgs:
-        cached["messages"] = system_msgs + non_system
-
-    # Signal OpenAI caching readiness (no-op if not supported, but harmless)
-    cached.setdefault("extra_headers", {})
-    cached["extra_headers"]["X-Cache-Hint"] = "prompt-caching-enabled"
-    return cached
-
-def build_gemini_context_cache_params(
-    token_count: int,
-    extra_kwargs: Dict[str, Any],
-    ttl_seconds: int = 300
-) -> Dict[str, Any]:
-    """
-    AC 14.2 — Gemini Context Caching:
-    For large contexts (> 32k tokens), inject context_cache_ttl_seconds via
-    LiteLLM extra_body to activate Gemini's cached content feature.
-    Reduces cost by ~75% for repeated large-context requests.
-    Ref: https://ai.google.dev/api/caching
-    """
-    GEMINI_CONTEXT_CACHE_THRESHOLD = 32_000  # tokens
-    if token_count > GEMINI_CONTEXT_CACHE_THRESHOLD:
-        logger.info(
-            f"Gemini context caching activated: {token_count} tokens > {GEMINI_CONTEXT_CACHE_THRESHOLD} threshold, TTL={ttl_seconds}s"
-        )
-        extra_kwargs.setdefault("extra_body", {})
-        extra_kwargs["extra_body"]["cachedContent"] = {
-            "ttl": f"{ttl_seconds}s"
-        }
-    return extra_kwargs
-
-def apply_mistral_eu_routing(creds: Dict[str, Any], call_kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    AC 14.6 — Mistral EU nodes routing:
-    If the tenant's api_base contains 'eu.' or 'europe', route to the EU node.
-    Otherwise, auto-detect if the model name contains 'eu' as a hint.
-    EU endpoint: https://api.mistral.ai (EU region via DNS, or custom)
-    """
-    MISTRAL_EU_ENDPOINT = "https://api.mistral.ai"  # EU-hosted by default for Mistral La Plateforme
-    existing_base = creds.get("api_base", "") or ""
-    if existing_base and ("eu." in existing_base.lower() or "europe" in existing_base.lower()):
-        # EU endpoint explicitly configured — use as-is
-        call_kwargs["api_base"] = existing_base
-        logger.debug(f"Mistral EU routing: using configured EU endpoint '{existing_base}'")
-    elif not existing_base:
-        # No custom endpoint — use Mistral's default (EU-hosted) API
-        call_kwargs["api_base"] = MISTRAL_EU_ENDPOINT
-    return call_kwargs
 
 from core.providers import (
     PROVIDER_PRIORITY,
@@ -132,29 +35,57 @@ DEFAULT_MODEL_ROUTING = {}
 
 def init_default_model_routing():
     global DEFAULT_MODEL_ROUTING
-    # Find cheapest chat model in LiteLLM registry for each default provider
+    
+    # Try to load local cache file on module load to populate LiteLLM registry immediately
+    CACHE_FILE_PATH = "storage/model_prices_cache.json"
+    if os.path.exists(CACHE_FILE_PATH):
+        try:
+            with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:
+                pricing_data = json.load(f)
+            litellm.model_cost = pricing_data
+            logger.info("Pre-loaded LiteLLM pricing registry from local cache file on startup.")
+        except Exception as cache_err:
+            logger.error(f"Failed to pre-load cached pricing file: {cache_err}")
+
+    # Find cheapest model in LiteLLM registry for each default provider and mode
     pricing_registry = getattr(litellm, "model_cost", getattr(litellm, "model_prices_and_context_window", {}))
     
-    def get_cheapest(provider: str) -> str:
+    def get_cheapest(provider: str, mode: str = "chat") -> str:
         cheapest_model = None
         min_cost = float('inf')
-        target_providers = {"local", "ollama"} if provider == "local" else {provider}
+        
+        if provider == "local":
+            target_providers = {"local", "ollama"}
+        elif provider == "cohere":
+            target_providers = {"cohere", "cohere_chat"}
+        else:
+            target_providers = {provider}
         
         for m_name, info in pricing_registry.items():
             if not isinstance(info, dict):
                 continue
             model_provider = info.get("litellm_provider", "").lower() or info.get("provider", "").lower()
-            if model_provider in target_providers and info.get("mode") == "chat":
+            
+            # Map aliases dynamically
+            if model_provider == "gemini" and "google" in target_providers:
+                model_provider = "google"
+            elif model_provider == "cohere_chat" and "cohere" in target_providers:
+                model_provider = "cohere"
+                
+            if model_provider in target_providers and info.get("mode") == mode:
                 input_cost = info.get("input_cost_per_token", float('inf'))
                 if 0 < input_cost < min_cost:
                     min_cost = input_cost
                     cheapest_model = m_name
                     
-        return cheapest_model or f"{provider}-default"
+        if cheapest_model:
+            return cheapest_model
+        return f"{provider}-default" if mode == "chat" else "text-embedding-3-small"
 
     for uc, uc_info in USE_CASE_PARAMS.items():
         prov = uc_info["default_provider"]
-        cheapest_model = get_cheapest(prov)
+        mode = "embedding" if uc == "embedding" else "chat"
+        cheapest_model = get_cheapest(prov, mode)
         DEFAULT_MODEL_ROUTING[uc] = {
             "primary_model": cheapest_model,
             "fallback_model": cheapest_model,
@@ -191,10 +122,14 @@ def format_litellm_model(model_name: str, provider: str) -> str:
     # Standardize provider name
     prov = provider.strip().lower()
     
+    # Resolve aliases using central configuration
+    from core.providers import PROVIDER_ALIASES
+    prov = PROVIDER_ALIASES.get(prov, prov)
+    
     if prov == "google":
         # Google provider uses gemini/ prefix in LiteLLM
         return f"gemini/{normalized_name}"
-    elif prov in ["deepseek", "cohere", "groq", "together_ai", "perplexity", "mistral", "openrouter", "vertex_ai", "gemini"]:
+    elif prov in ["deepseek", "cohere", "groq", "together_ai", "perplexity", "mistral", "openrouter", "vertex_ai", "gemini", "azure", "xai"]:
         return f"{prov}/{normalized_name}"
         
     return normalized_name
@@ -204,6 +139,12 @@ class LLMGateway:
 
     def __init__(self):
         litellm.telemetry = False
+        # AC FIX-1B: Enable automatic message sanitization for all providers.
+        # LiteLLM will auto-repair invalid turn ordering (e.g., consecutive assistant messages,
+        # tool responses without a preceding tool call) before sending to any provider.
+        litellm.modify_params = True
+        if settings.ENVIRONMENT == "development":
+            litellm._turn_on_debug()
         # Set base keys in litellm for static configurations
         if settings.OPENAI_API_KEY:
             litellm.api_key = settings.OPENAI_API_KEY
@@ -222,6 +163,19 @@ class LLMGateway:
             
         formatted = format_litellm_model(model_name, provider)
         if formatted in pricing_registry:
+            return True
+            
+        # Allow fine-tuned or custom deployment names, or brand new models with year suffixes
+        import re
+        normalized_name = model_name.strip().lower()
+        if (
+            normalized_name.startswith("ft:") or 
+            ":ft:" in normalized_name or 
+            "fine-tuned" in normalized_name or
+            "finetuned" in normalized_name or
+            normalized_name.startswith("custom-") or
+            re.search(r"[-_](202[5-9]|20[3-9]\d)", normalized_name)
+        ):
             return True
             
         return False
@@ -397,9 +351,15 @@ class LLMGateway:
         # ─── 2. System Config: shared credential ───
         sys_result = await self._lookup_credentials(self.SYSTEM_TENANT_UUID, provider)
         if sys_result:
+            logger.warning(
+                f"Falling back to system-level shared credentials for provider '{provider}' (tenant: {tenant_id})"
+            )
             return sys_result
 
         # ─── 3. Env fallback ───
+        logger.warning(
+            f"Falling back to environment api key for provider '{provider}' (tenant: {tenant_id})"
+        )
         api_key = get_env_fallback_key(provider)
 
         return {"api_key": api_key, "api_base": None}
@@ -450,26 +410,92 @@ class LLMGateway:
 
     async def compress_history(self, tenant_id: str, messages: List[Dict[str, Any]], keep_recent: int = 5) -> List[Dict[str, Any]]:
         """Compress older chat history to save tokens using a background LLM summarizer with Redis caching."""
-        if len(messages) <= keep_recent:
-            return messages
+        # Separate system messages from conversation messages to preserve system instructions intact
+        system_messages = []
+        seen_system_contents = set()
+        for m in messages:
+            if m.get("role") == "system":
+                content = m.get("content", "").strip()
+                if content not in seen_system_contents:
+                    seen_system_contents.add(content)
+                    system_messages.append(m)
+        chat_messages = [m for m in messages if m.get("role") != "system"]
+
+        if len(chat_messages) <= keep_recent:
+            return system_messages + chat_messages
             
-        recent = messages[-keep_recent:]
-        older = messages[:-keep_recent]
+        split_index = len(chat_messages) - keep_recent
         
-        # 1. Generate standard baseline summary to return immediately
-        summary_text = "Background summary of older messages:\n"
+        # PASS 1: Prevent orphaning tool messages in the 'recent' slice by pulling in their preceding
+        # assistant tool call message. Without this, a 'tool' result could appear without its
+        # matching 'assistant+tool_calls' message, causing Gemini/OpenAI 400 errors.
+        while split_index > 0:
+            has_orphaned_tool = False
+            for idx in range(split_index, len(chat_messages)):
+                if chat_messages[idx].get("role") == "tool":
+                    tool_call_id = chat_messages[idx].get("tool_call_id")
+                    
+                    found_assistant_in_recent = False
+                    for aidx in range(split_index, idx):
+                        if (chat_messages[aidx].get("role") == "assistant" 
+                            and chat_messages[aidx].get("tool_calls")):
+                            tcs = chat_messages[aidx]["tool_calls"]
+                            if any(isinstance(tc, dict) and tc.get("id") == tool_call_id for tc in tcs):
+                                found_assistant_in_recent = True
+                                break
+                    
+                    if not found_assistant_in_recent:
+                        has_orphaned_tool = True
+                        break
+            
+            if has_orphaned_tool:
+                split_index -= 1
+            else:
+                break
+
+        # AC FIX-1A (CRITICAL): PASS 2 — Gemini API requires that an assistant+tool_calls message
+        # MUST immediately follow a 'user' or 'tool' message. If the first message of the 'recent'
+        # slice is assistant+tool_calls, it would be placed directly after the [system summary],
+        # which violates the Gemini turn-ordering rule and causes a 400 INVALID_ARGUMENT error.
+        # Fix: pull split_index backwards until 'recent' starts with a 'user' or 'tool' message.
+        while split_index > 0:
+            first_recent = chat_messages[split_index]
+            if (first_recent.get("role") == "assistant" and first_recent.get("tool_calls")):
+                split_index -= 1
+            else:
+                break
+                
+        recent = chat_messages[split_index:]
+        older = chat_messages[:split_index]
+        
+        # Detect if conversation is in Vietnamese
+        is_vn = any(is_vietnamese(m.get("content", "")) for m in messages if m.get("role") == "user")
+        
+        # 1. Generate standard baseline summary to return immediately.
+        # FIX-2: Only include user/assistant roles in summary — tool messages contain raw JSON
+        # that is meaningless when truncated, and system messages are already preserved separately.
+        if is_vn:
+            summary_text = "Tóm tắt lịch sử cuộc hội thoại trước đó:\n"
+            summary_prefix = "Tóm tắt cuộc hội thoại trước đó:\n"
+        else:
+            summary_text = "Background summary of older messages:\n"
+            summary_prefix = "Summary of the previous conversation:\n"
+            
         for m in older:
             role = m.get("role", "user")
             content = m.get("content", "")
-            summary_text += f"- {role}: {content[:100]}\n"
+            # Skip tool/system roles: tool messages are raw JSON (meaningless truncated),
+            # system messages are already captured in system_messages list.
+            if role in ("user", "assistant") and content:
+                summary_text += f"- {role}: {content[:150]}\n"
 
         # 2. Check strict double thresholds before triggering caching / background task
         # Threshold 1: At least keep_recent + 4 messages total (so we compress at least 4 older messages)
         # Threshold 2: older messages text length must be > 1500 characters
         older_text_len = sum(len(str(m.get("content", ""))) for m in older)
-        if len(messages) <= keep_recent + 4 or older_text_len <= 1500:
-            logger.info(f"Skipping history summarization for tenant {tenant_id}: messages count {len(messages)} or older text length {older_text_len} below thresholds.")
-            return messages  # Keep history raw to preserve 100% context accuracy
+        if len(chat_messages) <= keep_recent + 4 or older_text_len <= 1500:
+            logger.info(f"Skipping history summarization for tenant {tenant_id}: chat messages count {len(chat_messages)} or older text length {older_text_len} below thresholds.")
+            return system_messages + chat_messages  # Keep history raw to preserve 100% context accuracy
 
         # 3. Check Redis Cache
         try:
@@ -480,33 +506,45 @@ class LLMGateway:
             cached_summary = await redis_client.get(cache_key)
             if cached_summary:
                 logger.info(f"History summary cache hit for tenant {tenant_id}")
-                return [{"role": "system", "content": f"Tóm tắt cuộc hội thoại trước đó:\n{cached_summary}"}] + recent
+                return system_messages + [{"role": "system", "content": f"{summary_prefix}{cached_summary}"}] + recent
                 
             # Cache miss -> schedule background task to summarize
             logger.info(f"History summary cache miss for tenant {tenant_id}. Scheduling background task...")
-            asyncio.create_task(self._generate_and_cache_summary(tenant_id, older, cache_key))
+            # FIX-7: Add done_callback to catch and log background task exceptions silently
+            task = asyncio.create_task(self._generate_and_cache_summary(tenant_id, older, cache_key))
+            task.add_done_callback(
+                lambda t: logger.error(f"Background history summary task failed for tenant {tenant_id}: {t.exception()}")
+                if not t.cancelled() and t.exception() else None
+            )
         except Exception as e:
             logger.error(f"Error handling history summary cache/task: {e}")
             
         # Return baseline summary immediately to avoid adding any latency to the current request
-        return [{"role": "system", "content": summary_text}] + recent
+        return system_messages + [{"role": "system", "content": summary_text}] + recent
 
-    def _get_cheapest_model_from_registry(self, provider: str) -> str:
+    def _get_cheapest_model_from_registry(self, provider: str, mode: str = "chat") -> str:
         provider = provider.strip().lower()
         
         # Support environment override
         env_override = os.getenv(f"DEFAULT_{provider.upper()}_PRIMARY_MODEL")
-        if env_override:
+        if env_override and mode == "chat":
             return env_override
 
-        if provider in self._cheapest_models_cache:
-            return self._cheapest_models_cache[provider]
+        cache_key = f"{provider}:{mode}"
+        if cache_key in self._cheapest_models_cache:
+            return self._cheapest_models_cache[cache_key]
             
         cheapest_model = None
         min_cost = float('inf')
         pricing_registry = getattr(litellm, "model_cost", getattr(litellm, "model_prices_and_context_window", {}))
         
-        target_providers = {"local", "ollama"} if provider == "local" else {provider}
+        # Map target providers to include cohere_chat
+        if provider == "local":
+            target_providers = {"local", "ollama"}
+        elif provider == "cohere":
+            target_providers = {"cohere", "cohere_chat"}
+        else:
+            target_providers = {provider}
         
         for model_name, info in pricing_registry.items():
             if not isinstance(info, dict):
@@ -516,18 +554,21 @@ class LLMGateway:
             # Map aliases dynamically
             if model_provider == "gemini" and "google" in target_providers:
                 model_provider = "google"
+            elif model_provider == "cohere_chat" and "cohere" in target_providers:
+                model_provider = "cohere"
                 
-            if model_provider in target_providers and info.get("mode") == "chat":
+            if model_provider in target_providers and info.get("mode") == mode:
                 input_cost = info.get("input_cost_per_token", float('inf'))
                 if 0 < input_cost < min_cost:
                     min_cost = input_cost
                     cheapest_model = model_name
                     
         if not cheapest_model:
-            cheapest_model = f"{provider}-default"
+            cheapest_model = f"{provider}-default" if mode == "chat" else "text-embedding-3-small"
             
-        self._cheapest_models_cache[provider] = cheapest_model
+        self._cheapest_models_cache[cache_key] = cheapest_model
         return cheapest_model
+
 
     async def _get_cheapest_available_provider(self, tenant_id: str) -> tuple[str, str]:
         """
@@ -614,8 +655,9 @@ class LLMGateway:
                 conversation_text += f"{role.upper()}: {content}\n"
                 
             prompt = (
-                "Hãy tóm tắt ngắn gọn cuộc hội thoại sau trong tối đa 150 từ. "
-                "Đảm bảo giữ lại các chi tiết ngữ cảnh cốt lõi như tên sản phẩm, giá cả, và yêu cầu của khách hàng:\n\n"
+                "Summarize the following conversation briefly in at most 150 words. "
+                "Ensure you retain core context details such as product names, prices, and customer requirements. "
+                "The response MUST be written in the same language as the input conversation (e.g. if the conversation is in Vietnamese, write in Vietnamese; if in English, write in English):\n\n"
                 f"{conversation_text}"
             )
             
@@ -640,10 +682,14 @@ class LLMGateway:
         optimized = []
         for msg in messages:
             role = msg.get("role")
-            content = msg.get("content", "")
-            if role == "context" and len(content) > max_context_chars:
-                content = content[:max_context_chars//2] + "\n...[TRUNCATED FOR TOKEN OPTIMIZATION]...\n" + content[-max_context_chars//2:]
-            optimized.append({"role": role, "content": content})
+            content = msg.get("content")
+            if role == "context" and content and len(content) > max_context_chars:
+                truncated = content[:max_context_chars//2] + "\n...[TRUNCATED FOR TOKEN OPTIMIZATION]...\n" + content[-max_context_chars//2:]
+                new_msg = msg.copy()
+                new_msg["content"] = truncated
+                optimized.append(new_msg)
+            else:
+                optimized.append(msg)
         return optimized
 
     async def complete(
@@ -656,7 +702,8 @@ class LLMGateway:
         temperature: float | None = None,
         model_override: str | None = None,
         tools: List[Dict[str, Any]] | None = None,
-        provider_override: str | None = None
+        provider_override: str | None = None,
+        response_format: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Sends chat completion using routing and failover with optional tool support and pybreaker."""
         route = await self.get_routing(tenant_id, use_case)
@@ -703,8 +750,15 @@ class LLMGateway:
             "temperature": temp,
             "timeout": 10.0
         }
+        # AC FIX-6: Add repetition penalties for chatbot use case to prevent the AI from
+        # repeating the same phrases, translations or answers in multi-turn conversations.
+        if use_case == "chatbot":
+            kwargs["frequency_penalty"] = 0.3
+            kwargs["presence_penalty"] = 0.1
         if tools:
             kwargs["tools"] = tools
+        if response_format:
+            kwargs["response_format"] = response_format
 
         # Helper to execute acompletion with dynamic keys
         async def call_llm(model_name: str, creds: Dict[str, Any], provider_name: str) -> Any:
@@ -715,44 +769,9 @@ class LLMGateway:
             if creds.get("api_base"):
                 call_kwargs["api_base"] = creds["api_base"]
                 
-            # Provider-specific optimizations (AC 14.1 - 14.6)
-            prov = provider_name.strip().lower()
-
-            if prov == "openai":
-                # AC 14.1: OpenAI Prompt Caching — system prompt first + cache hint header
-                call_kwargs = apply_openai_caching(call_kwargs)
-
-            elif prov == "anthropic":
-                # AC 14.1: Anthropic ephemeral cache_control breakpoints
-                call_kwargs["messages"] = apply_anthropic_caching(call_kwargs["messages"])
-
-            elif prov in ("google", "gemini"):
-                # AC 14.2: Google Safety Settings
-                call_kwargs["safety_settings"] = [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-                ]
-                # AC 14.2: Gemini Context Caching for large contexts (> 32k tokens)
-                msg_text_len = sum(len(str(m.get("content", ""))) for m in call_kwargs.get("messages", []))
-                estimated_tokens = msg_text_len // 4  # rough 4-char-per-token estimate
-                call_kwargs = build_gemini_context_cache_params(
-                    estimated_tokens, call_kwargs, ttl_seconds=300
-                )
-
-            elif prov == "deepseek":
-                # AC 14.3: DeepSeek fast timeout + fallback (5s to prevent network hang)
-                call_kwargs["timeout"] = 5.0
-
-            elif prov == "mistral":
-                # AC 14.6: Sanitize null parameters (prevent 400 Bad Request)
-                if "tools" in call_kwargs:
-                    call_kwargs["tools"] = sanitize_mistral_tools(call_kwargs["tools"])
-                # AC 14.6: EU nodes routing
-                call_kwargs = apply_mistral_eu_routing(creds, call_kwargs)
-
-            # AC 14.4: Local LLM (vLLM/Ollama) — api_base injected from creds (already handled above)
+            # Strategy Pattern: Use ProviderAdapter to clean up parameters dynamically
+            adapter = ProviderFactory.get_adapter(provider_name)
+            call_kwargs = adapter.sanitize_payload(call_kwargs)
 
             return await acompletion(**call_kwargs)
 
@@ -791,6 +810,36 @@ class LLMGateway:
         prompt_tokens = response.usage.prompt_tokens if hasattr(response, "usage") else 0
         completion_tokens = response.usage.completion_tokens if hasattr(response, "usage") else 0
         
+        # Emit Prometheus Metrics (AC 5.5)
+        try:
+            from core.metrics import (
+                ai_core_llm_calls_total,
+                ai_core_llm_cost_usd_total,
+                ai_core_llm_latency_seconds
+            )
+            provider_val = primary_provider if not is_fallback_used else fallback_provider
+            ai_core_llm_calls_total.labels(
+                tenant_id=tenant_id,
+                use_case=use_case,
+                provider=provider_val,
+                model=model_used,
+                is_fallback=str(is_fallback_used).lower()
+            ).inc()
+            
+            ai_core_llm_cost_usd_total.labels(
+                tenant_id=tenant_id,
+                use_case=use_case,
+                provider=provider_val
+            ).inc(cost)
+            
+            ai_core_llm_latency_seconds.labels(
+                tenant_id=tenant_id,
+                use_case=use_case,
+                provider=provider_val
+            ).observe(latency / 1000.0)
+        except Exception as e_metric:
+            logger.warning(f"Failed to emit LLM Prometheus metrics: {e_metric}")
+        
         choice_message = response.choices[0].message
         content = getattr(choice_message, "content", None)
         tool_calls = getattr(choice_message, "tool_calls", None)
@@ -809,38 +858,11 @@ class LLMGateway:
             except Exception:
                 pass
                 
-        # C3 Fix: Parse Citations for Perplexity and Cohere
-        # Use getattr() — response is a litellm ModelResponse object, NOT a dict
-        citations = []
-        direct_citations = getattr(response, "citations", None)
-        if direct_citations:
-            # Perplexity returns citations as list of URLs directly
-            citations = list(direct_citations)
-        elif "cohere" in model_used.lower():
-            # Cohere returns citations in response.choices[0].message or response-level attribute
-            meta = getattr(response, "meta", None)
-            raw_citations = (
-                getattr(response, "citations", None)
-                or (getattr(meta, "citations", None) if meta else None)
-                or []
-            )
-            for c in raw_citations:
-                # Cohere citation format: {start, end, text, document_ids}
-                if isinstance(c, dict):
-                    citations.append({
-                        "start": c.get("start"),
-                        "end": c.get("end"),
-                        "text": c.get("text"),
-                        "source": c.get("document_ids", [])
-                    })
-                else:
-                    # Handle object-style citations
-                    citations.append({
-                        "start": getattr(c, "start", None),
-                        "end": getattr(c, "end", None),
-                        "text": getattr(c, "text", None),
-                        "source": getattr(c, "document_ids", [])
-                    })
+        # Parse Citations dynamically through Provider Adapter
+        active_provider = primary_provider if not is_fallback_used else fallback_provider
+        adapter = ProviderFactory.get_adapter(active_provider)
+        parsed_meta = adapter.parse_response(response, model_used)
+        citations = parsed_meta.get("citations", [])
         
         # Convert tool_calls to dict format if present for serializability
         tool_calls_list = []
@@ -871,3 +893,124 @@ class LLMGateway:
             "reasoning_content": reasoning_content,
             "citations": citations
         }
+
+    async def embed(
+        self,
+        tenant_id: str,
+        texts: List[str],
+        model_override: str | None = None,
+        provider_override: str | None = None
+    ) -> Dict[str, Any]:
+        """Sends text embedding request using routing and failover with pybreaker."""
+        route = await self.get_routing(tenant_id, "embedding")
+        model = model_override or route["primary_model"]
+        fallback_model = route["fallback_model"]
+        
+        primary_provider = provider_override or route["provider"]
+        fallback_provider = route["fallback_provider"]
+
+        # Active Verification
+        model = self.resolve_active_default_model(tenant_id, primary_provider, model)
+        fallback_model = self.resolve_active_default_model(tenant_id, fallback_provider, fallback_model)
+
+        start_time = time.time()
+        is_fallback_used = False
+        model_used = model
+
+        # Get credentials dynamically (BYOK → System → Env)
+        primary_creds = await self.get_provider_credentials(tenant_id, primary_provider)
+        fallback_creds = await self.get_provider_credentials(tenant_id, fallback_provider)
+
+        # Set up kwargs for litellm.aembedding
+        kwargs = {
+            "input": texts,
+            "timeout": 10.0
+        }
+
+        # Helper to execute aembedding with dynamic keys
+        async def call_embed(model_name: str, creds: Dict[str, Any], provider_name: str) -> Any:
+            call_kwargs = kwargs.copy()
+            call_kwargs["model"] = format_litellm_model(model_name, provider_name)
+            if creds.get("api_key"):
+                call_kwargs["api_key"] = creds["api_key"]
+            if creds.get("api_base"):
+                call_kwargs["api_base"] = creds["api_base"]
+            
+            return await litellm.aembedding(**call_kwargs)
+
+        response = None
+        # 1. Execute Primary call under primary provider's Circuit Breaker
+        breaker = PROVIDER_BREAKERS.get(primary_provider, PROVIDER_BREAKERS["openai"])
+        try:
+            response = await call_async(breaker, call_embed, model, primary_creds, primary_provider)
+            model_used = model
+        except Exception as e:
+            logger.warning(
+                f"Primary embedding model/provider {model} ({primary_provider}) failed or circuit is open on tenant {tenant_id}: {str(e)}. "
+                f"Falling back to {fallback_model} ({fallback_provider})..."
+            )
+            is_fallback_used = True
+
+        # 2. If primary failed, execute Fallback call under fallback provider's Circuit Breaker
+        if is_fallback_used:
+            fallback_breaker = PROVIDER_BREAKERS.get(fallback_provider, PROVIDER_BREAKERS["openai"])
+            try:
+                response = await call_async(fallback_breaker, call_embed, fallback_model, fallback_creds, fallback_provider)
+                model_used = fallback_model
+            except Exception as e:
+                logger.error(f"Fallback embedding model {fallback_model} ({fallback_provider}) also failed: {e}")
+                raise e
+
+        latency = int((time.time() - start_time) * 1000)
+
+        # Calculate cost
+        try:
+            cost = litellm.embedding_cost(model=model_used, response=response)
+        except Exception:
+            cost = 0.0
+            
+        prompt_tokens = response.usage.prompt_tokens if hasattr(response, "usage") else 0
+        
+        # Emit Prometheus Metrics
+        try:
+            from core.metrics import (
+                ai_core_llm_calls_total,
+                ai_core_llm_cost_usd_total,
+                ai_core_llm_latency_seconds
+            )
+            provider_val = primary_provider if not is_fallback_used else fallback_provider
+            ai_core_llm_calls_total.labels(
+                tenant_id=tenant_id,
+                use_case="embedding",
+                provider=provider_val,
+                model=model_used,
+                is_fallback=str(is_fallback_used).lower()
+            ).inc()
+            
+            ai_core_llm_cost_usd_total.labels(
+                tenant_id=tenant_id,
+                use_case="embedding",
+                provider=provider_val
+            ).inc(cost)
+            
+            ai_core_llm_latency_seconds.labels(
+                tenant_id=tenant_id,
+                use_case="embedding",
+                provider=provider_val
+            ).observe(latency / 1000.0)
+        except Exception as e_metric:
+            logger.warning(f"Failed to emit embedding Prometheus metrics: {e_metric}")
+
+        # Extract embeddings
+        embeddings = [item["embedding"] for item in response["data"]]
+        return {
+            "embeddings": embeddings,
+            "model_used": model_used,
+            "provider": primary_provider if not is_fallback_used else fallback_provider,
+            "prompt_tokens": prompt_tokens,
+            "cost_usd": cost,
+            "latency_ms": latency,
+            "is_fallback": is_fallback_used
+        }
+
+# Hot reload test comment

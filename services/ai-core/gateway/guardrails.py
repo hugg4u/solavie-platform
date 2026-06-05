@@ -23,6 +23,7 @@ from core.metrics import (
     ai_core_nli_violations_total,
     ai_core_guardrail_blocked_total,
 )
+from core.utils import is_vietnamese
 
 logger = logging.getLogger("solavie.ai_core.gateway.guardrails")
 
@@ -332,10 +333,16 @@ class ContentGuardrail:
                     "block_reason": block_reason
                 }
             )
-            return (
-                "Xin lỗi, tôi không thể hiển thị nội dung này "
-                "do vi phạm chính sách an toàn thông tin."
-            )
+            if is_vietnamese(response_content):
+                return (
+                    "Xin lỗi, tôi không thể hiển thị nội dung này "
+                    "do vi phạm chính sách an toàn thông tin."
+                )
+            else:
+                return (
+                    "Sorry, I cannot display this content "
+                    "due to information safety policy violation."
+                )
 
         # PII Restore
         t0 = time.perf_counter()
@@ -359,39 +366,63 @@ class ContentGuardrail:
         - Emit Prometheus metrics cho score và violations.
         - Structured logging: nli_grounding_score, nli_status
         """
-        if not context_documents or not response_content:
-            return 1.0  # No context = not applicable
-
-        # ── NLI scoring (keyword overlap heuristic for local/test env) ──
-        # Production: replace with dedicated NLI model (cross-encoder/ms-marco-MiniLM-L-6-v2)
-        content_lower = response_content.lower()
-        match_count = 0
-        total_checks = 0
-
-        for doc in context_documents:
-            # Extract meaningful words (> 4 chars, ignore stopwords)
-            words = [
-                w for w in doc.lower().split()
-                if len(w) > 4 and w not in {
-                    "không", "được", "trong", "những", "hoặc", "nhưng",
-                    "that", "this", "with", "from", "have", "will", "your"
-                }
-            ][:15]  # Check top 15 key terms
-            for word in words:
-                total_checks += 1
-                if word in content_lower:
-                    match_count += 1
-
-        if total_checks == 0:
-            return 1.0
-
-        # Safe declines always pass NLI
-        if any(phrase in content_lower for phrase in ["xin lỗi", "không thể", "không biết"]):
+        if not response_content or not context_documents:
+            score = 1.0
+        elif any(phrase in response_content.lower() for phrase in ["xin lỗi", "không thể", "không biết", "tôi không", "chuyển giao", "hỗ trợ"]):
             score = 1.0
         else:
-            raw_score = match_count / total_checks
-            # Normalize to realistic range [0.4, 1.0]
-            score = min(max(raw_score, 0.4), 1.0)
+            # Attempt to use sentence_transformers if installed, else fallback to TF-IDF cosine similarity
+            try:
+                from sentence_transformers import CrossEncoder
+                import numpy as np
+                if not hasattr(self, "_nli_model"):
+                    # Load ms-marco-MiniLM-L-6-v2 CrossEncoder model
+                    self._nli_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+                
+                pairs = [[doc, response_content] for doc in context_documents]
+                scores = self._nli_model.predict(pairs)
+                sigmoid_scores = 1 / (1 + np.exp(-np.array(scores)))
+                score = float(np.max(sigmoid_scores))
+            except Exception as e:
+                # Fallback to TF-IDF Cosine Similarity
+                import math
+                from collections import Counter
+                
+                stopwords = {
+                    "không", "được", "trong", "những", "hoặc", "nhưng", "và", "là", "có", "của",
+                    "that", "this", "with", "from", "have", "will", "your", "the", "and", "for"
+                }
+                
+                def tokenize(text):
+                    words = []
+                    for word in text.lower().split():
+                        clean = "".join(c for c in word if c.isalnum())
+                        if clean and clean not in stopwords and len(clean) > 2:
+                            words.append(clean)
+                    return words
+
+                response_words = tokenize(response_content)
+                doc_words = []
+                for doc in context_documents:
+                    doc_words.extend(tokenize(doc))
+
+                if not response_words or not doc_words:
+                    score = 0.4
+                else:
+                    r_counts = Counter(response_words)
+                    d_counts = Counter(doc_words)
+
+                    unique_words = set(r_counts.keys()).union(set(d_counts.keys()))
+                    dot_product = sum(r_counts.get(w, 0) * d_counts.get(w, 0) for w in unique_words)
+                    
+                    mag_r = math.sqrt(sum(val ** 2 for val in r_counts.values()))
+                    mag_d = math.sqrt(sum(val ** 2 for val in d_counts.values()))
+                    
+                    if mag_r == 0 or mag_d == 0:
+                        score = 0.4
+                    else:
+                        cosine_sim = dot_product / (mag_r * mag_d)
+                        score = min(max(cosine_sim * 2.0, 0.4), 1.0)
 
         nli_status = "pass" if score >= NLI_GROUNDING_THRESHOLD else "fail"
 

@@ -25,18 +25,31 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
     url = f"{settings.TENANT_CONFIG_SERVICE_URL}/api/v1/config/ai_kb"
     headers = {"X-Tenant-ID": str(tenant_uuid)}
     
-    # 1. Fetch from Tenant Config Service
+    # 1. Fetch from Tenant Config Service with exponential backoff retry (AC 2.6)
     config_data = {}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                config_data = response.json()
-                logger.info(f"Successfully fetched config from Tenant Config Service: {config_data}")
+    max_retries = 3
+    base_delay = 1.0
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    config_data = response.json()
+                    logger.info(f"Successfully fetched config from Tenant Config Service: {config_data}")
+                    break
+                else:
+                    raise httpx.HTTPStatusError(
+                        f"Status {response.status_code}",
+                        request=response.request,
+                        response=response
+                    )
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"Failed to fetch config from Tenant Config Service after {max_retries} retries: {e}. Using defaults.")
             else:
-                logger.warning(f"Tenant Config Service returned status {response.status_code}. Using defaults.")
-    except Exception as e:
-        logger.error(f"Failed to fetch config from Tenant Config Service due to: {e}. Using defaults.")
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Failed to fetch config (attempt {attempt + 1}/{max_retries + 1}) due to: {e}. Retrying in {delay}s...")
+                await asyncio.sleep(delay)
 
     # 2. Extract values and populate local database
     model_routing = config_data.get("llm_model_routing", {})
@@ -96,13 +109,16 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
             if not model_routing:
                 from gateway.router import LLMGateway
                 gateway = LLMGateway()
-                cheapest_model = gateway._get_cheapest_model_from_registry(selected_provider)
+                cheapest_model = gateway._get_cheapest_model_from_registry(selected_provider, mode="chat")
+                cheapest_embed = gateway._get_cheapest_model_from_registry(selected_provider, mode="embedding")
                 model_routing = {
                     "chatbot": cheapest_model,
                     "content_generation": cheapest_model,
                     "summarization": cheapest_model,
                     "sentiment": cheapest_model,
-                    "classification": cheapest_model
+                    "classification": cheapest_model,
+                    "utility": cheapest_model,
+                    "embedding": cheapest_embed
                 }
 
         # Sync Model Routing Configs

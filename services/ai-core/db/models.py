@@ -30,6 +30,7 @@ class PromptTemplate(Base):
     version = Column(Integer, nullable=False, default=1)
     system_prompt = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
+    ab_test_weight = Column(Numeric(3, 2), default=0.0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class LLMRouteConfig(Base):

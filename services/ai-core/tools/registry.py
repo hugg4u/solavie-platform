@@ -22,6 +22,7 @@ logger = logging.getLogger("solavie.ai_core.tools.registry")
 
 # ─── Tool Definitions (OpenAI function calling format) ────────────────────────
 ALL_TOOLS = [
+    # ── Category 1: Information Retrieval ──
     {
         "type": "function",
         "function": {
@@ -45,7 +46,9 @@ ALL_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Web search query"}
+                    "query": {"type": "string", "description": "Web search query"},
+                    "max_results": {"type": "integer", "description": "Max results to return", "default": 5},
+                    "time_range": {"type": "string", "description": "Time range: day, week, month, year", "default": "month"}
                 },
                 "required": ["query"]
             }
@@ -59,12 +62,62 @@ ALL_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "HTTP URL link to scrape"}
+                    "url": {"type": "string", "description": "HTTP URL link to scrape"},
+                    "extract_mode": {"type": "string", "description": "Extraction mode: full, summary, main_content", "default": "main_content"}
                 },
                 "required": ["url"]
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "analytics_query",
+            "description": "Query marketing analytics: engagement metrics, top posts, reach, and performance trends.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric_type": {"type": "string", "description": "Type of metric: engagement, reach, messages, posts"},
+                    "channel": {"type": "string", "description": "Social channel: facebook, zalo, tiktok, all", "default": "all"},
+                    "date_range": {"type": "string", "description": "Time window: today, 7d, 30d, 90d", "default": "30d"},
+                    "top_k": {"type": "integer", "description": "Number of top items to return", "default": 5}
+                },
+                "required": ["metric_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "contact_lookup",
+            "description": "Look up customer information, profile details, interaction history, and lead score.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "string", "description": "Unique contact identifier in CRM (optional)"},
+                    "external_id": {"type": "string", "description": "Platform specific user ID (optional)"},
+                    "channel": {"type": "string", "description": "Integration platform channel (optional)"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_social_trends",
+            "description": "Get trending topics, popular hashtags, and viral ideas on social media platforms.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "platform": {"type": "string", "description": "Target platform: facebook, tiktok, all", "default": "all"},
+                    "country": {"type": "string", "description": "Country code (e.g. VN, US)", "default": "VN"},
+                    "category": {"type": "string", "description": "Category theme (optional)"}
+                },
+                "required": ["platform"]
+            }
+        }
+    },
+    # ── Category 2: Actions ──
     {
         "type": "function",
         "function": {
@@ -74,20 +127,265 @@ ALL_TOOLS = [
                 "type": "object",
                 "properties": {
                     "conversation_id": {"type": "string", "description": "Unique identifier of the chat conversation"},
-                    "message": {"type": "string", "description": "Message content to send"}
+                    "content": {"type": "string", "description": "Message text to send"},
+                    "content_type": {"type": "string", "description": "Type of content: text, image", "default": "text"}
                 },
-                "required": ["conversation_id", "message"]
+                "required": ["conversation_id", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "handoff_to_agent",
+            "description": "Transfer conversation to human agent immediately with description and priority level.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string", "description": "Unique identifier of the chat conversation"},
+                    "reason": {"type": "string", "description": "Explanation why handoff is needed"},
+                    "priority": {"type": "string", "description": "Handoff priority: normal, high, critical", "default": "normal"}
+                },
+                "required": ["conversation_id", "reason"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tag_contact",
+            "description": "Add tags to a customer contact profile in CRM for segmentation and tracking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "string", "description": "CRM contact identifier"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of tags to append"
+                    }
+                },
+                "required": ["contact_id", "tags"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_schedule",
+            "description": "Schedule a social media post for publishing at a specific target time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "string", "description": "Unique post identifier"},
+                    "channel_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Target publishing social channels"
+                    },
+                    "scheduled_at": {"type": "string", "description": "Target date time in ISO8601 format"},
+                    "timezone": {"type": "string", "description": "Local timezone override", "default": "Asia/Ho_Chi_Minh"}
+                },
+                "required": ["post_id", "channel_ids", "scheduled_at"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hide_comment",
+            "description": "Hide a spam, abusive, or inappropriate comment on a social post.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "comment_id": {"type": "string", "description": "Comment ID to hide"},
+                    "reason": {"type": "string", "description": "Reason details for audit trail"}
+                },
+                "required": ["comment_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_notification",
+            "description": "Send a workspace alert or notification to a specific team member.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "Target employee identifier"},
+                    "title": {"type": "string", "description": "Alert title"},
+                    "body": {"type": "string", "description": "Notification details body"},
+                    "priority": {"type": "string", "description": "Priority: low, normal, high, critical", "default": "normal"}
+                },
+                "required": ["user_id", "title", "body"]
+            }
+        }
+    },
+    # ── Category 3: Content Creation ──
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_content",
+            "description": "Generate social media content draft using AI models with custom brand guidelines context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Main post theme or topic description"},
+                    "platform": {"type": "string", "description": "Social media platform targets"},
+                    "audience": {"type": "string", "description": "Target reader/customer audience group"},
+                    "tone": {"type": "string", "description": "Content tone: professional, friendly, casual", "default": "professional"},
+                    "include_web_research": {"type": "boolean", "description": "Enable web search integration to inject current information", "default": False}
+                },
+                "required": ["topic", "platform", "audience"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "adapt_content",
+            "description": "Adapt existing content text for optimization in a different social network format.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Source text content"},
+                    "target_platform": {"type": "string", "description": "Target social platform"},
+                    "max_length": {"type": "integer", "description": "Optional max characters constraint"}
+                },
+                "required": ["content", "target_platform"]
+            }
+        }
+    },
+    # ── Category 4: Data Processing ──
+    {
+        "type": "function",
+        "function": {
+            "name": "embed_text",
+            "description": "Convert raw text inputs into vector embedding representations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "texts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of texts to embed"
+                    },
+                    "dimensions": {"type": "integer", "description": "Vector output dimension sizing", "default": 512}
+                },
+                "required": ["texts"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize",
+            "description": "Summarize long documents or conversations into concise key points or paragraphs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Source text input"},
+                    "max_length": {"type": "integer", "description": "Maximum tokens size for summary output", "default": 150},
+                    "style": {"type": "string", "description": "Style format: bullet_points, paragraph, key_facts", "default": "bullet_points"}
+                },
+                "required": ["text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "translate",
+            "description": "Translate text across languages using AI engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Source content to translate"},
+                    "source_language": {"type": "string", "description": "Source language code or 'auto'", "default": "auto"},
+                    "target_language": {"type": "string", "description": "Target language code (e.g. vi, en)"}
+                },
+                "required": ["text", "target_language"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_sentiment",
+            "description": "Analyze text input to categorize sentiment type and score.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Input text to evaluate"}
+                },
+                "required": ["text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_lead_score",
+            "description": "Calculate behavior-driven lead score metrics for CRM contacts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "string", "description": "Contact identifier"},
+                    "behavior_data": {
+                        "type": "object",
+                        "description": "Behavior properties: message frequency, page visits, email opens"
+                    }
+                },
+                "required": ["contact_id", "behavior_data"]
             }
         }
     }
 ]
 
-# ─── Use-Case Permission Matrix (AC 8.3) ──────────────────────────────────────
+# ─── Use-Case Permission Matrix (AC 8.3 / Spec matching) ──────────────────────
 PERMISSION_MATRIX = {
-    "chatbot": ["knowledge_base_search", "send_message"],
-    "content_generation": ["web_search", "fetch_url", "knowledge_base_search"],
-    "summarization": ["knowledge_base_search"],
-    "sentiment": [],
+    "chatbot": [
+        "knowledge_base_search",
+        "contact_lookup",
+        "send_message",
+        "handoff_to_agent",
+        "tag_contact",
+        "analyze_sentiment",
+        "translate",
+        "summarize"
+    ],
+    "content_generation": [
+        "knowledge_base_search",
+        "web_search",
+        "fetch_url",
+        "analytics_query",
+        "get_social_trends",
+        "generate_content",
+        "adapt_content",
+        "translate"
+    ],
+    "comment_management": [
+        "knowledge_base_search",
+        "analyze_sentiment",
+        "hide_comment",
+        "send_notification"
+    ],
+    "lead_scoring": [
+        "contact_lookup",
+        "analytics_query",
+        "calculate_lead_score",
+        "tag_contact",
+        "send_notification"
+    ],
+    "analytics_insights": [
+        "analytics_query",
+        "summarize",
+        "web_search"
+    ],
+    # Fallback/compatibility aliases
+    "summarization": ["knowledge_base_search", "summarize"],
+    "sentiment": ["analyze_sentiment"],
     "classification": []
 }
 
@@ -97,32 +395,89 @@ TOOL_PERMISSIONS = {
     "knowledge_base_search": "kb:search",
     "web_search": "kb:search",
     "fetch_url": "kb:search",
-    "send_message": "messaging:chat",
+    "analytics_query": "crm:read",
     "contact_lookup": "crm:read",
+    "get_social_trends": "kb:search",
+    "send_message": "messaging:chat",
+    "handoff_to_agent": "messaging:chat",
+    "tag_contact": "crm:update",
+    "create_schedule": "scheduler:publish",
+    "hide_comment": "comments:update",
+    "send_notification": "messaging:chat",
+    "generate_content": "kb:search",
+    "adapt_content": "kb:search",
+    "embed_text": "kb:search",
+    "summarize": "kb:search",
+    "translate": "kb:search",
     "analyze_sentiment": "kb:search",
-    "tag_contact": "crm:update"
+    "calculate_lead_score": "crm:update"
 }
 
 # ─── Baseline Rate Limits per Tier (AC 8.4) ──────────────────────────────────
 # Overridable at runtime via Tenant Config Service updating Redis key `tier:{tier}:limits`
 BASELINE_TIER_LIMITS = {
     "free": {
+        "knowledge_base_search": 100,
         "web_search": 20,
         "fetch_url": 5,
-        "knowledge_base_search": 100,
-        "send_message": 50
+        "analytics_query": 10,
+        "contact_lookup": 50,
+        "get_social_trends": 10,
+        "send_message": 50,
+        "handoff_to_agent": 5,
+        "tag_contact": 50,
+        "create_schedule": 5,
+        "hide_comment": 10,
+        "send_notification": 50,
+        "generate_content": 5,
+        "adapt_content": 10,
+        "embed_text": 100,
+        "summarize": 100,
+        "translate": 100,
+        "analyze_sentiment": 100,
+        "calculate_lead_score": 50
     },
     "standard": {
+        "knowledge_base_search": 500,
         "web_search": 50,
         "fetch_url": 30,
-        "knowledge_base_search": 500,
-        "send_message": 100
+        "analytics_query": 50,
+        "contact_lookup": 200,
+        "get_social_trends": 50,
+        "send_message": 100,
+        "handoff_to_agent": 20,
+        "tag_contact": 200,
+        "create_schedule": 30,
+        "hide_comment": 50,
+        "send_notification": 200,
+        "generate_content": 20,
+        "adapt_content": 50,
+        "embed_text": 500,
+        "summarize": 500,
+        "translate": 500,
+        "analyze_sentiment": 500,
+        "calculate_lead_score": 200
     },
     "enterprise": {
+        "knowledge_base_search": 5000,
         "web_search": 200,
         "fetch_url": 100,
-        "knowledge_base_search": 5000,
-        "send_message": 200
+        "analytics_query": 500,
+        "contact_lookup": 2000,
+        "get_social_trends": 200,
+        "send_message": 200,
+        "handoff_to_agent": 100,
+        "tag_contact": 1000,
+        "create_schedule": 200,
+        "hide_comment": 200,
+        "send_notification": 1000,
+        "generate_content": 100,
+        "adapt_content": 200,
+        "embed_text": 5000,
+        "summarize": 5000,
+        "translate": 5000,
+        "analyze_sentiment": 5000,
+        "calculate_lead_score": 1000
     }
 }
 
@@ -177,7 +532,7 @@ class ToolPermissionManager:
         # Fallback role-based permissions (when Redis cache is cold/unavailable)
         role_norm = user_role.lower().strip()
         if role_norm in ["admin", "manager", "standard_user"]:
-            return ["kb:search", "messaging:chat", "crm:read", "crm:update"]
+            return ["kb:search", "messaging:chat", "crm:read", "crm:update", "scheduler:publish", "comments:update"]
         elif role_norm in ["agent", "support"]:
             return ["kb:search", "messaging:chat"]
         return ["kb:search"]  # Minimum visitor permission

@@ -247,3 +247,31 @@ class TestNLIGroundingValidator:
     async def test_nli_threshold_constant(self, guardrail):
         """Ensure threshold is set correctly per spec."""
         assert NLI_GROUNDING_THRESHOLD == 0.80
+
+    @pytest.mark.asyncio
+    async def test_process_output_blocks_profanity_english(self, guardrail):
+        pii_map = {}
+        response = "This is a shit content."
+        result = await guardrail.process_output(response, pii_map, tenant_id="t1")
+        assert "safety policy violation" in result
+        assert "shit" not in result
+
+
+def test_is_vietnamese_helper():
+    from core.utils import is_vietnamese, detect_session_language
+    assert is_vietnamese("Chào bạn, tôi muốn tư vấn") is True
+    assert is_vietnamese("lap dat dien mat troi") is True
+    assert is_vietnamese("Hello, how are you?") is False
+    assert is_vietnamese("") is False
+
+
+def test_detect_session_language_helper():
+    from core.utils import detect_session_language
+    messages_vi = [
+        {"role": "user", "content": "tư vấn solar"},
+    ]
+    messages_en = [
+        {"role": "user", "content": "help me with solar"},
+    ]
+    assert detect_session_language(messages_vi) == "vi"
+    assert detect_session_language(messages_en) == "en"
