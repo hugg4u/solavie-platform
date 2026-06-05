@@ -33,6 +33,8 @@ PUT    /api/v1/notifications/:id/read     — Mark as read
 PUT    /api/v1/notifications/read-all     — Mark all as read
 GET    /api/v1/preferences                — Get notification preferences
 PUT    /api/v1/preferences                — Update preferences
+GET    /api/v1/notification/mcp           — SSE connection endpoint for MCP Server
+POST   /api/v1/notification/mcp/messages  — JSON-RPC message transport for MCP Server
 ```
 
 ## Data Models
@@ -83,6 +85,20 @@ CREATE INDEX idx_notif_tenant ON notifications(tenant_id, created_at DESC);
 - Normal: < 5 minutes
 - Low: batched, delivered hourly
 
+
+## Model Context Protocol (MCP) Tools
+
+Dịch vụ Notification Service đóng vai trò là một MCP SSE Server đăng ký các công cụ sau:
+
+### 1. Tool: `send_notification`
+* **Mô tả:** Gửi thông báo đến người nhận chỉ định qua in-app, Slack hoặc Email.
+* **Tham số đầu vào (Schema):**
+  * `user_id` (string, UUID, required): ID của người dùng hệ thống nhận thông báo.
+  * `title` (string, required): Tiêu đề thông báo.
+  * `message` (string, required): Nội dung thông báo.
+  * `channel` (string, optional, enum: `['in-app', 'slack', 'email']`): Kênh gửi ưu tiên.
+  * `priority` (string, optional, enum: `['critical', 'high', 'normal', 'low']`): Độ ưu tiên.
+* **Bảo mật:** Tham số `tenant_id` sẽ được tự động tiêm từ header `X-Tenant-ID` vào tham số thực thi hàm nghiệp vụ nhằm đảm bảo an toàn truy vấn và ghi nhận vào cơ sở dữ liệu Prisma của tenant, tránh rò rỉ dữ liệu chéo.
 
 ## Correctness Properties
 

@@ -144,3 +144,10 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `knowledge-base`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 8: Custom MCP Server Integration (MỚI)
+- [ ] Thiết lập SSE transport endpoints `/api/v1/kb/mcp` và `/api/v1/kb/mcp/messages` bằng `mcp` Python SDK (hoặc FastAPI MCP wrapper).
+- [ ] Đăng ký tool schema `knowledge_base_search(query: str, top_k: int)`.
+- [ ] Triển khai middleware xác thực JWT và so khớp chéo `tenant_id` từ arguments của tool call với JWT payload/header.
+- [ ] Thực thi ghi nhận Prometheus metrics: `kb_mcp_tool_executions_total` và `kb_mcp_security_violations_total`.
+- [ ] Viết unit tests kiểm chứng bảo mật chéo tenant và chặn truy cập trái phép.

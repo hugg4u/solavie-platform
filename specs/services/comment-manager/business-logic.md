@@ -299,6 +299,108 @@ Các action sau PHẢI ghi audit log (theo `shared/standards.md`), publish lên 
 
 Vì hide comment là **destructive action**, audit log cho phép trace lại "AI ẩn comment nào, vì sao, confidence bao nhiêu" — quan trọng khi khách khiếu nại bị ẩn nhầm.
 
+### Luồng 3: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Comment Manager Service (NestJS)
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/comments/ │
+                                                          │    mcp               │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    Stream Transport  │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼ (POST /messages)
+                                                          ┌──────────────────────┐
+                                                          │ 4. OVERWRITE TENANT  │
+                                                          │    Inject tenant_id  │
+                                                          │    into tool arguments│
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 5. EXECUTE ACTION    │
+                                                          │    Hide comment &    │
+                                                          │    update DB where   │
+                                                          │    tenant_id=T_ID    │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 6. RESPONSE          │
+                                                          │    Return JSON-RPC   │
+                                                          │    success payload   │
+                                                          └──────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP NestJS Controller (Comment Manager):**
+```typescript
+@Controller('api/v1/comments/mcp')
+export class CommentMcpController {
+  private mcpServer: McpServer;
+
+  constructor(private readonly commentService: CommentService) {
+    this.initMcpServer();
+  }
+
+  private initMcpServer() {
+    this.mcpServer = new McpServer({ name: 'comment_moderator', version: '1.0.0' });
+    this.mcpServer.tool(
+      'hide_comment',
+      {
+        comment_id: z.string().uuid().describe('ID của bình luận trong hệ thống'),
+        is_hidden: z.boolean().optional().default(true).describe('Trạng thái ẩn'),
+        reason: z.string().optional().describe('Lý do kiểm duyệt')
+      },
+      async ({ comment_id, is_hidden, reason }, extra) => {
+        const tenantId = extra.tenantId;
+
+        // BẢO MẬT: Bắt buộc truy vấn có tenant_id để cấm truy cập chéo tenant
+        const comment = await this.commentService.findOneAndVerify(comment_id, tenantId);
+        if (!comment) {
+          throw new Error('Comment not found or access denied');
+        }
+
+        // Thực thi ẩn trên platform và lưu DB
+        await this.commentService.hide(comment.id, is_hidden, reason, tenantId);
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+      }
+    );
+  }
+
+  @Sse()
+  connect(@Req() req, @Headers('X-Tenant-ID') tenantId: string): Observable<MessageEvent> {
+    const transport = new SSEServerTransport(`/api/v1/comments/mcp/messages`, req.res);
+    this.mcpServer.connect(transport);
+    return transport.sseStream;
+  }
+
+  @Post('messages')
+  async handleMessage(@Req() req, @Body() body: any, @Headers('X-Tenant-ID') tenantId: string) {
+    const transport = this.getTransportForTenant(tenantId);
+    await transport.handleMessage(body, { tenantId });
+  }
+}
+```
+
+---
+
 ## Error Handling
 
 | Scenario | Xử lý |
@@ -308,3 +410,6 @@ Vì hide comment là **destructive action**, audit log cho phép trace lại "AI
 | Auto-reply: AI Core fail | Don't reply, log error |
 | Hide comment: platform API fail | Retry 1x, if fail → mark as "hide_pending" |
 | Override: comment already actioned | Undo if possible (unhide), log if can't (reply already sent) |
+| MCP Session timeout | Hủy session và giải phóng tài nguyên transport của tenant tương ứng |
+| MCP Cross-tenant access attempt | Trả về lỗi JSON-RPC và ghi nhận hành vi xâm phạm an ninh |
+

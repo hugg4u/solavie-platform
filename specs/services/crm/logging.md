@@ -38,6 +38,9 @@ crm_merges_completed_total: Counter []
 crm_segments_recalculated_total: Counter []
 crm_ai_scoring_duration: Histogram []
 crm_kafka_events_consumed_total: Counter [topic]
+crm_mcp_tool_executions_total: Counter [tenant_id, server_name, tool_name, status]
+crm_mcp_tool_execution_duration_seconds: Histogram [tenant_id, server_name, tool_name]
+crm_mcp_security_violations_total: Counter [tenant_id, reason]
 ```
 
 ## Health Endpoints
@@ -53,3 +56,5 @@ GET /metrics  → Prometheus format
 | ScoringFailing | ai_scoring errors > 5 in 10m | warning |
 | HighDuplicateRate | duplicates_detected > 20 in 1h | info |
 | KafkaConsumerLag | lag > 500 for 5m | warning |
+| MCPSecurityBreach | crm_mcp_security_violations_total > 0 | critical |
+| MCPExecutionFailure | crm_mcp_tool_executions_total{status="error"} > 5 in 5m | warning |

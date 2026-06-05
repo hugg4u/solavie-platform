@@ -311,17 +311,17 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-019
 
-### FR-AI-001: Quản lý kết nối MCP động cho từng Tenant (Multi-tenant MCP Host)
-- **Mô tả:** AI Core Service **PHẢI** đóng vai trò là một MCP Host Gateway. Khi Chatbot của Tenant gửi yêu cầu gọi công cụ, AI Core **PHẢI** đọc thông số cấu hình MCP Server của Tenant đó từ `config_db` (URL, credentials, v.v.), khởi tạo phiên kết nối MCP Client Session độc lập và thực thi công cụ tương ứng.
+### FR-AI-001: Quản lý kết nối MCP động cho từng Tenant (Multi-tenant Custom MCP Host)
+- **Mô tả:** AI Core Service **PHẢI** đóng vai trò là một MCP Host Gateway. Khi Chatbot của Tenant gửi yêu cầu gọi công cụ, AI Core **PHẢI** đọc thông số cấu hình MCP Server của Tenant đó từ `config_db` (URL, credentials, v.v.), khởi tạo phiên kết nối MCP Client Session độc lập và thực thi công cụ tương ứng. Hệ thống **PHẢI** tự động tiêm/ghi đè thuộc tính `tenant_id` từ JWT xác thực vào tham số của công cụ trước khi gửi đến MCP Server, và chỉ cho phép kết nối tới các Custom MCP Server nội bộ (như `solar_calc`, `crm`, `om_ticket`) đã đăng ký trong whitelist.
 - **Đầu vào:** Tenant ID, Tool call request từ Chatbot.
-- **Đầu ra:** Thực thi công cụ tại MCP Server của Tenant và trả kết quả `ToolMessage` về cho Chatbot.
+- **Đầu ra:** Thực thi công cụ tại MCP Server nội bộ của Tenant và trả kết quả `ToolMessage` về cho Chatbot.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 
-### FR-AI-002: Giới hạn ranh giới bảo mật cho MCP Server (Roots Configuration)
-- **Mô tả:** Khi kết nối với các MCP Server thao tác hệ thống tệp tin, AI Core **PHẢI** tự động truyền tham số ranh giới `Roots` (dạng URI) dựa trên ID và quota lưu trữ của Tenant, nhằm giới hạn phạm vi đọc/ghi tệp của MCP Server trong thư mục an toàn của Tenant đó.
+### FR-AI-002: Chặn kết nối ngoài và Giới hạn ranh giới bảo mật cho MCP (Roots Security Boundary)
+- **Mô tả:** AI Core **PHẢI** chặn toàn bộ các yêu cầu kết nối tới các MCP Server công cộng hoặc bên ngoài không nằm trong whitelist để triệt tiêu nguy cơ SSRF và SQL Injection. Đồng thời, khi kết nối với các Custom MCP Server nội bộ thao tác hệ thống tệp tin, AI Core **PHẢI** tự động truyền tham số ranh giới `Roots` (dạng URI) dựa trên ID và quota lưu trữ của Tenant, nhằm giới hạn phạm vi đọc/ghi tệp trong thư mục an toàn của Tenant đó.
 - **Đầu vào:** Tenant ID, Roots path config.
-- **Đầu ra:** MCP Server được cô lập an toàn trong thư mục chỉ định, từ chối đọc ghi các thư mục hệ thống bên ngoài.
+- **Đầu ra:** Ngăn chặn các kết nối ngoài không an toàn và cô lập Custom MCP Server trong thư mục chỉ định.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 

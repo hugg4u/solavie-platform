@@ -85,7 +85,7 @@ services:
     url: http://messaging:3002
     routes:
       - name: messaging-api
-        paths: ["/api/v1/conversations", "/api/v1/messages"]
+        paths: ["/api/v1/conversations", "/api/v1/messages", "/api/v1/messaging/mcp"]
         strip_path: false
       - name: messaging-ws
         paths: ["/ws"]
@@ -96,21 +96,21 @@ services:
     url: http://crm:3003
     routes:
       - name: crm-api
-        paths: ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets"]
+        paths: ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets", "/api/v1/mcp"]
         strip_path: false
 
   - name: notification
     url: http://notification:3004
     routes:
       - name: notification-api
-        paths: ["/api/v1/notifications", "/api/v1/preferences"]
+        paths: ["/api/v1/notifications", "/api/v1/preferences", "/api/v1/notification/mcp"]
         strip_path: false
 
   - name: comment-manager
     url: http://comment-manager:3005
     routes:
       - name: comment-api
-        paths: ["/api/v1/comments"]
+        paths: ["/api/v1/comments", "/api/v1/comments/mcp"]
         strip_path: false
 
   # === Python Services ===
@@ -125,14 +125,14 @@ services:
     url: http://content:8002
     routes:
       - name: content-api
-        paths: ["/api/v1/content", "/api/v1/media"]
+        paths: ["/api/v1/content", "/api/v1/media", "/api/v1/content/mcp"]
         strip_path: false
 
   - name: knowledge-base
     url: http://knowledge-base:8004
     routes:
       - name: kb-api
-        paths: ["/api/v1/documents", "/api/v1/search"]
+        paths: ["/api/v1/documents", "/api/v1/search", "/api/v1/kb/mcp"]
         strip_path: false
 
   - name: ai-core
@@ -147,14 +147,14 @@ services:
     url: http://scheduler:8003
     routes:
       - name: scheduler-api
-        paths: ["/api/v1/schedules", "/api/v1/automations"]
+        paths: ["/api/v1/schedules", "/api/v1/automations", "/api/v1/scheduler/mcp"]
         strip_path: false
 
   - name: analytics
     url: http://analytics:8006
     routes:
       - name: analytics-api
-        paths: ["/api/v1/metrics", "/api/v1/reports", "/api/v1/insights"]
+        paths: ["/api/v1/metrics", "/api/v1/reports", "/api/v1/insights", "/api/v1/analytics/mcp"]
         strip_path: false
 
   - name: campaign

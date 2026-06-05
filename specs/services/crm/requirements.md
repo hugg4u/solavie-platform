@@ -118,3 +118,18 @@ Dịch vụ quản lý khách hàng đa kênh của Solavie — auto-create cont
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `crm`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến CRM Service.
 - **Tenant Isolation:** Dữ liệu CRM **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
 
+### Requirement 9: Custom MCP Server Integration
+
+**User Story:** Là một nhà phát triển hệ thống, tôi muốn CRM Service cung cấp các chuẩn giao diện Model Context Protocol (MCP) Server để AI Core có thể truy vấn và thực hiện các thao tác nghiệp vụ (tính toán Solar ROI, truy xuất dữ liệu CRM 360, và quản lý O&M Tickets) một cách động và bảo mật.
+
+#### Acceptance Criteria
+1. THE CRM_Service SHALL expose three distinct MCP Server modules over SSE (Server-Sent Events) transport:
+   - **Solar Calc MCP Server**: Exposes `calculate_solar_roi` and `get_proposal_preview`.
+   - **CRM MCP Server**: Exposes `get_contact_360`, `create_lead_deal`, and `update_deal_stage`.
+   - **O&M Ticket MCP Server**: Exposes `create_om_ticket`, `get_ticket_status`, and `update_ticket_notes`.
+2. THE CRM_Service SHALL validate the JWT bearer token in incoming SSE requests.
+3. THE CRM_Service SHALL extract `tenant_id` from the HTTP header `X-Tenant-ID` (or custom JWT claim) and strictly restrict all tool executions within that tenant.
+4. THE CRM_Service SHALL enforce parameter validation against the schema declared by the MCP server for each tool.
+5. THE CRM_Service SHALL return standard JSON-RPC 2.0 responses wrapped in the MCP response format.
+
+

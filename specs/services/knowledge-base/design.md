@@ -79,6 +79,8 @@ GET    /api/v1/documents/:id/chunks   — View chunks
 
 POST   /api/v1/search                 — Hybrid search query
 POST   /api/v1/search/embed           — Get embedding for text (internal)
+GET    /api/v1/kb/mcp                 — Establish MCP SSE connection
+POST   /api/v1/kb/mcp/messages        — Post MCP JSON-RPC messages
 ```
 
 ## Data Models
@@ -304,3 +306,33 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `knowledge-base`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+## MCP Server Integration
+
+Để hỗ trợ AI Core (vai trò MCP Host) truy vấn tri thức nội bộ một cách động và bảo mật, Knowledge Base Service triển khai một MCP Server chạy dưới dạng SSE Endpoint.
+
+### 1. Định nghĩa MCP Server & Tools
+*   **SSE Endpoint:** `/api/v1/kb/mcp` (với endpoint xử lý thông điệp `/api/v1/kb/mcp/messages`)
+*   **Tool Exposed:** `knowledge_base_search(query: str, top_k: int = 5)`
+    *   **Mô tả:** Tìm kiếm thông tin tri thức nội bộ của Solavie (Brochure sản phẩm, FAQ, chính sách kỹ thuật, cẩm nang lắp đặt) dựa trên dense/sparse search và reranker.
+    *   **Input Schema:**
+        ```json
+        {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Từ khóa tìm kiếm tri thức" },
+            "top_k": { "type": "integer", "description": "Số lượng kết quả trả về", "default": 5 }
+          },
+          "required": ["query"]
+        }
+        ```
+
+### 2. Ràng buộc bảo mật & Đa thuê bao (Multi-tenancy Security)
+*   **Xác thực:** Endpoint MCP yêu cầu xác thực JWT được Kong Gateway xác minh từ Keycloak.
+*   **Cô lập dữ liệu:** `tenant_id` được trích xuất từ header `X-Tenant-ID`. Trước khi thực hiện Hybrid Search, service sẽ so khớp tham số `tenant_id` ẩn nhận được trong payload tool call với tenant trích xuất từ token. Quá trình Dense Search và Sparse Search trong Qdrant bắt buộc lọc theo metadata:
+    ```python
+    query_filter=Filter(
+        must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+    )
+    ```
+

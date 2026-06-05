@@ -135,6 +135,8 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 6. THE Tenant_Config SHALL cho phép cấu hình danh sách fallback models (ai_fallback_models) dạng array string
 7. THE Tenant_Config SHALL quản lý cấu hình các khóa API (API Keys) và API Base URL của các LLM Provider (OpenAI, Anthropic, DeepSeek, vLLM/Ollama local) tại trang quản trị tập trung, thực hiện mã hóa đối xứng (AES-256) khóa API trước khi lưu trữ vào cơ sở dữ liệu `config_db`.
 8. THE Tenant_Config SHALL tự động gửi thông báo đồng bộ cấu hình qua kênh Redis Pub/Sub `config.updates` ngay khi Admin lưu thay đổi để AI Core cập nhật.
+9. THE Tenant_Config SHALL quản lý cấu hình danh sách các Custom MCP SSE Servers được phê duyệt (mcp_server_whitelist) dưới dạng danh sách JSON objects. Mỗi MCP Server trong danh sách chứa: server_name, sse_url, status (active/inactive), description, và danh sách custom_headers (để xác thực/giao tiếp an toàn).
+10. THE Tenant_Config SHALL validate định dạng sse_url của các Custom MCP Servers (bắt buộc bắt đầu bằng http:// hoặc https:// và kết thúc bằng /mcp hoặc tương tự), đồng thời chặn các ký tự lạ để phòng tránh SSRF và Command Injection.
 
 ### Requirement 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
 

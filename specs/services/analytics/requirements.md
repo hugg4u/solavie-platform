@@ -41,7 +41,17 @@ Dịch vụ thu thập metrics, engagement tracking, AI-powered insights, report
 2. THE Analytics_Service SHALL hỗ trợ scheduled reports (weekly email)
 3. Reports SHALL customizable per-tenant
 
+### Requirement 5: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn truy vấn trực tiếp dữ liệu phân tích và hiệu suất chiến dịch qua giao thức MCP để hỗ trợ ra quyết định và lập báo cáo.
+
+#### Acceptance Criteria
+1. THE Analytics_Service SHALL expose một endpoint HTTP/SSE tương thích Model Context Protocol (MCP) tại `/api/v1/analytics/mcp`.
+2. THE Analytics_Service SHALL cung cấp công cụ `analytics_query` phục vụ việc lấy báo cáo phân tích theo loại chỉ số (engagement, reach, campaign_performance, v.v.).
+3. THE Analytics_Service SHALL kiểm chứng bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối chứa header `X-Tenant-ID` và tự động áp dụng giá trị này để lọc dữ liệu truy vấn từ TimescaleDB.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Analytics Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Analytics Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `analytics`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Analytics Service.
-- **Tenant Isolation:** Dữ liệu Analytics **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Analytics và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

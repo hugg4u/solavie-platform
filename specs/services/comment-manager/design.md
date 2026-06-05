@@ -32,6 +32,8 @@ POST   /api/v1/comments/:id/reply        — Manual reply to comment
 PUT    /api/v1/comments/:id/hide         — Hide comment
 PUT    /api/v1/comments/:id/unhide       — Unhide comment
 GET    /api/v1/comments/stats            — Classification stats (accuracy, volume by type)
+GET    /api/v1/comments/mcp              — SSE connection endpoint for MCP Server
+POST   /api/v1/comments/mcp/messages     — JSON-RPC message transport for MCP Server
 ```
 
 ## Data Models
@@ -105,6 +107,18 @@ graph TD
     PRAISE -->|No| STORE[Store as neutral]
 ```
 
+
+## Model Context Protocol (MCP) Tools
+
+Dịch vụ Comment Manager Service đóng vai trò là một MCP SSE Server đăng ký các công cụ sau:
+
+### 1. Tool: `hide_comment`
+* **Mô tả:** Ẩn hoặc hiện bình luận cụ thể trên nền tảng mạng xã hội nhằm kiểm duyệt nội dung.
+* **Tham số đầu vào (Schema):**
+  * `comment_id` (string, UUID, required): ID của bình luận cần kiểm duyệt trong hệ thống.
+  * `is_hidden` (boolean, optional, mặc định là true): Chỉ định ẩn (`true`) hoặc hiện (`false`).
+  * `reason` (string, optional): Lý do ẩn (ví dụ: 'spam', 'negative', 'harassment').
+* **Bảo mật:** Tham số `tenant_id` sẽ được tự động tiêm từ header `X-Tenant-ID` vào tham số thực thi hàm nghiệp vụ nhằm đảm bảo an toàn truy vấn và cập nhật trên database Prisma, cấm LLM tự sửa đổi.
 
 ## Correctness Properties
 

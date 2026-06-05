@@ -594,6 +594,13 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
 
+## Multi-tenant Custom MCP Host Gateway (MỚI)
+
+AI Core đóng vai trò là một secure MCP Host Gateway kết nối động tới các Custom MCP Server nội bộ (như `solar_calc`, `crm`, `om_ticket`) theo từng tenant:
+*   **Whitelisting Registry:** Thông tin cấu hình (URL, encrypted credentials) lưu ở bảng `tenant_mcp_servers` trong `ai_core_db`. Hệ thống chỉ kết nối tới các URL whitelisted. Cấm kết nối tới các public/external MCP server công cộng ngoài mạng nội bộ để triệt tiêu nguy cơ SSRF và SQL Injection.
+*   **Dynamic Connection Pooling:** `MCPClientManager` (thiết kế dạng Singleton tại `gateway/mcp/manager.py`) quản lý một pool các kết nối SSE (Server-Sent Events) theo client session để tái sử dụng, tối ưu hóa độ trễ kết nối.
+*   **Tenant ID Injection Security Rule:** Trước khi thực thi bất kỳ tool call nào qua MCP, `MCPClientManager` bắt buộc phải tự động tiêm/ghi đè thuộc tính `tenant_id` từ JWT token xác thực vào tham số (arguments) của tool để đảm bảo phân tách dữ liệu tuyệt đối giữa các tenant ở mức gateway.
+
 ## Security & Gateway Integration
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `ai-core`, và inject header `X-Tenant-ID` vào request.

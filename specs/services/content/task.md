@@ -100,3 +100,12 @@ This document tracks the implementation checklist for **CONTENT Service** based 
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `content`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 7: Custom MCP Server Integration
+- [ ] Tích hợp thư viện python `mcp` SDK vào dự án FastAPI.
+- [ ] Thiết kế endpoint SSE `GET /api/v1/content/mcp` và endpoint nhận thông điệp `POST /api/v1/content/mcp/messages`.
+- [ ] Đăng ký công cụ `generate_content` (topic, platform, context) với schema validation qua Pydantic.
+- [ ] Đăng ký công cụ `adapt_content` (content, target_platform) với schema validation qua Pydantic.
+- [ ] Triển khai cơ chế bảo mật tiêm `tenant_id` từ header và áp dụng vào các hàm sinh nội dung (RAG, database storage, MinIO).
+- [ ] Viết các test case pytest kiểm chứng cô lập dữ liệu đa thuê.
+

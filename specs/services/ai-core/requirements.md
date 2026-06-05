@@ -93,16 +93,17 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 4. THE AI_Core SHALL handle tool execution timeout và thực thi cơ chế Circuit Breaker (sử dụng pybreaker) cho từng endpoint của tool. Cấu hình timeout được phân cấp động: tối đa 2.0s đối với các công cụ tương tác trực tiếp/hot-path (như `knowledge_base_search`, `contact_lookup`, `analyze_sentiment`) và tối đa 10s đối với các công cụ nền chậm (như `web_search`, `generate_content`). Nếu tool lỗi liên tiếp 5 lần trong 30 giây, Circuit Breaker chuyển sang trạng thái Open để tự động báo lỗi tức thì (1ms) nhằm tránh treo Agent.
 5. IF agent loop vượt max iterations, THEN trả về best-effort response
 
-### Requirement 8: MCP Tool Registry (MỚI)
+### Requirement 8: MCP Tool Registry (Custom & Whitelisted)
 
-**User Story:** Là developer, tôi muốn đăng ký tools từ service của mình cho AI sử dụng.
+**User Story:** Là developer, tôi muốn đăng ký các Custom MCP Server nội bộ (solar_calc, crm, om_ticket) cho AI sử dụng một cách động và bảo mật.
 
 #### Acceptance Criteria
-1. THE AI_Core SHALL maintain registry của tất cả available tools.
-2. THE AI_Core SHALL phân loại tools thành các nhóm: retrieval, action, content, và processing.
+1. THE AI_Core SHALL maintain a whitelisted registry của các Custom MCP Servers (`tenant_mcp_servers` table) theo từng tenant.
+2. THE AI_Core SHALL dynamically query and establish SSE (Server-Sent Events) connections tới các whitelisted MCP servers này thông qua `MCPClientManager` để lấy danh sách tools động.
 3. THE AI_Core SHALL restrict tools per use case (permission matrix) và thực hiện phân quyền người dùng thông qua mã quyền hạn dạng `module:action` (ví dụ: `crm:read`, `kb:search`, `messaging:chat`). Bộ thực thi công cụ bắt buộc phải đối chiếu mã này với danh sách quyền hạn của người dùng được tải từ cache Redis Keycloak `{tenant_id}:permissions:{user_role}` với độ trễ tối đa cho phép là dưới 50ms trước khi chạy.
-4. THE AI_Core SHALL rate limit tool calls (per tool, per tenant) sử dụng cơ chế Redis Token Bucket.
-5. THE AI_Core SHALL log tất cả tool calls cho audit.
+4. THE AI_Core SHALL automatically inject/overwrite the `tenant_id` parameter from authenticated JWT into every tool execution argument payload to guarantee strict tenant data isolation.
+5. THE AI_Core SHALL block all connections to external public/community MCP servers (like raw postgres, sqlite, or filesystem servers) to eliminate SSRF and prompt injection data exfiltration risks.
+6. THE AI_Core SHALL rate limit tool calls (per tool, per tenant) sử dụng cơ chế Redis Token Bucket, và log tất cả tool calls cho audit.
 
 ### Requirement 9: Web Search Integration (MỚI)
 

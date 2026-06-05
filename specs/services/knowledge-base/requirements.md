@@ -87,3 +87,15 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 - **Authentication & Authorization:** APIs của Knowledge Base Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `knowledge-base`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Knowledge Base Service.
 - **Tenant Isolation:** Dữ liệu Knowledge Base **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+
+### Requirement 7: Custom MCP Server Integration
+
+**User Story:** Là một nhà phát triển hệ thống, tôi muốn Knowledge Base Service cung cấp giao diện Model Context Protocol (MCP) Server để AI Core có thể thực hiện tìm kiếm tri thức ngữ nghĩa một cách động và bảo mật qua SSE.
+
+#### Acceptance Criteria
+1. THE Knowledge_Base SHALL expose a custom MCP Server module over SSE (Server-Sent Events) transport mounted at `/api/v1/kb/mcp`.
+2. THE Knowledge_Base SHALL declare the `knowledge_base_search(query: str, top_k: int)` tool schema.
+3. THE Knowledge_Base SHALL validate the JWT bearer token in incoming SSE requests.
+4. THE Knowledge_Base SHALL extract `tenant_id` from the HTTP header `X-Tenant-ID` (or custom JWT claim) and strictly restrict search queries to that tenant's document chunks.
+5. THE Knowledge_Base SHALL return standard JSON-RPC 2.0 responses formatted as MCP tool response text.
+

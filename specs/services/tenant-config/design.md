@@ -193,6 +193,13 @@ interface AiKbConfig {
   ai_fallback_models: string[];                // Fallback model list
   required_approvals: string[];                // Tools requiring human approval
   api_keys?: Record<string, { api_key_encrypted: string; api_base?: string; is_active: boolean }>;
+  mcp_server_whitelist?: Array<{               // Whitelist of custom MCP servers
+    server_name: string;
+    sse_url: string;
+    status: 'active' | 'inactive';
+    description?: string;
+    custom_headers?: Record<string, string>;
+  }>;
 }
 ```
 
@@ -302,6 +309,193 @@ const CONFIG_VALIDATION_SCHEMA = {
   gateway_rate_limit_hour: { type: 'int', min: 100, max: 50000 },
   auth_password_min_length: { type: 'int', min: 6, max: 30 },
   auth_max_login_attempts: { type: 'int', min: 3, max: 20 },
+  mcp_server_whitelist: { 
+    type: 'array', 
+    items: { 
+      type: 'object', 
+      properties: { 
+        server_name: { type: 'string' }, 
+        sse_url: { type: 'string', pattern: '^https?:\\/\\/[a-zA-Z0-9-._~:\\/]+
+```
+
+## Default Config (New Tenant)
+
+```typescript
+const DEFAULT_CONFIG = {
+  ai_kb_config: {
+    chatbot_enabled: true,
+    confidence_threshold: 0.70,
+    auto_handoff_on_negative: true,
+    ai_vision_invoice_reading: true,
+    rag_relevance_threshold: 0.50,
+    kb_chunk_size: 512,
+    kb_chunk_overlap_percentage: 10,
+    llm_model_routing: {},
+    ai_fallback_models: [],
+    required_approvals: [],
+    api_keys: {},
+    mcp_server_whitelist: [],
+  },
+  routing_config: {
+    working_hours: {
+      "1": { start: "08:00", end: "17:30" },
+      "2": { start: "08:00", end: "17:30" },
+      "3": { start: "08:00", end: "17:30" },
+      "4": { start: "08:00", end: "17:30" },
+      "5": { start: "08:00", end: "17:30" },
+      "6": { start: "08:00", end: "12:00" },
+    },
+    offline_mode_behavior: 'lead_capture',
+    handoff_routing_algorithm: 'hybrid',
+    manual_to_auto_timeout_hours: 2,
+    auto_close_timeout_hours: 24,
+  },
+  content_config: {
+    require_content_approval: true,
+    auto_approve_quality_threshold: 0.85,
+    max_post_retry_attempts: 3,
+    max_daily_posts_per_channel: 10,
+    campaign_fb_outside_24h_action: 'skip',
+    banned_keywords: [],
+  },
+  crm_config: {
+    lead_scoring_rules: {},
+    hot_lead_threshold: 80,
+    contact_auto_merge_threshold: 0.90,
+    data_masking_enabled: true,
+    dms_max_storage_mb: 5000,
+    dms_max_file_versions: 5,
+  },
+  security_config: {
+    session_timeout_minutes: 60,
+    audit_log_retention_days: 90,
+    comment_auto_hide_spam: true,
+    comment_spam_threshold: 0.80,
+    notification_channels: ['push', 'in_app'],
+    gateway_rate_limit_minute: 200,
+    gateway_rate_limit_hour: 5000,
+    allowed_cors_origins: ['*'],
+    auth_password_min_length: 8,
+    auth_max_login_attempts: 5,
+  },
+};
+```
+
+## Redis Key Format
+
+```
+Config cache:           {tenant_id}:config:{category}     TTL: 3600s (1 hour)
+Tenant subscription:    tenant:{tenant_id}:tier
+Dynamic Tier Limits:    tier:{tier_name}:limits           TTL: 86400s (24 hours)
+
+Pub/Sub channels: 
+- config.updates (được các service subscribe để reload cấu hình tenant)
+- system.limits.updates (được các service subscribe để reload hạn mức gói cước)
+
+Event payload (config.updates):
+{
+  "tenant_id": "solavie-001",
+  "category": "ai_kb",
+  "updated_fields": ["confidence_threshold", "chatbot_enabled"],
+  "updated_at": "2026-06-01T10:00:00Z"
+}
+
+Event payload (system.limits.updates):
+{
+  "tier": "standard",
+  "updated_fields": ["ai_web_search_per_hour"],
+  "updated_at": "2026-06-01T10:00:00Z"
+}
+```
+
+## Audit Log — Sensitive Field Masking
+
+```typescript
+const SENSITIVE_FIELDS = ['api_key', 'secret', 'password', 'token', 'webhook_secret'];
+
+function maskSensitiveValue(fieldName: string, value: any): any {
+  if (SENSITIVE_FIELDS.some(f => fieldName.toLowerCase().includes(f))) {
+    return '[REDACTED]';
+  }
+  return value;
+}
+```
+
+## Error Handling
+
+| Scenario | HTTP Status | Behavior |
+|----------|-------------|----------|
+| Invalid JWT | 401 | Reject |
+| Non-admin PATCH | 403 | Reject |
+| Validation failure | 422 | Return field-level errors |
+| DB save OK, Redis fail | 207 | Return Multi-Status, retry Redis 3x |
+| Redis Pub/Sub fail | 200 | Log error, services fallback via cache miss |
+| Tenant not found (gRPC) | - | Return default config |
+
+## Performance Targets
+
+| Metric | Target |
+|--------|--------|
+| gRPC GetConfig response | < 100ms |
+| REST GET /config response | < 50ms (Redis hit) |
+| Hot reload propagation | < 5s to all services |
+| Config cache TTL | 3600s (1 hour) |
+
+
+## Correctness Properties
+
+### Property 1: Tenant Isolation
+**Validates: Requirements 4.1**
+Moi query va operation phai filter theo tenant_id tu JWT claims. Khong co cross-tenant data leakage o bat ky tang nao (DB, Kafka, Redis, Qdrant, MinIO).
+
+### Property 2: Idempotency
+**Validates: Requirements 3.1**
+Moi write operation phai co idempotency key de tranh duplicate processing khi retry. Kafka consumer phai idempotent.
+
+### Property 3: At-least-once Delivery
+**Validates: Requirements 3.1**
+Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
+
+### Property 4: Circuit Breaker Correctness
+**Validates: Requirements 5.1**
+Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
+
+### Property 5: Data Consistency
+**Validates: Requirements 3.1**
+Distributed transactions dung Saga pattern voi compensating actions khi rollback. Moi destructive action ghi audit.events Kafka topic.
+## Error Handling
+
+| Scenario | Strategy |
+|----------|----------|
+| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
+| Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
+| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
+| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
+| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
+| Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
+
+## Testing Strategy
+
+| Layer | Tool | Coverage Target |
+|-------|------|----------------|
+| Unit Tests | Jest (Node.js) / pytest (Python) / JUnit 5 (Java) | > 80% business logic |
+| Integration Tests | Testcontainers (PostgreSQL, Redis, Kafka) | Happy path + error paths |
+| Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
+| Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
+| Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
+
+## Security & Gateway Integration
+- Dịch vụ được triển khai stateless phía sau Kong API Gateway.
+- Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `tenant-config`, và inject header `X-Tenant-ID` vào request.
+- Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+ }, 
+        status: { type: 'enum', values: ['active', 'inactive'] },
+        description: { type: 'string', optional: true },
+        custom_headers: { type: 'object', optional: true }
+      } 
+    },
+    optional: true
+  },
   // Boolean fields: strict true/false only, reject 0/1 or "true"/"false"
 };
 ```

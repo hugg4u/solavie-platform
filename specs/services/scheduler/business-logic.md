@@ -287,6 +287,96 @@ public class TimezoneHelper {
 
 ---
 
+### Luồng 4: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Scheduler Service (Spring Boot)
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/scheduler/│
+                                                          │    mcp               │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    SseEmitter Stream │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼ (POST /messages)
+                                                          ┌──────────────────────┐
+                                                          │ 4. OVERWRITE TENANT  │
+                                                          │    Inject tenant_id  │
+                                                          │    into schedule params│
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 5. SAVE & REGISTER   │
+                                                          │    Save schedule &   │
+                                                          │    register Quartz   │
+                                                          │    job with tenant_id│
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 6. RESPONSE          │
+                                                          │    Return JSON-RPC   │
+                                                          │    success payload   │
+                                                          │    via SseEmitter    │
+                                                          └──────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP Spring Boot Controller (Scheduler):**
+```java
+@RestController
+@RequestMapping("/api/v1/scheduler/mcp")
+public class SchedulerMcpController {
+
+    private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
+    private final SchedulerMcpService schedulerMcpService;
+
+    @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter connectMcp(@RequestHeader("X-Tenant-ID") String tenantId) {
+        SseEmitter emitter = new SseEmitter(600000L); // 10 minutes timeout
+        emitters.put(tenantId, emitter);
+        
+        emitter.onCompletion(() -> emitters.remove(tenantId));
+        emitter.onTimeout(() -> emitters.remove(tenantId));
+        
+        try {
+            emitter.send(SseEmitter.event().name("endpoint").data("/api/v1/scheduler/mcp/messages"));
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+        }
+        return emitter;
+    }
+
+    @PostMapping("/messages")
+    public ResponseEntity<Void> handleMessage(
+            @RequestHeader("X-Tenant-ID") String tenantId,
+            @RequestBody String jsonRpcMessage) {
+        
+        // BẢO MẬT: Inject tenantId từ gateway header vào logic xử lý JSON-RPC
+        schedulerMcpService.processJsonRpc(tenantId, jsonRpcMessage, emitters.get(tenantId));
+        return ResponseEntity.accepted().build();
+    }
+}
+```
+
+---
+
 ## Error Handling
 
 | Scenario | Xử lý |
@@ -297,3 +387,6 @@ public class TimezoneHelper {
 | Timezone invalid | Default to UTC, log warning |
 | Automation flow action fails | Log error, continue next action (partial success) |
 | Concurrent schedule modification | Optimistic locking (version column) |
+| MCP SSE Session Timeout | Hủy phiên kết nối và giải phóng Quartz Listener context tương ứng của tenant |
+| Tenant ID Validation Failure | Trả về lỗi JSON-RPC Invalid Request và ghi nhận vi phạm an ninh |
+

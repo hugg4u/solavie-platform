@@ -375,6 +375,115 @@ class MessageBatchConsumer {
 
 ## Error Handling
 
+### Luồng 6: Xử lý MCP SSE JSON-RPC Requests
+
+```
+AI Core (MCP Host) ── X-Tenant-ID Header ──► Gateway (Kong) ──► Messaging Service
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 1. ROUTE TO SSE      │
+                                                          │    /api/v1/messaging/│
+                                                          │    mcp               │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 2. VALIDATE TENANT   │
+                                                          │    Ensure tenant_id  │
+                                                          │    is present in     │
+                                                          │    headers           │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌──────────────────────┐
+                                                          │ 3. HANDSHAKE / SSE   │
+                                                          │    Establish SSE     │
+                                                          │    Stream Transport  │
+                                                          └──────────┬───────────┘
+                                                                     │
+                                         ┌───────────────────────────┴───────────────────────────┐
+                                         ▼ (POST /messages)                                      ▼ (POST /messages)
+                                 Tool: send_message                                      Tool: handoff_to_agent
+                                         │                                                       │
+                                         ▼                                                       ▼
+                            ┌────────────────────────┐                              ┌────────────────────────┐
+                            │ 4.1 OVERWRITE TENANT   │                              │ 5.1 OVERWRITE TENANT   │
+                            │     Inject tenant_id   │                              │     Inject tenant_id   │
+                            │     into arguments     │                              │     into arguments     │
+                            └──────────┬─────────────┘                              └──────────┬─────────────┘
+                                       │                                                       │
+                                       ▼                                                       ▼
+                            ┌────────────────────────┐                              ┌────────────────────────┐
+                            │ 4.2 DB VALIDATION      │                              │ 5.2 CHUYỂN ĐỔI CHẾ ĐỘ  │
+                            │     Query conversation │                              │     Cập nhật conv      │
+                            │     where id=conv_id   │                              │     mode='manual'      │
+                            │     AND tenant_id=T_ID │                              │     where tenant_id=   │
+                            └──────────┬─────────────┘                              │     T_ID               │
+                                       │                                            └──────────┬─────────────┘
+                                       ▼                                                       │
+                            ┌────────────────────────┐                                         ▼
+                            │ 4.3 THỰC THI GỬI TIN   │                              ┌────────────────────────┐
+                            │     Gửi qua Channel    │                              │ 5.3 ASSIGN & NOTIFY    │
+                            │     Connector          │                              │     Tìm Agent khả dụng │
+                            └──────────┬─────────────┘                              │     và gửi event       │
+                                       │                                            └──────────┬─────────────┘
+                                       ▼                                                       │
+                            ┌────────────────────────┐                                         ▼
+                            │ 4.4 RESPONSE           │                              ┌────────────────────────┐
+                            │     Return JSON-RPC    │                              │ 5.4 RESPONSE           │
+                            │     success payload    │                              │     Return JSON-RPC    │
+                            └────────────────────────┘                              │     success payload    │
+                                                                                    └────────────────────────┘
+```
+
+**Mẫu triển khai logic bảo mật đa thuê trên MCP Tools:**
+```typescript
+// Định nghĩa tools nghiệp vụ trong NestJS MCP Server
+this.mcpServer.tool(
+  'send_message',
+  {
+    conversation_id: z.string().uuid().describe('ID cuộc hội thoại'),
+    content: z.string().describe('Nội dung tin nhắn'),
+    content_type: z.enum(['text', 'image', 'file']).optional()
+  },
+  async ({ conversation_id, content, content_type }, extra) => {
+    // Trích xuất tenantId được tự động inject bởi Controller từ header X-Tenant-ID
+    const tenantId = extra.tenantId;
+
+    // BẢO MẬT: Bắt buộc truy vấn kèm tenantId để ngăn chặn rò rỉ chéo tenant
+    const conversation = await this.prisma.conversation.findFirst({
+      where: {
+        id: conversation_id,
+        tenant_id: tenantId
+      }
+    });
+
+    if (!conversation) {
+      throw new Error(`Conversation not found or access denied for tenant ${tenantId}`);
+    }
+
+    // Thực thi logic gửi tin nhắn
+    const message = await this.messageService.createAndSend({
+      conversationId: conversation.id,
+      tenantId,
+      senderType: 'bot',
+      senderId: 'mcp-agent',
+      content,
+      contentType: content_type || 'text'
+    });
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ success: true, message_id: message.id }) }]
+    };
+  }
+);
+```
+
+---
+
+## Error Handling
+
 | Scenario | Xử lý |
 |----------|--------|
 | Chatbot gRPC timeout (> 5s) | Auto-handoff, log timeout |
@@ -384,3 +493,6 @@ class MessageBatchConsumer {
 | WebSocket disconnect | Remove from rooms, update online status |
 | DB write fail | Retry 1x, if fail → return error to Kafka (will redeliver) |
 | No agent available for handoff | Queue conversation, send "agent will respond soon" to customer |
+| MCP Session timeout | Hủy session và giải phóng tài nguyên transport của tenant tương ứng |
+| MCP Cross-tenant access attempt | Báo lỗi JSON-RPC và ghi nhận vào audit logs cảnh báo bảo mật |
+

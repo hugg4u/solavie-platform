@@ -65,6 +65,11 @@ websocket_messages_broadcast: Counter []
 // gRPC to Chatbot
 grpc_chatbot_duration: Histogram []
 grpc_chatbot_errors_total: Counter ['error_type']
+
+// Model Context Protocol (MCP)
+messaging_mcp_connections_active: Gauge ['tenant_id']
+messaging_mcp_requests_total: Counter ['tool_name', 'status'] // status: success/error
+messaging_mcp_execution_duration_seconds: Histogram ['tool_name']
 ```
 
 ## Health Endpoints

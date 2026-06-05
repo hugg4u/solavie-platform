@@ -49,7 +49,17 @@ Dịch vụ lên lịch đăng bài và automation flows — calendar management
 2. IF tất cả retries thất bại, THEN notify user qua Notification_Service
 3. THE Scheduler_Service SHALL track retry count và last error per schedule
 
+### Requirement 5: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn lên lịch đăng bài hoặc đặt lịch các chiến dịch tự động thông qua giao thức MCP.
+
+#### Acceptance Criteria
+1. THE Scheduler_Service SHALL expose một endpoint HTTP/SSE tương thích Model Context Protocol (MCP) tại `/api/v1/scheduler/mcp`.
+2. THE Scheduler_Service SHALL cung cấp công cụ `create_schedule` để tạo lịch trình đăng bài hoặc tự động hóa mới.
+3. THE Scheduler_Service SHALL kiểm chứng bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối chứa header `X-Tenant-ID` hợp lệ và tự động tiêm giá trị này để bảo vệ dữ liệu trong cơ sở dữ liệu Quartz và PostgreSQL.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Scheduler Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Scheduler Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `scheduler`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Scheduler Service.
-- **Tenant Isolation:** Dữ liệu Scheduler **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Scheduler và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

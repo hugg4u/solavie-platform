@@ -36,6 +36,11 @@ analytics_insights_generated_total: Counter [tenant_id]
 analytics_timescaledb_write_duration: Timer []
 analytics_kafka_consumer_lag: Gauge [topic, partition]
 analytics_data_points_stored: Gauge [tenant_id] // total data points
+
+// Model Context Protocol (MCP) Metrics
+analytics_mcp_connections_active: Gauge [tenant_id]
+analytics_mcp_requests_total: Counter [tool_name, status] // status: success/error
+analytics_mcp_execution_duration_seconds: Timer [tool_name]
 ```
 
 ## Health Endpoints

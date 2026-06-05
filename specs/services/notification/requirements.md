@@ -33,7 +33,17 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 2. IF tất cả channels thất bại, THEN queue cho retry sau
 3. THE Notification_Service SHALL log delivery status per notification
 
+### Requirement 4: MCP Server Integration
+
+**User Story:** Là hệ thống AI Core Agent, tôi muốn tự động gửi thông báo trực tiếp đến Agent hoặc người quản lý trên các kênh in-app, Slack hoặc Email thông qua giao thức MCP.
+
+#### Acceptance Criteria
+1. THE Notification_Service SHALL expose một endpoint HTTP/SSE tương thích Model Context Protocol (MCP) tại `/api/v1/notification/mcp`.
+2. THE Notification_Service SHALL cung cấp công cụ `send_notification` để gửi thông báo.
+3. THE Notification_Service SHALL thực thi bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` và tự động tiêm giá trị này để bảo vệ dữ liệu trong cơ sở dữ liệu và cấm gửi thông báo chéo giữa các tenant.
+
 ## Security & Access Control
-- **Authentication & Authorization:** APIs của Notification Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
+- **Authentication & Authorization:** APIs và SSE endpoints của Notification Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `notification`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Notification Service.
-- **Tenant Isolation:** Dữ liệu Notification **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+- **Tenant Isolation:** Dữ liệu Notification và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+

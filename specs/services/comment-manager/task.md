@@ -73,3 +73,11 @@ This document tracks the implementation checklist for **COMMENT-MANAGER Service*
 ### Task: Security Integration (MỚI)
 - [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `comment-manager`
 - [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+
+### Task 5: Custom MCP Server Integration
+- [ ] Tích hợp `@modelcontextprotocol/sdk` vào dự án NestJS.
+- [ ] Thiết kế endpoint SSE `GET /api/v1/comments/mcp` và endpoint nhận thông điệp `POST /api/v1/comments/mcp/messages`.
+- [ ] Đăng ký công cụ `hide_comment` nhận tham số `comment_id`, `is_hidden`, `reason`.
+- [ ] Thực thi cơ chế tiêm `tenant_id` từ header của request trực tiếp vào các Prisma query để cô lập tenant và gọi API platform tương ứng.
+- [ ] Viết unit tests và integration các kịch bản kiểm soát truy cập chéo tenant trên comment.
+

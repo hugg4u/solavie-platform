@@ -66,6 +66,10 @@ kb_ingestion_throughput: Gauge [] # docs/min
 kb_qdrant_points_total: Gauge ['tenant_id'] # total vectors stored
 kb_qdrant_search_latency: Histogram [] # raw qdrant latency
 kb_qdrant_collection_size_bytes: Gauge []
+
+# MCP metrics
+kb_mcp_tool_executions_total: Counter ['tenant_id', 'status']
+kb_mcp_security_violations_total: Counter ['tenant_id']
 ```
 
 ## Health Endpoints
@@ -83,3 +87,4 @@ GET /metrics  → Prometheus format
 | LowSearchQuality | top_score < 0.5 for > 30% queries in 15m | warning |
 | IngestionFailing | documents_ingested{status=failed} > 3 in 10m | warning |
 | EmbeddingAPIDown | embedding batch errors > 0 for 5m | critical |
+| KBMCPSecurityBreach | kb_mcp_security_violations_total > 0 | critical |
