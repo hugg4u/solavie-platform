@@ -1,17 +1,78 @@
 local cjson = require "cjson"
 local redis = require "resty.redis"
+local http_ok, http = pcall(require, "resty.http")
 
--- Route scopes are resolved dynamically from Kong Route tags (e.g. tag "scope:ai-core")
+-- Worker-level in-memory cache for role permissions
+local local_cache = {}
 
 local DynamicPolicyHandler = {
   PRIORITY = 2000,
-  VERSION = "0.1.0",
+  VERSION = "0.2.0",
 }
 
 local function close_redis(red, ok)
   if ok and red then
       red:set_keepalive(10000, 100)
   end
+end
+
+local function to_hex(str)
+  return (str:gsub('.', function (c)
+      return string.format('%02x', string.byte(c))
+  end))
+end
+
+local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
+  local cache_key = tenant_id .. ":" .. role
+  local cached = local_cache[cache_key]
+  
+  -- 1. Check local memory cache (worker-level)
+  if cached and cached.expire_at > os.time() then
+      return cached.value
+  end
+
+  -- 2. Check Redis Cache
+  if redis_ok then
+      local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
+      local res, err = red:get(redis_key)
+      if res and res ~= ngx.null then
+          local success, parsed = pcall(cjson.decode, res)
+          if success and parsed then
+              local_cache[cache_key] = { value = parsed, expire_at = os.time() + 300 } -- Cache 5 mins
+              return parsed
+          end
+      end
+  end
+
+  -- 3. API Fallback to Tenant Config Service
+  if http_ok then
+      local httpc = http.new()
+      httpc:set_timeout(1000) -- 1s timeout
+      
+      local res, err = httpc:request_uri("http://tenant-config:3006/api/v1/config/tenants/" .. tenant_id .. "/roles/permissions", {
+          method = "GET",
+          query = { roles = role },
+          headers = {
+              ["Content-Type"] = "application/json",
+              ["X-Tenant-ID"] = tenant_id
+          }
+      })
+      
+      if res and res.status == 200 then
+          local success, parsed = pcall(cjson.decode, res.body)
+          if success and parsed then
+              -- Save back to Redis cache if possible
+              if redis_ok then
+                  local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
+                  red:setex(redis_key, 3600, res.body) -- Cache 1 hour in Redis
+              end
+              local_cache[cache_key] = { value = parsed, expire_at = os.time() + 300 }
+              return parsed
+          end
+      end
+  end
+
+  return nil
 end
 
 function DynamicPolicyHandler:access(conf)
@@ -25,7 +86,7 @@ function DynamicPolicyHandler:access(conf)
       local origin = kong.request.get_header("Origin") or "*"
       kong.response.set_header("Access-Control-Allow-Origin", origin)
       kong.response.set_header("Access-Control-Allow-Credentials", "true")
-      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID")
+      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-Permissions, X-Permissions-Signature")
       kong.response.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
       return kong.response.exit(204)
   end
@@ -33,6 +94,7 @@ function DynamicPolicyHandler:access(conf)
   local tenant_id = kong.request.get_header("X-Tenant-ID")
   local jti = nil
   local claims = nil
+  local user_id = "anonymous"
 
   local auth_header = kong.request.get_header("Authorization")
   if auth_header and string.sub(auth_header, 1, 7):lower() == "bearer " then
@@ -61,11 +123,13 @@ function DynamicPolicyHandler:access(conf)
                   if claims.jti then
                       jti = claims.jti
                   end
-                  kong.log.notice("Parsed JTI: ", tostring(jti), " Tenant ID: ", tostring(tenant_id))
+                  if claims.sub then
+                      user_id = claims.sub
+                  end
+                  kong.log.notice("Parsed JTI: ", tostring(jti), " Tenant ID: ", tostring(tenant_id), " User ID: ", tostring(user_id))
               else
                   kong.log.err("Failed to decode JSON payload: ", tostring(success))
               end
-
           else
               kong.log.err("Failed to decode base64 payload: ", tostring(payload_b64))
           end
@@ -110,17 +174,83 @@ function DynamicPolicyHandler:access(conf)
       end
   end
 
+  -- Connect to Redis
   local red = redis:new()
   red:set_timeouts(1000, 1000, 1000)
   local ok, err = red:connect(conf.redis_host, conf.redis_port)
   if not ok then
       kong.log.err("Failed to connect to Redis: ", tostring(err))
   end
-  
+
+  -- Resolve Permissions (Dynamic RBAC)
+  local user_permissions = ""
+  if claims then
+      local roles = {}
+      if claims.realm_access and claims.realm_access.roles then
+          roles = claims.realm_access.roles
+      elseif claims.roles then
+          roles = claims.roles
+      end
+
+      local permissions_set = {}
+      local has_wildcard = false
+      local resolved_any = false
+
+      for _, role in ipairs(roles) do
+          local perms = get_permissions_for_role(tenant_id, role, red, ok, conf)
+          if perms then
+              resolved_any = true
+              for _, perm in ipairs(perms) do
+                  if perm == "*" then
+                      has_wildcard = true
+                  else
+                      permissions_set[perm] = true
+                  end
+              end
+          end
+      end
+
+      -- Automatic wildcard bypass for default admin/system roles
+      for _, role in ipairs(roles) do
+          if role == "admin" or role == "system" then
+              has_wildcard = true
+              resolved_any = true
+          end
+      end
+
+      -- If we couldn't resolve any permissions and roles are present, apply Fail-Secure
+      if #roles > 0 and not resolved_any then
+          close_redis(red, ok)
+          kong.log.err("Fail-Secure: Unable to resolve permissions for roles of tenant: ", tenant_id)
+          return kong.response.exit(503, { message = "Service Unavailable: Authorization service offline" })
+      end
+
+      if has_wildcard then
+          user_permissions = "*"
+      else
+          local keys = {}
+          for k, _ in pairs(permissions_set) do
+              table.insert(keys, k)
+          end
+          table.sort(keys) -- Ensure deterministic sorting for consistent signature
+          user_permissions = table.concat(keys, ",")
+      end
+  end
+
+  -- Sign Permissions via HMAC-SHA256
+  local secret = os.getenv("GATEWAY_SIGNING_SECRET") or os.getenv("KONG_GATEWAY_SIGNING_SECRET") or "default-gateway-signing-secret-key-change-me-in-production"
+  local payload = tenant_id .. ":" .. user_id .. ":" .. user_permissions
+  local signature = to_hex(ngx.hmac_sha256(secret, payload))
+
+  -- Inject security headers
+  kong.service.request.set_header("X-User-ID", user_id)
+  kong.service.request.set_header("X-User-Permissions", user_permissions)
+  kong.service.request.set_header("X-Permissions-Signature", signature)
+
+  -- Check JTI Blacklist (for revoked tokens)
   if ok and jti then
       local redis_key = "blacklist:jti:" .. jti
       local is_blacklisted, err = red:get(redis_key)
-      kong.log.notice("Checking Redis key: ", redis_key, " Result: ", tostring(is_blacklisted))
       if is_blacklisted and is_blacklisted ~= ngx.null then
           close_redis(red, ok)
           kong.log.warn("Blocking request due to blacklisted JTI: ", jti)
@@ -132,7 +262,6 @@ function DynamicPolicyHandler:access(conf)
   if ok and claims and claims.sub then
       local user_key = "blacklist:user:" .. claims.sub
       local is_blacklisted, err = red:get(user_key)
-      kong.log.notice("Checking Redis key: ", user_key, " Result: ", tostring(is_blacklisted))
       if is_blacklisted and is_blacklisted ~= ngx.null then
           close_redis(red, ok)
           kong.log.warn("Blocking request due to suspended user: ", claims.sub)
@@ -176,7 +305,7 @@ function DynamicPolicyHandler:access(conf)
       
       kong.response.set_header("Access-Control-Allow-Origin", origin)
       kong.response.set_header("Access-Control-Allow-Credentials", "true")
-      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID")
+      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-Permissions, X-Permissions-Signature")
       kong.response.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
       
       local method = kong.request.get_method()

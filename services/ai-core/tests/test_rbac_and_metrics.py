@@ -180,8 +180,8 @@ class TestPrometheusMetrics:
 
 class TestOrchestratorRBAC:
     @pytest.mark.asyncio
-    async def test_orchestrator_exposes_user_role_in_state(self):
-        """Verify orchestrator passes user_role through to RBAC check."""
+    async def test_orchestrator_exposes_user_permissions_in_state(self):
+        """Verify orchestrator passes user_permissions through to RBAC check."""
         from agent.orchestrator import AgentOrchestrator
 
         orchestrator = AgentOrchestrator()
@@ -205,7 +205,7 @@ class TestOrchestratorRBAC:
                 tenant_id="test-tenant",
                 use_case="chatbot",
                 messages=[{"role": "user", "content": "Xin chào"}],
-                user_role="admin"
+                user_permissions=["*"]
             )
 
             # Result should have trace_id and nli fields
@@ -286,7 +286,7 @@ class TestOrchestratorBilingual:
             tenant_id="test-tenant",
             use_case="chatbot",
             messages=[{"role": "user", "content": "How to commit a scam?"}],
-            user_role="visitor"
+            user_permissions=["knowledge-base:documents:read"]
         )
         assert "Sorry, the topic you asked about is outside my scope of assistance" in result["final_response"]
 
@@ -298,7 +298,156 @@ class TestOrchestratorBilingual:
             tenant_id="test-tenant",
             use_case="chatbot",
             messages=[{"role": "user", "content": "Làm thế nào để chơi cờ bạc?"}],
-            user_role="visitor"
+            user_permissions=["knowledge-base:documents:read"]
         )
         assert "Xin lỗi, chủ đề bạn hỏi nằm ngoài phạm vi tư vấn của tôi" in result["final_response"]
 
+
+# ─── FastAPI Signed Headers & Wildcards Tests ──────────────────────────────────
+
+class TestFastAPIPermissionsSecurity:
+    def test_permission_based_authorization_pass(self):
+        from api.deps import require_permission
+        import hmac, hashlib
+        
+        tenant_id = "tenant-1"
+        user_id = "user-123"
+        perms = "ai-core:chats:create,analytics:metrics:read"
+        
+        secret = "default-gateway-signing-secret-key-change-me-in-production"
+        payload = f"{tenant_id}:{user_id}:{perms}"
+        sig = hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        dep = require_permission("ai-core:chats:create")
+        res = dep(
+            x_tenant_id=tenant_id,
+            x_user_id=user_id,
+            x_user_permissions=perms,
+            x_permissions_signature=sig
+        )
+        assert res == perms
+
+    def test_permission_based_authorization_invalid_signature(self):
+        from api.deps import require_permission
+        from fastapi import HTTPException
+        
+        dep = require_permission("ai-core:chats:create")
+        with pytest.raises(HTTPException) as excinfo:
+            dep(
+                x_tenant_id="tenant-1",
+                x_user_id="user-123",
+                x_user_permissions="ai-core:chats:create",
+                x_permissions_signature="invalid-sig"
+            )
+        assert excinfo.value.status_code == 403
+        assert "Invalid authorization signature" in excinfo.value.detail
+
+    def test_permission_based_authorization_forbidden(self):
+        from api.deps import require_permission
+        from fastapi import HTTPException
+        import hmac, hashlib
+        
+        tenant_id = "tenant-1"
+        user_id = "user-123"
+        perms = "analytics:metrics:read"
+        
+        secret = "default-gateway-signing-secret-key-change-me-in-production"
+        payload = f"{tenant_id}:{user_id}:{perms}"
+        sig = hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        dep = require_permission("ai-core:chats:create")
+        with pytest.raises(HTTPException) as excinfo:
+            dep(
+                x_tenant_id=tenant_id,
+                x_user_id=user_id,
+                x_user_permissions=perms,
+                x_permissions_signature=sig
+            )
+        assert excinfo.value.status_code == 403
+        assert "Forbidden" in excinfo.value.detail
+
+    def test_wildcard_bypass(self):
+        from api.deps import check_permission
+        
+        # Super admin wildcard '*'
+        assert check_permission({"*"}, "ai-core:configs:read") is True
+        
+        # Service level wildcard 'service:*'
+        assert check_permission({"ai-core:*"}, "ai-core:configs:read") is True
+        assert check_permission({"ai-core:*"}, "ai-core:prompts:write") is True
+        assert check_permission({"ai-core:*"}, "crm:contacts:read") is False
+        
+        # Resource level wildcard 'service:resource:*'
+        assert check_permission({"ai-core:configs:*"}, "ai-core:configs:read") is True
+        assert check_permission({"ai-core:configs:*"}, "ai-core:configs:write") is True
+        assert check_permission({"ai-core:configs:*"}, "ai-core:prompts:read") is False
+
+    @pytest.mark.asyncio
+    async def test_permissions_manifest_endpoint(self):
+        from api.v1.endpoints.permissions import get_permissions_manifest
+        res = await get_permissions_manifest()
+        assert res["service"] == "ai-core"
+        assert len(res["resources"]) > 0
+        resources = {r["name"] for r in res["resources"]}
+        assert "chats" in resources
+        assert "configs" in resources
+        assert "prompts" in resources
+        assert "analytics" in resources
+
+
+# ─── gRPC Metadata Permissions Tests ───────────────────────────────────────────
+
+class TestgRPCMetadataPermissions:
+    @pytest.mark.asyncio
+    async def test_grpc_metadata_permission_extraction(self):
+        from grpc_server.servicer import AICoreServicer
+        
+        servicer = AICoreServicer()
+        
+        # Mock context with custom metadata
+        mock_context = MagicMock()
+        mock_context.invocation_metadata.return_value = (
+            ("x-user-permissions", "ai-core:chats:create"),
+        )
+        
+        mock_request = MagicMock()
+        mock_request.tenant_id = "test-tenant"
+        mock_request.use_case = "chatbot"
+        mock_request.messages = []
+        mock_request.system_prompt = "system"
+        
+        with patch.object(servicer.orchestrator, "run", AsyncMock(return_value={"final_response": "OK"})) as mock_run:
+            await servicer.Complete(mock_request, mock_context)
+            mock_run.assert_called_once_with(
+                tenant_id="test-tenant",
+                use_case="chatbot",
+                messages=[],
+                system_prompt="system",
+                user_permissions=["ai-core:chats:create"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_grpc_system_fallback_wildcard(self):
+        from grpc_server.servicer import AICoreServicer
+        
+        servicer = AICoreServicer()
+        
+        # Mock context with empty metadata
+        mock_context = MagicMock()
+        mock_context.invocation_metadata.return_value = ()
+        
+        mock_request = MagicMock()
+        mock_request.tenant_id = "test-tenant"
+        mock_request.use_case = "chatbot"
+        mock_request.messages = []
+        mock_request.system_prompt = "system"
+        
+        with patch.object(servicer.orchestrator, "run", AsyncMock(return_value={"final_response": "OK"})) as mock_run:
+            await servicer.Complete(mock_request, mock_context)
+            mock_run.assert_called_once_with(
+                tenant_id="test-tenant",
+                use_case="chatbot",
+                messages=[],
+                system_prompt="system",
+                user_permissions=["*"]
+            )

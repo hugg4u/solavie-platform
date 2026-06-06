@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
-from api.deps import get_db, get_effective_tenant
+from api.deps import get_db, get_effective_tenant, require_permission
 from schemas.analytics import CostSimulationPayload
 from db.models import LLMUsageLog
 
@@ -19,7 +19,8 @@ import litellm
 async def get_usage(
     tenant_id: str | None = Query(None, alias="tenant_id"),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:analytics:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
 
@@ -42,7 +43,8 @@ async def get_usage(
 async def get_usage_breakdown(
     tenant_id: str | None = Query(None, alias="tenant_id"),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:analytics:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
 
@@ -68,7 +70,8 @@ async def get_usage_breakdown(
 async def usage_summary(
     tenant_id: str | None = Query(None, alias="tenant_id"),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:analytics:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
         
@@ -143,7 +146,8 @@ async def usage_summary(
 async def simulate_cost(
     payload: CostSimulationPayload,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:analytics:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, payload.tenant_id)
     new_model = payload.new_model

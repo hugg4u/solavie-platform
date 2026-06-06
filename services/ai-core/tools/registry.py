@@ -389,28 +389,28 @@ PERMISSION_MATRIX = {
     "classification": []
 }
 
-# ─── RBAC Tool Permissions (module:action) (AC 8.3b) ─────────────────────────
-# Maps tool name → required Keycloak scope code
+# ─── RBAC Tool Permissions (service:resource:action) (AC 8.3b) ───────────────
+# Maps tool name → required Keycloak scope code (Global Permission Spec)
 TOOL_PERMISSIONS = {
-    "knowledge_base_search": "kb:search",
-    "web_search": "kb:search",
-    "fetch_url": "kb:search",
-    "analytics_query": "crm:read",
-    "contact_lookup": "crm:read",
-    "get_social_trends": "kb:search",
-    "send_message": "messaging:chat",
-    "handoff_to_agent": "messaging:chat",
-    "tag_contact": "crm:update",
-    "create_schedule": "scheduler:publish",
-    "hide_comment": "comments:update",
-    "send_notification": "messaging:chat",
-    "generate_content": "kb:search",
-    "adapt_content": "kb:search",
-    "embed_text": "kb:search",
-    "summarize": "kb:search",
-    "translate": "kb:search",
-    "analyze_sentiment": "kb:search",
-    "calculate_lead_score": "crm:update"
+    "knowledge_base_search": "knowledge-base:documents:read",
+    "web_search": "knowledge-base:documents:read",
+    "fetch_url": "knowledge-base:documents:read",
+    "analytics_query": "analytics:metrics:read",
+    "contact_lookup": "crm:contacts:read",
+    "get_social_trends": "knowledge-base:documents:read",
+    "send_message": "messaging:conversations:chat",
+    "handoff_to_agent": "messaging:conversations:chat",
+    "tag_contact": "crm:contacts:update",
+    "create_schedule": "scheduler:schedules:create",
+    "hide_comment": "comment-manager:comments:update",
+    "send_notification": "notification:notifications:send",
+    "generate_content": "knowledge-base:documents:read",
+    "adapt_content": "knowledge-base:documents:read",
+    "embed_text": "knowledge-base:documents:read",
+    "summarize": "knowledge-base:documents:read",
+    "translate": "knowledge-base:documents:read",
+    "analyze_sentiment": "knowledge-base:documents:read",
+    "calculate_lead_score": "crm:contacts:update"
 }
 
 # ─── Baseline Rate Limits per Tier (AC 8.4) ──────────────────────────────────
@@ -531,11 +531,25 @@ class ToolPermissionManager:
 
         # Fallback role-based permissions (when Redis cache is cold/unavailable)
         role_norm = user_role.lower().strip()
-        if role_norm in ["admin", "manager", "standard_user"]:
-            return ["kb:search", "messaging:chat", "crm:read", "crm:update", "scheduler:publish", "comments:update"]
+        if role_norm == "admin":
+            return ["*"]
+        elif role_norm in ["manager", "standard_user"]:
+            return [
+                "knowledge-base:documents:read",
+                "messaging:conversations:chat",
+                "crm:contacts:read",
+                "crm:contacts:update",
+                "scheduler:schedules:create",
+                "comment-manager:comments:update",
+                "notification:notifications:send",
+                "analytics:metrics:read"
+            ]
         elif role_norm in ["agent", "support"]:
-            return ["kb:search", "messaging:chat"]
-        return ["kb:search"]  # Minimum visitor permission
+            return [
+                "knowledge-base:documents:read",
+                "messaging:conversations:chat"
+            ]
+        return ["knowledge-base:documents:read"]  # Minimum visitor permission
 
     async def is_user_authorized(self, tenant_id: str, user_role: str, tool_name: str) -> bool:
         """
@@ -547,7 +561,8 @@ class ToolPermissionManager:
             return True  # No RBAC restriction for this tool
 
         user_perms = await self.get_user_permissions(tenant_id, user_role)
-        return required_perm in user_perms
+        from api.deps import check_permission
+        return check_permission(set(user_perms), required_perm)
 
     async def _get_tier_limits(self, tier: str) -> Dict[str, int]:
         """
