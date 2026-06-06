@@ -105,6 +105,8 @@ services:
       KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
       KONG_LOG_LEVEL: info
       KONG_PLUGINS: bundled,dynamic-policy
+      GATEWAY_SIGNING_SECRET: ${GATEWAY_SIGNING_SECRET}
+
 
     ports:
       - "${KONG_HTTP_PORT:-8000}:8000"
@@ -132,6 +134,8 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - WATCHFILES_FORCE_POLLING=true
+      - GATEWAY_SIGNING_SECRET=${GATEWAY_SIGNING_SECRET}
+
     ports:
       - "8002:8000"
       - "50051:50051"
