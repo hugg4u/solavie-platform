@@ -11,9 +11,8 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/1"
     
     # Provider Keys
-    OPENAI_API_KEY: str | None = None
-    ANTHROPIC_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
+
     
     # Encryption & Sync Configuration
     ENCRYPTION_SECRET_KEY: str | None = "solavie_super_secret_master_key_change_me_in_production"

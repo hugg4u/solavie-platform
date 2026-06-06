@@ -26,9 +26,9 @@ from core.providers import (
     PROVIDER_PRIORITY,
     PROVIDER_BREAKERS,
     USE_CASE_PARAMS,
-    get_provider_by_model,
-    get_env_fallback_key
+    get_provider_by_model
 )
+
 
 # Dynamically construct DEFAULT_MODEL_ROUTING at module load time
 DEFAULT_MODEL_ROUTING = {}
@@ -145,11 +145,7 @@ class LLMGateway:
         litellm.modify_params = True
         if settings.ENVIRONMENT == "development":
             litellm._turn_on_debug()
-        # Set base keys in litellm for static configurations
-        if settings.OPENAI_API_KEY:
-            litellm.api_key = settings.OPENAI_API_KEY
-        if settings.ANTHROPIC_API_KEY:
-            litellm.anthropic_key = settings.ANTHROPIC_API_KEY
+
 
     def _is_model_in_registry(self, model_name: str, provider: str) -> bool:
         """Checks if a model name is active/registered in the LiteLLM registry."""
@@ -356,13 +352,11 @@ class LLMGateway:
             )
             return sys_result
 
-        # ─── 3. Env fallback ───
-        logger.warning(
-            f"Falling back to environment api key for provider '{provider}' (tenant: {tenant_id})"
+        # ─── 3. No credentials resolved ───
+        raise ValueError(
+            f"API credentials not configured for provider '{provider}' and tenant '{tenant_id}'."
         )
-        api_key = get_env_fallback_key(provider)
 
-        return {"api_key": api_key, "api_base": None}
 
     async def _lookup_credentials(
         self, tenant_uuid: uuid.UUID, provider: str

@@ -98,11 +98,3 @@ def get_provider_by_model(model_name: str) -> str:
                 return provider
     return "local"
 
-def get_env_fallback_key(provider: str) -> str | None:
-    """Helper to get static API key from environment configuration for core providers."""
-    prov = PROVIDER_ALIASES.get(provider.lower(), provider.lower())
-    if prov == "openai":
-        return settings.OPENAI_API_KEY
-    if prov == "anthropic":
-        return settings.ANTHROPIC_API_KEY
-    return None
