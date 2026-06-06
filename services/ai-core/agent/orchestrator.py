@@ -35,7 +35,7 @@ class AgentState(TypedDict):
     messages: Annotated[List[Dict[str, Any]], operator.add]
     tenant_id: str
     use_case: str
-    user_role: str
+    user_permissions: List[str]
     tools_called: Annotated[List[str], operator.add]
     iteration_count: int
     final_response: str
@@ -333,13 +333,13 @@ class AgentOrchestrator:
         Execute Tools Node:
         1. Anti-loop check (AC 10.2)
         2. Use-case permission check (AC 8.3)
-        3. RBAC user permission check (AC 8.3b) — Keycloak Redis cache < 50ms
+        3. RBAC user permission check (Zero-Trust In-Memory check)
         4. Rate limit check (AC 8.4)
         5. Execute tool → return observation
         """
         tenant_id = state["tenant_id"]
         use_case = state["use_case"]
-        user_role = state.get("user_role", "visitor")
+        user_permissions = state.get("user_permissions", [])
         trace_id = state.get("trace_id", "unknown")
         last_message = state["messages"][-1]
         tool_calls = last_message.get("tool_calls") or []
@@ -447,9 +447,9 @@ class AgentOrchestrator:
                     }
                 )
 
-            # ── RBAC User Permission Check (AC 8.3b) — Keycloak Redis < 50ms ──
-            elif not await self._check_rbac(tenant_id, user_role, tool_name, trace_id):
-                observation = f"Error: User role '{user_role}' does not have permission to call '{tool_name}'."
+            # ── RBAC User Permission Check (Zero-Trust In-Memory check) ──
+            elif not self._check_rbac_in_memory(user_permissions, tool_name, trace_id):
+                observation = f"Error: User does not have permission to call '{tool_name}'."
                 logger.warning(
                     "RBAC permission denied",
                     extra={
@@ -457,7 +457,7 @@ class AgentOrchestrator:
                         "tenant_id": tenant_id,
                         "trace_id": trace_id,
                         "tool_name": tool_name,
-                        "user_role": user_role
+                        "user_permissions": user_permissions
                     }
                 )
 
@@ -508,43 +508,34 @@ class AgentOrchestrator:
             "iteration_count": state["iteration_count"] + 1
         }
 
-    async def _check_rbac(
+    def _check_rbac_in_memory(
         self,
-        tenant_id: str,
-        user_role: str,
+        user_permissions: List[str],
         tool_name: str,
         trace_id: str = "unknown"
     ) -> bool:
         """
-        AC 8.3b: Dynamic RBAC check from Keycloak Redis cache.
-        Key: {tenant_id}:permissions:{user_role}
-        Target latency: < 50ms
+        Zero-Trust In-Memory RBAC check using Global Permission Spec.
         """
-        t0 = time.perf_counter()
-        authorized = await self.permission_manager.is_user_authorized(
-            tenant_id, user_role, tool_name
-        )
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-
+        from api.deps import check_permission
+        from tools.registry import TOOL_PERMISSIONS
+        
+        required_perm = TOOL_PERMISSIONS.get(tool_name)
+        if not required_perm:
+            return True  # No RBAC restriction for this tool
+            
+        perms_set = set(user_permissions)
+        authorized = check_permission(perms_set, required_perm)
+        
         logger.debug(
-            "RBAC check completed",
+            "In-memory RBAC check completed",
             extra={
-                "event": "rbac_check",
-                "tenant_id": tenant_id,
+                "event": "rbac_check_in_memory",
                 "trace_id": trace_id,
                 "tool_name": tool_name,
-                "user_role": user_role,
                 "authorized": authorized,
-                "latency_ms": round(elapsed_ms, 2)
             }
         )
-
-        if elapsed_ms > 50:
-            logger.warning(
-                f"RBAC check exceeded 50ms target: {elapsed_ms:.2f}ms",
-                extra={"event": "rbac_latency_exceeded", "tenant_id": tenant_id}
-            )
-
         return authorized
 
     def _should_continue_edge(self, state: AgentState) -> str:
@@ -577,19 +568,19 @@ class AgentOrchestrator:
         use_case: str,
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
-        user_role: str = "visitor",
+        user_permissions: Optional[List[str]] = None,
         trace_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Runs the full ReAct Agent loop for a given tenant and use case.
 
         Args:
-            tenant_id:     Tenant UUID
-            use_case:      Routing use case (chatbot, content_generation, etc.)
-            messages:      Chat history as list of dicts
-            system_prompt: Optional system-level instruction override
-            user_role:     Keycloak user role for RBAC (AC 8.3b)
-            trace_id:      Optional distributed trace ID for observability
+            tenant_id:        Tenant UUID
+            use_case:         Routing use case (chatbot, content_generation, etc.)
+            messages:         Chat history as list of dicts
+            system_prompt:    Optional system-level instruction override
+            user_permissions: Permissions for Zero-Trust authorization check
+            trace_id:         Optional distributed trace ID for observability
         """
         import uuid as _uuid
         if not trace_id:
@@ -600,7 +591,7 @@ class AgentOrchestrator:
             "messages": messages.copy(),
             "tenant_id": tenant_id,
             "use_case": use_case,
-            "user_role": user_role,
+            "user_permissions": user_permissions or [],
             "tools_called": [],
             "iteration_count": 0,
             "final_response": "",
@@ -630,7 +621,7 @@ class AgentOrchestrator:
                 "tenant_id": tenant_id,
                 "trace_id": trace_id,
                 "use_case": use_case,
-                "user_role": user_role,
+                "user_permissions": user_permissions,
                 "message_count": len(messages)
             }
         )

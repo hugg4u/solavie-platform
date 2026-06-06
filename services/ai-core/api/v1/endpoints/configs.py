@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from api.deps import get_db, get_effective_tenant
+from api.deps import get_db, get_effective_tenant, require_permission
 from schemas.configs import RouteConfigPayload, APIKeyConfigPayload, PromptTemplateCreate, PromptTemplateUpdate
 from db.models import LLMRouteConfig, APIKeyConfig, PromptTemplate
 from core.crypto import encrypt_key
@@ -24,7 +24,8 @@ class ABTestConfigPayload(BaseModel):
 async def list_routes(
     tenant_id: str | None = Query(None, alias="tenant_id"),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:configs:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
     result = await db.execute(
@@ -36,7 +37,8 @@ async def list_routes(
 async def create_or_update_route(
     payload: RouteConfigPayload,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:configs:write"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, payload.tenant_id)
     
@@ -83,7 +85,8 @@ async def create_or_update_route(
 async def list_keys(
     tenant_id: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:configs:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
     result = await db.execute(
@@ -105,7 +108,8 @@ async def list_keys(
 async def create_or_update_key(
     payload: APIKeyConfigPayload,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:configs:write"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, None) # API Keys must rely on injected tenant header
     encrypted = encrypt_key(payload.api_key)
@@ -161,7 +165,8 @@ async def create_or_update_key(
 async def list_prompts(
     tenant_id: str | None = Query(None, alias="tenant_id"),
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:prompts:read"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, tenant_id)
     result = await db.execute(
@@ -173,7 +178,8 @@ async def list_prompts(
 async def create_prompt(
     payload: PromptTemplateCreate,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:prompts:write"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, payload.tenant_id)
     prompt = PromptTemplate(
@@ -192,7 +198,8 @@ async def create_prompt(
 async def update_prompt(
     prompt_id: str,
     payload: PromptTemplateUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user_permissions_csv: str = Depends(require_permission("ai-core:prompts:write"))
 ):
     prompt_uuid = uuid.UUID(prompt_id)
     result = await db.execute(
@@ -215,7 +222,8 @@ async def update_prompt(
 async def configure_ab_test(
     prompt_id: str,
     payload: ABTestConfigPayload,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user_permissions_csv: str = Depends(require_permission("ai-core:prompts:write"))
 ):
     prompt_uuid = uuid.UUID(prompt_id)
     result = await db.execute(

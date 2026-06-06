@@ -14,12 +14,23 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
 
     async def Complete(self, request, context):
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        
+        # Extract x-user-permissions from metadata (case-insensitive)
+        metadata = {k.lower(): v for k, v in context.invocation_metadata()}
+        user_permissions_csv = metadata.get("x-user-permissions")
+        if user_permissions_csv is None:
+            # Trusted internal call or gateway bypass
+            user_permissions = ["*"]
+        else:
+            user_permissions = [p.strip() for p in user_permissions_csv.split(",") if p.strip()]
+
         try:
             result = await self.orchestrator.run(
                 tenant_id=request.tenant_id,
                 use_case=request.use_case,
                 messages=messages,
-                system_prompt=request.system_prompt
+                system_prompt=request.system_prompt,
+                user_permissions=user_permissions
             )
             
             return ai_core_pb2.CompletionResponse(

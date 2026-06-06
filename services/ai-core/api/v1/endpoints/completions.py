@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import litellm
-from api.deps import get_db, get_effective_tenant
+from api.deps import get_db, get_effective_tenant, require_permission
 from schemas.completions import CompletionRequest, EmbedRequest, SummarizeRequest
 from db.models import LLMUsageLog
 from agent.orchestrator import AgentOrchestrator
@@ -82,18 +82,21 @@ async def check_and_trigger_cost_alert(tenant_uuid: uuid.UUID, db: AsyncSession)
 async def completions(
     request: CompletionRequest,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:chats:create"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, request.tenant_id)
     use_case = request.use_case or "chatbot"
     messages_list = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+    user_perms = [p.strip() for p in user_permissions_csv.split(",") if p.strip()]
     
     try:
         result = await orchestrator.run(
             tenant_id=str(tenant_uuid),
             use_case=use_case,
             messages=messages_list,
-            system_prompt=request.system_prompt
+            system_prompt=request.system_prompt,
+            user_permissions=user_perms
         )
         
         # Log to Database
@@ -128,7 +131,8 @@ async def completions(
 async def generate_embeddings(
     request: EmbedRequest,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:chats:create"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, request.tenant_id)
     model = request.model or "text-embedding-3-small"
@@ -185,7 +189,8 @@ async def generate_embeddings(
 async def summarize_text(
     request: SummarizeRequest,
     db: AsyncSession = Depends(get_db),
-    x_tenant_id: str | None = Header(None)
+    x_tenant_id: str | None = Header(None),
+    user_permissions_csv: str = Depends(require_permission("ai-core:chats:create"))
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, request.tenant_id)
     
@@ -250,7 +255,9 @@ async def summarize_text(
 from core.providers import PROVIDERS_REGISTRY, PROVIDER_ALIASES
 
 @router.get("/models")
-async def list_models():
+async def list_models(
+    user_permissions_csv: str = Depends(require_permission("ai-core:configs:read"))
+):
     """
     Returns a dynamic list of chat models across the 12 supported providers from LiteLLM registry.
     """

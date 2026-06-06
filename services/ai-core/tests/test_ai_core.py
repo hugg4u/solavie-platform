@@ -182,7 +182,7 @@ async def test_react_agent_loop_limit():
                             tenant_id="test-tenant",
                             use_case="chatbot",
                             messages=[{"role": "user", "content": "infinite loop check"}],
-                            user_role="admin"
+                            user_permissions=["*"]
                         )
                         
                         # Verify loop protection: iterations must be limited to 5
@@ -439,7 +439,20 @@ async def test_auto_create_routes_on_first_api_key():
         "is_active": True
     }
     
-    headers = {"X-Tenant-ID": tenant_id}
+    # Generate HMAC signature
+    import hmac, hashlib
+    user_id = "test-user-123"
+    perms = "ai-core:configs:write"
+    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    payload_str = f"{tenant_id}:{user_id}:{perms}"
+    sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    headers = {
+        "X-Tenant-ID": tenant_id,
+        "X-User-ID": user_id,
+        "X-User-Permissions": perms,
+        "X-Permissions-Signature": sig
+    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.post("/api/v1/configs/keys", json=payload, headers=headers)
     assert response.status_code == 200
@@ -519,8 +532,23 @@ async def test_dynamic_models_endpoint():
     from httpx import AsyncClient, ASGITransport
     from main import app
     
+    tenant_id = str(uuid.uuid4())
+    user_id = "test-user-123"
+    perms = "ai-core:configs:read"
+    
+    import hmac, hashlib
+    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    payload_str = f"{tenant_id}:{user_id}:{perms}"
+    sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    headers = {
+        "X-Tenant-ID": tenant_id,
+        "X-User-ID": user_id,
+        "X-User-Permissions": perms,
+        "X-Permissions-Signature": sig
+    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.get("/api/v1/models")
+        response = await ac.get("/api/v1/models", headers=headers)
     assert response.status_code == 200
     data = response.json()
     assert "models" in data
