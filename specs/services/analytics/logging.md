@@ -21,7 +21,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | TimescaleDB write fail, Kafka consume error, report generation fail | `"TimescaleDB connection pool exhausted"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Slow aggregation, missing data gaps, report timeout | `"Aggregation took 30s (threshold: 10s)"` |
 | INFO | Metrics ingested, report generated, insights created | `"Weekly report generated for tenant-abc"` |
 | DEBUG | Raw Kafka events, SQL queries, AI insight prompts | `"Continuous aggregate refreshed: daily_metrics"` |
@@ -43,6 +45,11 @@ analytics_mcp_requests_total: Counter [tool_name, status] // status: success/err
 analytics_mcp_execution_duration_seconds: Timer [tool_name]
 ```
 
+
+// Zero-Trust Security Metrics
+analytics_security_signature_failures_total: Counter [tenant_id, client_ip]
+analytics_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -53,6 +60,8 @@ GET /actuator/prometheus → Prometheus metrics
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(analytics_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(analytics_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | KafkaLagHigh | consumer_lag > 5000 for 5m | warning |
 | AggregationSlow | aggregation_duration p95 > 30s | warning |
 | ReportGenerationFail | reports{status=failed} > 2 in 1h | warning |

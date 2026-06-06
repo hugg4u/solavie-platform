@@ -21,16 +21,17 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 3. THE Gateway SHALL strip path prefix trước khi forward đến upstream
 4. THE Gateway SHALL hỗ trợ WebSocket proxying cho Messaging Service
 
-### Requirement 2: Authentication (OIDC)
+### Requirement 2: Authentication (OIDC) & Permission Resolution
 
-**User Story:** Là hệ thống, tôi cần validate JWT tokens từ Keycloak.
+**User Story:** Là hệ thống, tôi cần validate JWT tokens từ Keycloak, phân giải vai trò thành quyền hạn chi tiết và ký số chuyển tiếp xuống các microservices bảo mật.
 
 #### Acceptance Criteria
 1. THE Gateway SHALL validate JWT tokens qua OIDC plugin kết nối Keycloak
 2. WHEN token invalid hoặc expired, THE Gateway SHALL trả về 401 Unauthorized
-3. THE Gateway SHALL inject tenant_id và user_id từ token claims vào request headers
-4. THE Gateway SHALL whitelist webhook endpoints (không cần auth)
-5. THE Gateway SHALL whitelist health check endpoints
+3. THE Gateway SHALL trích xuất claims, tự động phân giải chúng thành danh sách quyền hạn động theo quy chuẩn `{service}:{resource}:{action}` thông qua 2 lớp cache (Redis và Kong Shared Memory) kết hợp API Fallback gọi tới Tenant Config Service.
+4. THE Gateway SHALL ký số danh sách quyền này bằng HMAC-SHA256 sử dụng khóa bí mật chung và inject thành các headers bảo mật: X-Tenant-ID, X-User-ID, X-User-Permissions (CSV) và X-Permissions-Signature trước khi forward tới downstream services.
+5. THE Gateway SHALL whitelist webhook endpoints (không cần auth)
+6. THE Gateway SHALL whitelist health check endpoints
 6. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist.
 7. THE Gateway SHALL thực hiện kiểm tra tính hợp lệ của OAuth2 client scopes (Scope Validation) đối với các API request. Khi forward request đến một service nghiệp vụ cụ thể, Gateway phải xác minh Access Token chứa scope được chỉ định của service đó (ví dụ: route `/api/v1/campaigns` yêu cầu scope `campaign`). Nếu thiếu scope hợp lệ, Gateway SHALL từ chối request với mã lỗi `403 Forbidden`.
 

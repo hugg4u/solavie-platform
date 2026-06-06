@@ -22,7 +22,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | DB write fail, AI Core scoring fail, merge conflict | `"Lead scoring failed: AI Core timeout"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Duplicate detected, score spike (possible anomaly) | `"Potential duplicate: same phone across 2 contacts"` |
 | INFO | Contact created, score updated, segment recalculated, merge completed | `"Contact merged: 2 records → 1"` |
 | DEBUG | Scoring factors detail, segment filter queries, merge resolution | `"Segment 'hot-leads' recalculated: 45 contacts"` |
@@ -43,6 +45,11 @@ crm_mcp_tool_execution_duration_seconds: Histogram [tenant_id, server_name, tool
 crm_mcp_security_violations_total: Counter [tenant_id, reason]
 ```
 
+
+// Zero-Trust Security Metrics
+crm_security_signature_failures_total: Counter [tenant_id, client_ip]
+crm_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -53,6 +60,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(crm_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(crm_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | ScoringFailing | ai_scoring errors > 5 in 10m | warning |
 | HighDuplicateRate | duplicates_detected > 20 in 1h | info |
 | KafkaConsumerLag | lag > 500 for 5m | warning |

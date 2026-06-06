@@ -23,7 +23,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | All delivery channels failed, Slack/email API down | `"Delivery failed: slack 503, email timeout, push rejected"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Primary channel failed (fallback used), quiet hours skipped for critical | `"Slack failed, fallback to email"` |
 | INFO | Notification sent, delivered, read | `"Handoff notification delivered via slack in 850ms"` |
 | DEBUG | Preference lookup, channel selection logic, retry details | `"User prefs: slack=true, email=true, quiet=22:00-08:00"` |
@@ -47,6 +49,11 @@ notifications_mcp_requests_total: Counter [tool_name, status] // status: success
 notifications_mcp_execution_duration_seconds: Histogram [tool_name]
 ```
 
+
+// Zero-Trust Security Metrics
+notification_security_signature_failures_total: Counter [tenant_id, client_ip]
+notification_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -57,6 +64,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(notification_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(notification_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | DeliveryFailureHigh | sent{status=failed} > 10% in 5m | critical |
 | HandoffSLABreach | sla_breached{priority=critical} > 0 | critical |
 | SlackAPIDown | slack delivery errors > 5 in 2m | warning |

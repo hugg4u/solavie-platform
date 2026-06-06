@@ -348,6 +348,31 @@ kong:
 ```
 
 
+## Dynamic Permission Resolution (RBAC) & HMAC Signing
+
+Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện phân giải quyền hạn động từ vai trò người dùng (User Roles) sang danh sách quyền hạn chi tiết (Permissions), sau đó ký số bằng HMAC-SHA256 để chống giả mạo khi chuyển tiếp request xuống downstream.
+
+### Luồng Phân Giải Quyền Hạn (3-Step Lookup):
+1.  **Bước 1: Giải mã JWT**: Trích xuất `tenant_id`, `user_id` (`sub`) và `roles` (từ `realm_access.roles` hoặc `roles`).
+2.  **Bước 2: Tìm kiếm Quyền hạn**:
+    - **Tầng 1 (Redis Cache)**: Gửi lệnh `GET tenant:{tenant_id}:role:{role}:permissions` tới Redis cho từng vai trò.
+    - **Tầng 2 (Kong shm)**: Nếu Redis sập hoặc cache miss, truy xuất trong Kong Shared Memory Cache (`kong.shared.policy_cache`).
+    - **Tầng 3 (API Fallback)**: Nếu shm cache miss, gửi HTTP Request gọi trực tiếp tới Tenant Config Service:
+      `GET http://tenant-config:3006/api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role1,role2...`
+      Sau khi nhận phản hồi, ghi ngược lại vào Redis và Kong shm.
+    - **Fail-Secure**: Nếu cả 3 bước đều thất bại, trả về lỗi `503 Service Unavailable` hoặc `403 Forbidden` (không tự ý fallback sang quyền mặc định).
+3.  **Bước 3: Hợp nhất (Union Set) & Ánh xạ Wildcard**:
+    - Gộp tất cả các quyền của các roles lại.
+    - Nếu vai trò là `admin` hoặc `system`, tự động thu gọn thành `*` (wildcard).
+4.  **Bước 4: HMAC Signing**:
+    - Payload ký: `tenant_id + ":" + user_id + ":" + user_permissions`
+    - Signature: `hex(hmac_sha256(GATEWAY_SIGNING_SECRET, payload))`
+5.  **Bước 5: Inject Headers**:
+    - Inject `X-Tenant-ID`
+    - Inject `X-User-ID`
+    - Inject `X-User-Permissions` (chuỗi CSV)
+    - Inject `X-Permissions-Signature` (signature)
+
 ## Data Models
 
 Service n�y kh�ng c� database ri�ng. Xem data models t?i c�c services li�n quan.

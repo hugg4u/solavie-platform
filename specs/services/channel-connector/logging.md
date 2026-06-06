@@ -25,7 +25,9 @@
 ### Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | Webhook verify fail, send message fail after retries, token refresh fail | `"Facebook send failed after 3 retries"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Circuit breaker trip, token expiring soon, retry attempt | `"Zalo circuit breaker OPEN"` |
 | INFO | Webhook received, message sent, token refreshed | `"Message sent to facebook, delivery: ok"` |
 | DEBUG | Raw webhook payload, normalized message, API response | `"Webhook payload: {truncated}"` |
@@ -146,6 +148,11 @@ const kafkaPublishTotal = new Counter({
 });
 ```
 
+
+// Zero-Trust Security Metrics
+channel_connector_security_signature_failures_total: Counter [tenant_id, client_ip]
+channel_connector_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 
 ```
@@ -158,6 +165,8 @@ GET /metrics  → Prometheus format
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(channel_connector_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(channel_connector_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | PlatformDisconnected | circuit_breaker_state == 1 for > 5m | critical |
 | HighSendFailRate | messages_sent{status=failed} / total > 10% | warning |
 | TokenRefreshFailing | token_refresh{status=failed} > 0 for 10m | critical |

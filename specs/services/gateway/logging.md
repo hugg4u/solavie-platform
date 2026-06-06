@@ -52,3 +52,29 @@ GET :8001/metrics    → Prometheus metrics (admin API)
 | RateLimitSpike | rate_limiting{status=rejected} > 100 in 5m | info |
 | UpstreamDown | upstream 503 responses > 10 in 1m | critical |
 | HighConnections | connections_active > 5000 | warning |
+| HighGatewayFetchFailures | sum(rate(gateway_security_rbac_fetch_failures_total[5m])) > 5 | critical |
+
+## Dynamic Policy Resolution Security Logs
+
+### Permission Resolution Log Format
+```json
+{
+  "timestamp": "2026-06-06T11:30:00.123Z",
+  "level": "info",
+  "message": "Dynamic policy resolution completed",
+  "tenant_id": "tenant-uuid",
+  "user_id": "user-uuid",
+  "roles": ["admin", "user"],
+  "permissions": ["analytics:metrics:read", "analytics:reports:read"],
+  "cache_status": "local_shm_hit",
+  "signature_generated": true
+}
+```
+
+### Zero-Trust Security Metrics
+```
+gateway_security_signature_generated_total: Counter [tenant_id, service]
+gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache_layer: shm, redis, fallback
+gateway_security_rbac_fetch_failures_total: Counter [tenant_id, source] // source: redis, fallback_tcs
+```
+

@@ -57,3 +57,13 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 5. Khi nhận sự kiện xóa tài khoản người dùng từ Keycloak, User_Service SHALL thực hiện xóa mềm (Soft Delete) hồ sơ nghiệp vụ tương ứng.
 6. THE User_Service SHALL tích hợp cơ chế **Lazy Synchronization** (Tự phục hồi đồng bộ khi đăng nhập): Khi người dùng đăng nhập lần đầu tiên thành công và có JWT Token hợp lệ, nếu trạng thái DB local vẫn là `PENDING`, User_Service SHALL tự động cập nhật trạng thái User thành `ACTIVE` để dự phòng sự cố mất Webhook.
 7. Endpoint Webhook nhận sự kiện từ Keycloak (`POST /api/v1/users/events`) SHALL được bảo mật bằng cơ chế **Signature Verification** (xác thực chữ ký HMAC-SHA256 với Shared Secret) để ngăn chặn các request giả mạo.
+
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `user` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE USER_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE USER_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE USER_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `user:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `user:*` (Toàn quyền trên service), và `user:{resource}:*` (Toàn quyền trên tài nguyên).

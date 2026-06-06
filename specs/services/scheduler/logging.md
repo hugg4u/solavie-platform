@@ -23,12 +23,18 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | Publish failed after retries, Quartz job error | `"Publish failed: channel-connector 503, retries exhausted"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Retry attempt, schedule missed window, automation disabled | `"Retry 2/3 for schedule sched-uuid"` |
 | INFO | Schedule created, triggered, published, automation executed | `"Schedule triggered: 3 channels"` |
 | DEBUG | Quartz job details, cron expressions, automation flow steps | `"Automation flow step 2/4: generate_content"` |
 
 ## Prometheus Metrics (Spring Boot Actuator + Micrometer)
+
+// Zero-Trust Security Metrics
+scheduler_security_signature_failures_total: Counter [tenant_id, client_ip]
+scheduler_security_permission_denied_total: Counter [tenant_id, required_permission]
 ```java
 // Exposed at /actuator/prometheus
 schedules_created_total: Counter [tenant_id]
@@ -49,6 +55,8 @@ scheduler_mcp_execution_duration_seconds: Timer [tool_name]
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(scheduler_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(scheduler_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | PublishFailures | triggered{status=failed} > 3 in 10m | warning |
 | OverdueSchedules | overdue > 5 for 5m | critical |
 | QuartzJobStuck | jobs_running same value for > 10m | warning |

@@ -23,7 +23,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | AI Core fail, KB unreachable, DB write fail | `"Content generation failed: AI Core timeout"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Low quality score, regeneration needed | `"Quality score 0.55, needs revision"` |
 | INFO | Content generated, approved, published, rejected | `"Post approved by manager, scheduling..."` |
 | DEBUG | Full generated content, RAG context, quality check details | `"Quality issues: [brand_voice_mismatch]"` |
@@ -41,11 +43,17 @@ content_published_total: Counter ['platform']
 content_mcp_connections_active: Gauge [tenant_id]
 content_mcp_requests_total: Counter [tool_name, status] # status: success/error
 content_mcp_execution_duration_seconds: Histogram [tool_name]
+
+// Zero-Trust Security Metrics
+content_security_signature_failures_total: Counter [tenant_id, client_ip]
+content_security_permission_denied_total: Counter [tenant_id, required_permission]
 ```
 
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(content_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(content_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | GenerationFailing | generated{status=error} > 3 in 10m | warning |
 | LowQualityRate | quality_score < 0.7 for > 50% in 1h | info |
 | ApprovalBacklog | pending approvals > 20 | info |

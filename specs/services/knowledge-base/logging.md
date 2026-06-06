@@ -24,7 +24,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | Qdrant unreachable, embedding API fail, document parse fail | `"Qdrant connection refused"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Low search scores, embedding batch partial fail, slow query | `"Search: all scores < 0.5, likely irrelevant"` |
 | INFO | Document uploaded, search completed, embedding batch done | `"Document indexed: 45 chunks, 12s"` |
 | DEBUG | Chunk content, embedding vectors (truncated), rerank scores | `"Rerank scores: [0.89, 0.76, 0.71, 0.65, 0.52]"` |
@@ -72,6 +74,11 @@ kb_mcp_tool_executions_total: Counter ['tenant_id', 'status']
 kb_mcp_security_violations_total: Counter ['tenant_id']
 ```
 
+
+// Zero-Trust Security Metrics
+knowledge_base_security_signature_failures_total: Counter [tenant_id, client_ip]
+knowledge_base_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -82,6 +89,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(knowledge_base_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(knowledge_base_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | QdrantDown | qdrant health check fail > 30s | critical |
 | SearchSlow | search_duration p95 > 50ms | warning |
 | LowSearchQuality | top_score < 0.5 for > 30% queries in 15m | warning |

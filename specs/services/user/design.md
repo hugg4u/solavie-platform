@@ -192,3 +192,36 @@ sequenceDiagram
     US->>US: Cập nhật database local (nếu cần lưu cache)
     US-->>User: Trả về kết quả cập nhật thành công
 ```
+
+
+## Zero-Trust HMAC Guard & Permission Manifest
+
+### 1. Permission Manifest API
+`GET /api/v1/permissions/manifest`
+Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
+```json
+{
+    "service": "user",
+    "resources": [
+        {
+            "name": "users",
+            "description": "Tenant workspace users",
+            "actions": [
+                "create",
+                "read",
+                "update",
+                "delete"
+            ]
+        }
+    ]
+}
+```
+
+### 2. Zero-Trust HMAC Signature Verification
+Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request tại lớp Guard/Interceptor của Spring Boot (Java):
+1. Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` từ headers.
+2. Tính toán signature mong đợi:
+   `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
+4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `user:users:create`).
+   - Hỗ trợ wildcard: `*` (Super Admin bypass), `user:*` (Service bypass), và `user:users:*` (Resource bypass).

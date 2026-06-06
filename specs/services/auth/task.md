@@ -141,6 +141,14 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Deploy service to local Docker / Kubernetes cluster.
 - [x] Perform end-to-end tests using the Gateway (Kong) routing.
 
+### Task: Security Integration & Dynamic RBAC (MỚI)
+- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `auth`.
+- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
+- [ ] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
+- [ ] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `auth:*`, `auth:{resource}:*`).
+- [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
+- [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
+
 ## Done When
 
 - [x] All Acceptance Criteria for Requirements are implemented and verified.

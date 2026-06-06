@@ -24,7 +24,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | AI Core classification fail, auto-reply send fail | `"Classification failed: AI Core 503"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Low classification confidence, override detected | `"Classification overridden: spam → neutral by agent"` |
 | INFO | Comment classified, action taken, escalation sent | `"Spam hidden: comment-uuid on post-xyz"` |
 | DEBUG | AI prompt/response, classification scores, override learning data | `"Scores: spam=0.12, neg=0.05, question=0.91"` |
@@ -46,6 +48,11 @@ comments_mcp_requests_total: Counter [tool_name, status] // status: success/erro
 comments_mcp_execution_duration_seconds: Histogram [tool_name]
 ```
 
+
+// Zero-Trust Security Metrics
+comment_manager_security_signature_failures_total: Counter [tenant_id, client_ip]
+comment_manager_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -56,6 +63,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(comment_manager_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(comment_manager_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | ClassificationFailing | AI Core errors > 5 in 5m | warning |
 | HighOverrideRate | overrides / processed > 20% in 1h | info (model needs retraining) |
 | SpamSpike | spam classified > 3x normal rate in 15m | warning |

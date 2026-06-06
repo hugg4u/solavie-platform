@@ -149,7 +149,7 @@ graph TD
         %% Tầng 3: API/Permissions (Structural & Output Gate)
         subgraph "Tầng 3: Security & SDD Gates"
             spec_val[SDD Spec Validator api-spec.yaml]
-            perm_gate[Permission Interceptor module:action]
+            perm_gate["Permission Interceptor (service:resource:action)"]
         end
         
         %% Tầng 4: Integration (MCP Host)
@@ -194,7 +194,7 @@ graph TD
     langgraph_core -->|9. Manage Checkpoints| agent_state
     langgraph_core -->|10. Delegate Tasks| crm_agent & om_agent & inv_agent
     
-    crm_agent & om_agent & inv_agent -->|11. Complete/Reason| llm_router
+    langgraph_core -->|11. Complete/Reason| llm_router
     llm_router -->|12. Semantic Search| qdrant
     llm_router -->|13. Read Database Relations| graph_rag
     llm_router -->|14. Query Codebase/Contracts| gemini_long
@@ -202,7 +202,7 @@ graph TD
     %% Chốt chặn Tool Call
     langgraph_core -->|15. Call Action Tool| spec_val
     spec_val -->|16. Validate Schema| perm_gate
-    perm_gate -->|17. Check Redis/JWT| mcp_host
+    perm_gate -->|17. Verify HMAC & In-memory Check| mcp_host
     
     %% Thực thi Tool và Phân giải PII
     mcp_host -->|18. Re-id PII map| re_id

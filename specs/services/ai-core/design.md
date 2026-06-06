@@ -178,15 +178,24 @@ Khi chạy các Agent Tools (như Web Search, Knowledge Base Search, Content Gen
 3.  AI Core lắng nghe kênh Redis Pub/Sub `system.limits.updates`. Khi nhận được thông báo cập nhật hạn mức gói cước, nó sẽ xóa cache cũ trên Redis để lần gọi tiếp theo nạp lại động hạn mức mới.
 4.  Tiến trình rate limiter thực hiện đếm lượt gọi và kiểm tra hạn mức bằng Redis token bucket `ratelimit:{tenant_id}:{tool_name}:{window}`.
 
-### Dynamic RBAC Keycloak Permission Check:
-Khi Agent chuẩn bị thực thi bất kỳ công cụ nào (MCP Tool hoặc Local Tool), hệ thống bắt buộc thực hiện kiểm tra quyền người dùng tại Security Middleware trước khi gửi yêu cầu đến service đích:
-1.  **Trích xuất mã quyền hạn của Tool:** Đọc thuộc tính `required_permission` của tool trong Registry (phải có định dạng `module:action` như `crm:read`, `kb:search`, `messaging:chat`).
-2.  **Đọc Token Permissions:**
-    - Trích xuất JWT Token từ gRPC/HTTP metadata.
-    - Tìm kiếm danh sách quyền hạn (claims `permissions`) được nhúng trực tiếp trong JWT.
-    - Nếu JWT không chứa permissions (hoặc để tối ưu hiệu năng/hot-reload phân quyền), thực hiện truy vấn nhanh danh sách quyền trong Redis cache Keycloak với key `{tenant_id}:permissions:{user_role}` (độ trễ yêu cầu $< 50$ms).
-3.  **So khớp Quyền:**
-    - Nếu danh sách quyền của người dùng KHÔNG chứa mã `required_permission` của tool $\rightarrow$ Ngay lập tức từ chối và trả về lỗi `Permission denied` (1ms) mà không gọi LLM hoặc service đích.
+### Dynamic RBAC & HMAC Signature Verification:
+Khi AI Core nhận request (HTTP hoặc gRPC) từ API Gateway, hệ thống bắt buộc thực hiện kiểm tra chữ ký số và phân giải quyền tại Security Guard/Interceptor:
+1.  **Xác thực Chữ ký số (HMAC Validation)**:
+    - Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` (CSV) và `X-Permissions-Signature` từ headers (REST) hoặc metadata (gRPC).
+    - Tính toán lại chữ ký: `expected_signature = hmac_sha256(GATEWAY_SIGNING_SECRET, tenant_id + ":" + user_id + ":" + user_permissions)`.
+    - Đối chiếu `X-Permissions-Signature` với `expected_signature`. Nếu không khớp, từ chối ngay lập tức với mã lỗi `403 Forbidden` (Signature Mismatch).
+2.  **Trích xuất mã quyền hạn của Tool**: Đọc thuộc tính `required_permission` của tool trong Registry, tuân thủ convention: `{service_name}:{resource_type}:{action_name}` (ví dụ: `kb:documents:read`, `crm:contacts:read`).
+3.  **So khớp Quyền in-memory O(1)**:
+    - Parse `X-User-Permissions` thành `Set[str]`.
+    - Kiểm tra nếu `*` (wildcard) có trong set, hoặc `required_permission` có trong set.
+    - Nếu có, cho phép thực thi. Ngược lại, trả về lỗi `Permission denied` (1ms) mà không gọi LLM hoặc service đích.
+4.  **Tự động bypass (Trusted Internal / System API)**:
+    - Nếu request gRPC nội bộ từ các service tin cậy không kèm metadata phân quyền, hệ thống tự động gán permissions mặc định là `["*"]` (Super Admin bypass).
+
+### Permission Manifest Endpoint:
+AI Core expose một API công khai trong mạng nội bộ:
+`GET /api/v1/permissions/manifest`
+- Endpoint này trả về danh sách các tài nguyên (như `chats`, `configs`, `prompts`, `analytics`) và các hành động tương ứng (`create`, `read`, `write`, `delete`) mà AI Core hỗ trợ để Dashboard render UI động.
 
 
 ### Configuration Sync Mechanism (Hot Reload)

@@ -66,6 +66,7 @@ graph TB
 ## API Design
 
 ```
+GET    /api/v1/permissions/manifest     — Expose permissions manifest for this service
 # Job Management
 GET    /api/v1/media/jobs/{job_id}         — Get job status (tenant-scoped)
 GET    /api/v1/media/jobs/{job_id}/status  — Lightweight status check (< 200ms)
@@ -480,6 +481,37 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
+
+
+## Zero-Trust HMAC Guard & Permission Manifest
+
+### 1. Permission Manifest API
+`GET /api/v1/permissions/manifest`
+Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
+```json
+{
+    "service": "media-processor",
+    "resources": [
+        {
+            "name": "jobs",
+            "description": "Media processing tasks",
+            "actions": [
+                "create",
+                "read"
+            ]
+        }
+    ]
+}
+```
+
+### 2. Zero-Trust HMAC Signature Verification
+Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request tại lớp Guard/Interceptor của Python / FastAPI:
+1. Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` từ headers.
+2. Tính toán signature mong đợi:
+   `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
+4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `media-processor:jobs:create`).
+   - Hỗ trợ wildcard: `*` (Super Admin bypass), `media-processor:*` (Service bypass), và `media-processor:jobs:*` (Resource bypass).
 
 ## Security & Gateway Integration
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.

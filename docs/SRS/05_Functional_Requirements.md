@@ -73,17 +73,17 @@
 - **Truy vết:** UC-02, US-003
 
 
-### FR-AUTH-005: Quản lý Vai trò và Quyền hạn (Role Management)
-- **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng.
-- **Đầu vào:** Tên vai trò, danh sách permissions chọn từ danh mục.
+### FR-AUTH-005: Quản lý Vai trò và Quyền hạn động (Dynamic Role & Permission Management)
+- **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng. Danh sách quyền hạn có sẵn hiển thị trên Dashboard được tổng hợp tự động từ các Permission Manifest API (`GET /api/v1/permissions/manifest`) của các microservices đang chạy.
+- **Đầu vào:** Tên vai trò, danh sách permissions chọn từ danh mục động.
 - **Đầu ra:** Vai trò mới được ghi nhận trong cơ sở dữ liệu `keycloak_db` và `config_db`.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-02, US-003
 
-### FR-AUTH-006: Đồng bộ hóa quyền hạn thời gian thực (Real-time Permission Sync)
-- **Mô tả:** Khi Tenant Admin thay đổi danh sách permissions của một Role, hệ thống **PHẢI** thu hồi (invalidate) ngay lập tức các cached session liên quan đến Role đó trên Redis.
-- **Đầu vào:** Sự kiện lưu thay đổi vai trò.
-- **Đầu ra:** Phép thay đổi có hiệu lực ngay trong lượt gọi API tiếp theo của Agent mà không cần đăng nhập lại.
+### FR-AUTH-006: Phân giải quyền hạn động tại Gateway & Ký số (Gateway Permission Resolution & HMAC Signing)
+- **Mô tả:** API Gateway **PHẢI** tự động phân giải danh sách vai trò (roles) trong JWT token của người dùng thành danh sách các quyền hạn chi tiết (permissions) theo quy chuẩn `{service}:{resource}:{action}` bằng cách truy vấn Redis cache. Nếu Redis cache sập hoặc cache miss, Gateway **PHẢI** truy vấn Kong local memory cache (shm cache), và cuối cùng gửi request nội bộ gọi tới Tenant Config Service để lấy quyền trực tiếp từ database (API Fallback). Gateway **PHẢI** ký số danh sách quyền này bằng thuật toán HMAC-SHA256 sử dụng khóa bí mật chung trước khi forward request xuống các microservices nội bộ qua các header `X-User-Permissions` và `X-Permissions-Signature`.
+- **Đầu vào:** JWT Token của request gửi qua Gateway.
+- **Đầu ra:** HTTP Request được inject 2 headers: `X-User-Permissions` (dạng CSV) và `X-Permissions-Signature` (HMAC chữ ký).
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-02, US-004
 

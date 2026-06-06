@@ -63,6 +63,16 @@ Dịch vụ quản lý hộp thư hợp nhất (unified inbox), conversation lif
 3. THE Messaging_Service SHALL cung cấp công cụ `handoff_to_agent` để chuyển hướng cuộc hội thoại sang chế độ thủ công (manual) và gán cho Agent phù hợp.
 4. THE Messaging_Service SHALL thực thi ràng buộc bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` hợp lệ và tự động áp dụng `tenant_id` này cho mọi thao tác truy vấn cơ sở dữ liệu và gọi công cụ.
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `messaging` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE MESSAGING_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE MESSAGING_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE MESSAGING_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `messaging:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `messaging:*` (Toàn quyền trên service), và `messaging:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs và SSE endpoints của Messaging Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `messaging`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Messaging Service.

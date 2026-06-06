@@ -259,6 +259,11 @@ Tất cả services PHẢI tuân theo các chuẩn chung định nghĩa trong `s
 7. **Health Checks** — `/health`, `/ready`, `/metrics`
 8. **Multi-tenancy** — filter tenant_id mọi layer
 9. **Tracing** — W3C trace context, OpenTelemetry
+10. **Global Permission Specification & Signed Headers**:
+    - Tất cả các mã quyền hạn trong hệ thống phải tuân thủ convention: `{service_name}:{resource_type}:{action_name}`.
+    - Hỗ trợ ký tự đại diện `*` (wildcard) ở bất kỳ cấp độ nào.
+    - Mọi microservice (downstream service) khi nhận request nội bộ từ Gateway bắt buộc phải xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để chống giả mạo.
+    - Mọi microservice bắt buộc phải cung cấp API manifest `GET /api/v1/permissions/manifest` liệt kê các tài nguyên và hành động mà nó hỗ trợ để Dashboard tổng hợp và render UI cấu hình động.
 
 Xem chi tiết: `shared/standards.md`
 
