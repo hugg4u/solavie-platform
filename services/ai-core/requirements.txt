@@ -17,3 +17,5 @@ cryptography==42.0.5
 pybreaker==1.2
 prometheus-client==0.20.0
 tavily-python>=0.3.0
+mcp>=1.0.0
+httpx-sse>=0.4.0

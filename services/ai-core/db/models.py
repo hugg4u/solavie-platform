@@ -88,3 +88,20 @@ class SystemDefaultRouteConfig(Base):
         UniqueConstraint('provider', 'use_case', name='uq_provider_use_case_default'),
     )
 
+
+class TenantMCPServer(Base):
+    __tablename__ = "tenant_mcp_servers"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid, nullable=False, index=True)
+    server_name = Column(String(50), nullable=False)
+    sse_url = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'server_name', name='uq_tenant_server'),
+    )
+
+

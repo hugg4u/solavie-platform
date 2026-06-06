@@ -8,7 +8,7 @@ from sqlalchemy import select
 from core.config import settings
 from core.redis_client import redis_client
 from db.database import SessionLocal
-from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig
+from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig, TenantMCPServer
 from core.providers import PROVIDER_PRIORITY, get_provider_by_model
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,46 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
             cred_cache_key = f"{tenant_uuid}:config:api_keys:{provider_name}"
             await redis_client.delete(cred_cache_key)
             logger.info(f"Invalidated provider credentials cache for {cred_cache_key}")
+
+        # Sync MCP Servers Whitelist
+        mcp_servers = config_data.get("mcp_server_whitelist") or config_data.get("mcp_servers", [])
+        new_servers = {s["server_name"]: s for s in mcp_servers if "server_name" in s}
+
+        try:
+            stmt_mcp = select(TenantMCPServer).where(TenantMCPServer.tenant_id == tenant_uuid)
+            res_mcp = await db.execute(stmt_mcp)
+            existing_servers = res_mcp.scalars().all()
+            existing_map = {s.server_name: s for s in existing_servers}
+
+            for s_name, s_data in new_servers.items():
+                url_val = s_data.get("sse_url")
+                status_val = s_data.get("status", "active")
+                is_active_val = (status_val == "active" or s_data.get("is_active", True) is not False)
+                
+                if s_name in existing_map:
+                    db_server = existing_map[s_name]
+                    db_server.sse_url = url_val
+                    db_server.is_active = is_active_val
+                else:
+                    db_server = TenantMCPServer(
+                        tenant_id=tenant_uuid,
+                        server_name=s_name,
+                        sse_url=url_val,
+                        is_active=is_active_val
+                    )
+                    db.add(db_server)
+                    
+            # Deactivate servers not present in new whitelist
+            for s_name, db_server in existing_map.items():
+                if s_name not in new_servers:
+                    db_server.is_active = False
+
+            # Invalidate Redis cache for MCP servers
+            mcp_cache_key = f"{tenant_uuid}:config:mcp_servers"
+            await redis_client.delete(mcp_cache_key)
+            logger.info(f"Invalidated MCP servers whitelist cache for {mcp_cache_key}")
+        except Exception as e:
+            logger.error(f"Error syncing MCP servers whitelist for tenant {tenant_id}: {e}")
 
         await db.commit()
 

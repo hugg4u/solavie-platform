@@ -10,6 +10,7 @@ from core.config import settings
 from core.circuit_breaker import call_async
 from gateway.router import LLMGateway
 from core.utils import is_vietnamese
+from gateway.mcp.manager import MCPClientManager
 
 logger = logging.getLogger("solavie.ai_core.tools.executor")
 
@@ -46,6 +47,7 @@ class ToolExecutor:
         # We configure a shared HTTP client
         self.client = httpx.AsyncClient(timeout=10.0)
         self.gateway = LLMGateway()
+        self.mcp_manager = MCPClientManager()
 
     async def execute(self, tool_name: str, args: Dict[str, Any], tenant_id: str) -> str:
         """Executes a tool call securely by injecting tenant isolation variables and applying dynamic timeouts."""
@@ -75,38 +77,11 @@ class ToolExecutor:
 
     async def _route_and_execute(self, tool_name: str, args: Dict[str, Any], tenant_id: str) -> str:
         """Route tool to its execution handler."""
+        # 1. Nhóm các công cụ hệ thống cục bộ (Local Tools)
         if tool_name == "web_search":
             return await self._execute_web_search(args.get("query", ""))
         elif tool_name == "fetch_url":
             return await self._execute_fetch_url(args.get("url", ""))
-        elif tool_name == "knowledge_base_search":
-            return await self._execute_kb_search(tenant_id, args.get("query", ""), args.get("top_k", 5))
-        elif tool_name == "send_message":
-            return await self._execute_send_message(
-                tenant_id, 
-                args.get("conversation_id", ""), 
-                args.get("content") or args.get("message", "")
-            )
-        elif tool_name == "analytics_query":
-            return await self._execute_analytics_query(tenant_id, args)
-        elif tool_name == "contact_lookup":
-            return await self._execute_contact_lookup(tenant_id, args)
-        elif tool_name == "get_social_trends":
-            return await self._execute_get_social_trends(args)
-        elif tool_name == "handoff_to_agent":
-            return await self._execute_handoff_to_agent(tenant_id, args)
-        elif tool_name == "tag_contact":
-            return await self._execute_tag_contact(tenant_id, args)
-        elif tool_name == "create_schedule":
-            return await self._execute_create_schedule(tenant_id, args)
-        elif tool_name == "hide_comment":
-            return await self._execute_hide_comment(tenant_id, args)
-        elif tool_name == "send_notification":
-            return await self._execute_send_notification(tenant_id, args)
-        elif tool_name == "generate_content":
-            return await self._execute_generate_content(tenant_id, args)
-        elif tool_name == "adapt_content":
-            return await self._execute_adapt_content(tenant_id, args)
         elif tool_name == "embed_text":
             return await self._execute_embed_text(tenant_id, args)
         elif tool_name == "summarize":
@@ -117,8 +92,38 @@ class ToolExecutor:
             return await self._execute_analyze_sentiment(tenant_id, args)
         elif tool_name == "calculate_lead_score":
             return await self._execute_calculate_lead_score(tenant_id, args)
-        else:
-            return f"Error: Tool '{tool_name}' not supported."
+            
+        # 2. Nhóm các công cụ nghiệp vụ động điều phối qua MCP SSE (Remote Tools)
+        mcp_mapping = {
+            "knowledge_base_search": "knowledge__kb_search",
+            "send_message": "messaging__send_message",
+            "handoff_to_agent": "messaging__handoff_to_agent",
+            "analytics_query": "analytics__analytics_query",
+            "contact_lookup": "crm__get_contact_360",
+            "tag_contact": "crm__tag_contact",
+            "create_schedule": "scheduler__schedule_post",
+            "hide_comment": "comment__hide_comment",
+            "send_notification": "notification__send_notif",
+            "generate_content": "content__generate_content",
+            "adapt_content": "content__adapt_content",
+            "get_social_trends": "content__get_social_trends",
+            "calculate_solar_roi": "crm__calculate_solar_roi",
+        }
+        
+        full_mcp_name = mcp_mapping.get(tool_name)
+        if not full_mcp_name:
+            if "__" in tool_name:
+                full_mcp_name = tool_name
+            else:
+                return f"Error: Tool '{tool_name}' not supported."
+            
+        # Gọi thực thi qua MCP Manager (Kiểm tra whitelist & gửi JSON-RPC qua SSE)
+        return await self.mcp_manager.execute_mcp_tool(
+            tenant_id=tenant_id,
+            full_tool_name=full_mcp_name,
+            arguments=args
+        )
+
 
     async def _execute_web_search(self, query: str) -> str:
         """Executes search query via Tavily API wrapped in a Circuit Breaker."""

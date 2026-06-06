@@ -510,6 +510,16 @@
 
         <div class="header-actions">
             <div class="tenant-selector">
+                <i data-lucide="shield" size="16" style="color: var(--accent-primary);"></i>
+                <select id="userRoleSelect" onchange="onRoleChange()">
+                    <option value="admin">Admin</option>
+                    <option value="manager">Manager</option>
+                    <option value="standard_user">Standard User</option>
+                    <option value="visitor" selected>Visitor</option>
+                </select>
+            </div>
+
+            <div class="tenant-selector">
                 <i data-lucide="building-2" size="16" style="color: var(--accent-secondary);"></i>
                 <select id="tenantSelect" onchange="onTenantChange()">
                     <option value="d3b07384-d113-4ec2-a5d8-7e30d1774e1d">Test Tenant (Mock)</option>
@@ -922,6 +932,10 @@
             loadApiKeys();
         }
 
+        function onRoleChange() {
+            showToast('Đã chuyển sang vai trò: ' + document.getElementById('userRoleSelect').value, 'info');
+        }
+
         function onCustomTenantChange() {
             const val = document.getElementById('customTenantInput').value.trim();
             if (val) {
@@ -983,6 +997,7 @@
             chatHistory.push({ role: 'user', content: query });
 
             const tenantId = getTenantId();
+            const userRole = document.getElementById('userRoleSelect').value;
             const useCase = document.getElementById('useCaseSelect').value;
             const systemPrompt = document.getElementById('systemPromptInput').value.trim() || undefined;
             const modelOverride = document.getElementById('modelOverrideInput').value.trim() || undefined;
@@ -995,7 +1010,8 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Tenant-ID': tenantId
+                        'X-Tenant-ID': tenantId,
+                        'X-User-Role': userRole
                     },
                     body: JSON.stringify({
                         tenant_id: tenantId,

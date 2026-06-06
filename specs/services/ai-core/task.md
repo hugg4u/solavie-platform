@@ -258,8 +258,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 18.6: Bổ sung unit tests kiểm thử toàn diện logic mới và chạy pass 100% test suite
 
 ### Task 19: Secure Multi-tenant MCP Host Gateway (MỚI)
-- [ ] Triển khai lớp `MCPClientManager` (`gateway/mcp/manager.py`) hỗ trợ Singleton connection pool SSE.
-- [ ] Triển khai whitelisting động qua bảng `tenant_mcp_servers` để ngăn chặn SSRF.
-- [ ] Bắt buộc tự động tiêm/ghi đè tham số `tenant_id` từ JWT token xác thực vào tham số (arguments) của tool trước khi gửi sang MCP Server.
-- [ ] Cập nhật `ToolExecutor.execute` định tuyến các remote tools (có tiền tố `{server_name}__`) qua `MCPClientManager.execute_mcp_tool`.
-- [ ] Viết unit tests kiểm thử cơ chế whitelisting và tiêm `tenant_id` tại AI Core.
+- [x] Triển khai lớp `MCPClientManager` (`gateway/mcp/manager.py`) hỗ trợ Singleton connection pool SSE.
+- [x] Triển khai whitelisting động qua bảng `tenant_mcp_servers` để ngăn chặn SSRF.
+- [x] Bắt buộc tự động tiêm/ghi đè tham số `tenant_id` từ JWT token xác thực vào tham số (arguments) của tool trước khi gửi sang MCP Server.
+- [x] Cập nhật `ToolExecutor.execute` định tuyến các remote tools (có tiền tố `{server_name}__`) qua `MCPClientManager.execute_mcp_tool`.
+- [x] Viết unit tests kiểm thử cơ chế whitelisting và tiêm `tenant_id` tại AI Core.
+
