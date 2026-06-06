@@ -24,7 +24,8 @@ Keycloak logs qua stdout (JSON format khi cấu hình `--log-format=json`):
 | Event | Khi nào | Severity |
 |-------|---------|----------|
 | LOGIN | User login thành công | INFO |
-| LOGIN_ERROR | Login thất bại (wrong password, locked) | WARN |
+| LOGIN_ERROR | Login thất bại (wrong password, locked) | WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
+| WARN |
 | LOGOUT | User logout | INFO |
 | REGISTER | User mới đăng ký | INFO |
 | UPDATE_PASSWORD | Đổi mật khẩu | INFO |
@@ -45,6 +46,11 @@ keycloak_token_refresh_total: Counter [realm]
 keycloak_request_duration: Histogram [method, route]
 ```
 
+
+// Zero-Trust Security Metrics
+auth_security_signature_failures_total: Counter [tenant_id, client_ip]
+auth_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health/ready  → Keycloak readiness (DB connected, realms loaded)
@@ -55,6 +61,8 @@ GET /metrics       → Prometheus metrics
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(auth_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(auth_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | LoginErrorSpike | login_errors > 50 in 5m | critical (brute force?) |
 | KeycloakDown | health/ready fail > 30s | critical |
 | SessionOverload | active_sessions > 10000 | warning |

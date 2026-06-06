@@ -26,7 +26,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | AI Core timeout, Knowledge Base unreachable, LangGraph error | `"AI Core gRPC timeout: 5000ms"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Low confidence handoff, no RAG docs found, retry | `"Handoff: confidence 0.42, no relevant docs"` |
 | INFO | Intent classified, response generated, handoff executed | `"Reply sent: faq, confidence 0.85, 1200ms"` |
 | DEBUG | Full prompt, RAG documents, LangGraph state transitions | `"Graph state: classify → retrieve → generate"` |
@@ -76,6 +78,11 @@ chatbot_graph_steps_total: Counter ['node'] # classify/retrieve/generate/handoff
 chatbot_checkpoint_saves_total: Counter []
 ```
 
+
+// Zero-Trust Security Metrics
+chatbot_security_signature_failures_total: Counter [tenant_id, client_ip]
+chatbot_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -86,6 +93,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(chatbot_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(chatbot_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | AICoreUnreachable | grpc errors > 5 in 1m | critical |
 | HighLatency | e2e_latency p95 > 3s | warning |
 | HighHandoffRate | handoff / requests > 50% in 30m | warning |

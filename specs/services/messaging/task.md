@@ -83,9 +83,13 @@ This document tracks the implementation checklist for **MESSAGING Service** base
 - [ ] Logs are formatted as structured JSON and trace context is propagated.
 - [ ] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 
-### Task: Security Integration (MỚI)
-- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `messaging`
-- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+### Task: Security Integration & Dynamic RBAC (MỚI)
+- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `messaging`.
+- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
+- [ ] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
+- [ ] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `messaging:*`, `messaging:{resource}:*`).
+- [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
+- [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
 
 ### Task 6: Custom MCP Server Integration
 - [ ] Khởi tạo thư viện `@modelcontextprotocol/sdk` và tích hợp vào dự án NestJS.

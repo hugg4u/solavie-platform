@@ -220,3 +220,57 @@ GET /metrics  → Prometheus format
 | HighLatency | p95 > 5s for chatbot use_case | warning |
 | LowCacheHitRate | cache_hits / (hits + misses) < 20% | info |
 | QuotaApproaching | tenant token usage > 80% monthly quota | info |
+| HighSignatureFailures | sum(rate(ai_core_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(ai_core_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
+
+## Zero-Trust Security Logs & Metrics
+
+### Permission and Signature Failure Log Format
+```json
+{
+  "timestamp": "2026-06-06T11:45:00.123Z",
+  "level": "warn",
+  "service": "ai-core",
+  "trace_id": "xyz987lmn456",
+  "tenant_id": "tenant-uuid",
+  "user_id": "user-uuid",
+  "message": "HMAC signature verification failed: signature mismatch",
+  "context": {
+    "client_ip": "192.168.1.102",
+    "received_signature": "ab09c8f...",
+    "expected_signature": "f2a3c7d..."
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-06-06T11:46:12.456Z",
+  "level": "warn",
+  "service": "ai-core",
+  "trace_id": "xyz987lmn456",
+  "tenant_id": "tenant-uuid",
+  "user_id": "user-uuid",
+  "message": "Permission check failed: required 'ai-core:chats:create'",
+  "context": {
+    "user_permissions": ["ai-core:prompts:read", "ai-core:prompts:write"]
+  }
+}
+```
+
+### Zero-Trust Custom Metrics
+```python
+# Custom security metrics exposed at GET /metrics
+ai_security_signature_failures_total = Counter(
+    "ai_core_security_signature_failures_total",
+    "Total HMAC signature validation failures",
+    ["tenant_id", "client_ip"]
+)
+
+ai_security_permission_denied_total = Counter(
+    "ai_core_security_permission_denied_total",
+    "Total permission denied decisions at downstream guard",
+    ["tenant_id", "required_permission"]
+)
+```
+

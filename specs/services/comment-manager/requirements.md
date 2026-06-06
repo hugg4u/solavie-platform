@@ -44,6 +44,16 @@ Dịch vụ quản lý bình luận trên bài đăng — auto-classify (spam/ne
 2. THE Comment_Manager SHALL cung cấp công cụ `hide_comment` để ẩn bình luận được chỉ định.
 3. THE Comment_Manager SHALL thực thi bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` và tự động tiêm giá trị này để lọc/ẩn bình luận trong cơ sở dữ liệu và gọi API platform tương ứng.
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `comment-manager` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE COMMENT_MANAGER_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE COMMENT_MANAGER_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE COMMENT_MANAGER_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `comment-manager:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `comment-manager:*` (Toàn quyền trên service), và `comment-manager:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs và SSE endpoints của Comment Manager Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `comment-manager`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Comment Manager Service.

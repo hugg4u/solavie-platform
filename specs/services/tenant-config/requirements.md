@@ -186,6 +186,16 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 3. WHEN hạn mức gói cước (Tier Limits) được lưu thành công vào DB, THE Tenant_Config SHALL cập nhật Redis cache key `tier:{tier_name}:limits` và publish một thông điệp thông báo lên kênh Redis Pub/Sub `system.limits.updates`.
 4. THE Tenant_Config SHALL đảm bảo các microservices liên quan tự động lắng nghe kênh `system.limits.updates` và tải lại hạn mức cước mới vào bộ nhớ trong vòng < 5 giây.
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `tenant-config` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE TENANT_CONFIG_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE TENANT_CONFIG_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE TENANT_CONFIG_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `tenant-config:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `tenant-config:*` (Toàn quyền trên service), và `tenant-config:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của Tenant Config Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `tenant-config`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Tenant Config Service.

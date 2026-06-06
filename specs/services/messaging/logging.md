@@ -22,7 +22,9 @@
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|
+| ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | gRPC call to chatbot fail, Kafka consume error, DB write fail | `"gRPC chatbot timeout after 5s"` |
+| WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
 | WARN | Handoff triggered, WebSocket disconnect, conversation auto-closed | `"Handoff: confidence 0.45"` |
 | INFO | Message received, routed, reply sent, conversation created | `"New conversation created: fb_user_123"` |
 | DEBUG | Full message content, gRPC request/response, WebSocket events | `"WS broadcast to 3 clients"` |
@@ -72,6 +74,11 @@ messaging_mcp_requests_total: Counter ['tool_name', 'status'] // status: success
 messaging_mcp_execution_duration_seconds: Histogram ['tool_name']
 ```
 
+
+// Zero-Trust Security Metrics
+messaging_security_signature_failures_total: Counter [tenant_id, client_ip]
+messaging_security_permission_denied_total: Counter [tenant_id, required_permission]
+
 ## Health Endpoints
 ```
 GET /health   → {"status": "ok"}
@@ -82,6 +89,8 @@ GET /metrics  → Prometheus format
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
+| HighSignatureFailures | sum(rate(messaging_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
+| HighPermissionDenied | sum(rate(messaging_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
 | ChatbotGrpcDown | grpc_chatbot_errors > 5 in 1m | critical |
 | HighHandoffRate | handoffs / messages > 50% in 30m | warning |
 | KafkaConsumerLag | consumer lag > 500 for 5m | warning |

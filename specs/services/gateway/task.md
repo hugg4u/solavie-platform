@@ -143,5 +143,13 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
   - `/api/v1/analytics/mcp` về dịch vụ Analytics (`http://analytics:8006`)
 - [ ] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
 
+### Task 7: Dynamic RBAC & HMAC Signing Plugin (MỚI)
+- [x] Triển khai Lua plugin `dynamic-policy` xử lý trích xuất Keycloak roles và phân giải permissions từ các nguồn cache.
+- [x] Triển khai cơ chế Fail-Secure: Trả về 503 hoặc 403 khi tất cả các nguồn dữ liệu đều offline.
+- [x] Triển khai hàm ký HMAC-SHA256 trên Kong Lua để tạo signature.
+- [x] Inject headers `X-User-Permissions` và `X-Permissions-Signature` vào downstream request.
+- [x] Bổ sung cấu hình CORS cho phép các header bảo mật mới đi qua.
+
 ---
-*Last updated: 2026-06-06 — Core tasks completed; MCP tasks added.*
+*Last updated: 2026-06-06 — Core tasks and Dynamic RBAC tasks completed; MCP tasks added.*
+

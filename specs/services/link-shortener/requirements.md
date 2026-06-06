@@ -76,6 +76,16 @@ Dịch vụ rút gọn URL và theo dõi click cho chiến dịch marketing củ
 4. THE Link_Shortener SHALL trả về kết quả analytics trong vòng 2 giây cho khoảng thời gian tối đa 90 ngày
 5. IF campaign_id không tồn tại hoặc không thuộc tenant hiện tại, THEN THE Link_Shortener SHALL trả về HTTP 404
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `link-shortener` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE LINK_SHORTENER_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE LINK_SHORTENER_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE LINK_SHORTENER_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `link-shortener:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `link-shortener:*` (Toàn quyền trên service), và `link-shortener:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của Link Shortener Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `link-shortener`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Link Shortener Service.

@@ -72,6 +72,10 @@
 ### NFR-SEC-004: Che dấu dữ liệu cá nhân (GDPR & Data Masking Compliance)
 - **Mô tả:** Để bảo vệ quyền riêng tư của khách hàng, hệ thống **PHẢI** cung cấp tính năng che dấu dữ liệu (Data Masking) cho các trường thông tin Số điện thoại và Email khi hiển thị cho Agent (chỉ Admin hoặc người có quyền xem thô mới được mở khóa xem đầy đủ).
 
+### NFR-SEC-005: Xác thực Chữ ký Quyền hạn Downstream (Downstream Permission Signature Verification)
+- **Mô tả:** Để ngăn chặn hoàn toàn nguy cơ giả mạo Header (Header Spoofing) trong mạng nội bộ, tất cả các microservices nghiệp vụ (downstream services) khi nhận request **PHẢI** xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng cách tính toán lại chữ ký từ các header `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và khóa bí mật `GATEWAY_SIGNING_SECRET`. Bất kỳ request nào không khớp chữ ký **PHẢI** bị từ chối ngay lập tức với mã lỗi `403 Forbidden`. Thời gian xử lý của lớp bảo vệ này **PHẢI** dưới 2 mili-giây (ms) để không ảnh hưởng đến hiệu năng chung của hệ thống.
+- **Phép đo:** Tracing log của middleware/guard đo bằng OpenTelemetry.
+
 ---
 
 ## 6.5. Tính khả dụng & Trải nghiệm người dùng (Usability - NFR-USA)

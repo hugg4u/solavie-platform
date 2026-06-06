@@ -345,6 +345,36 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
 
+
+## Zero-Trust HMAC Guard & Permission Manifest
+
+### 1. Permission Manifest API
+`GET /api/v1/permissions/manifest`
+Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
+```json
+{
+    "service": "observability",
+    "resources": [
+        {
+            "name": "metrics",
+            "description": "System metrics and logs",
+            "actions": [
+                "read"
+            ]
+        }
+    ]
+}
+```
+
+### 2. Zero-Trust HMAC Signature Verification
+Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request tại lớp Guard/Interceptor của Go / Prometheus / Grafana:
+1. Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` từ headers.
+2. Tính toán signature mong đợi:
+   `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
+4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `observability:metrics:read`).
+   - Hỗ trợ wildcard: `*` (Super Admin bypass), `observability:*` (Service bypass), và `observability:metrics:*` (Resource bypass).
+
 ## Security & Gateway Integration
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `observability`, và inject header `X-Tenant-ID` vào request.

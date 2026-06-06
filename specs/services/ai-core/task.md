@@ -191,9 +191,13 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Logs are formatted as structured JSON and trace context is propagated.
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 
-### Task: Security Integration (MỚI)
-- [x] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `ai-core`
-- [x] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`
+### Task: Security Integration & Dynamic RBAC (MỚI)
+- [x] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `ai-core`.
+- [x] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
+- [x] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
+- [x] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `ai-core:*`, `ai-core:{resource}:*`).
+- [x] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
+- [x] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
 
 ---
 

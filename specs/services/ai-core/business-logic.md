@@ -632,11 +632,13 @@ class ToolPermissionManager:
         if tool_name not in allowed_tools:
             return False
             
-        # 2. Kiểm tra quyền hạn người dùng (RBAC module:action)
+        # 2. Kiểm tra quyền hạn người dùng (RBAC in-memory O(1) matching với wildcard hỗ trợ)
         tool_def = get_tool_definition(tool_name)
         required_perm = tool_def.get("required_permission")
-        if required_perm and required_perm not in user_permissions:
-            return False
+        if required_perm:
+            perms_set = set(user_permissions)
+            if not self._match_wildcard_permission(perms_set, required_perm):
+                return False
         
         # 3. Kiểm tra cấu hình tắt/mở công cụ của riêng Tenant
         tenant_config = await self.get_tenant_config(tenant_id)
@@ -644,6 +646,20 @@ class ToolPermissionManager:
             return False
         
         return True
+
+    def _match_wildcard_permission(self, perms_set: set[str], required_perm: str) -> bool:
+        if "*" in perms_set:
+            return True
+        if required_perm in perms_set:
+            return True
+        parts = required_perm.split(":")
+        if len(parts) == 3:
+            service, resource, action = parts
+            if f"{service}:*" in perms_set:
+                return True
+            if f"{service}:{resource}:*" in perms_set:
+                return True
+        return False
 ```
 
 ---
@@ -844,3 +860,29 @@ Agent Orchestrator gọi LLM Gateway khi cần "reason" (mỗi iteration).
 | Classification | ~300ms | ~300ms (1 iteration, no tools) | Same |
 
 Trade-off: **Chậm hơn một chút nhưng thông minh hơn nhiều**. Agent tự biết khi nào cần thêm info, khi nào đủ.
+
+---
+
+## Zero-Trust Security & Dynamic RBAC Logic
+
+AI Core thực hiện cơ chế xác thực Zero-Trust và phân quyền động (Dynamic RBAC) dựa trên HMAC Signed Headers được truyền từ API Gateway:
+
+### 1. Quy trình xác thực chữ ký (HMAC Verification Flow)
+- AI Core trích xuất các headers từ incoming HTTP/gRPC requests:
+  - `X-Tenant-ID`: ID của Tenant.
+  - `X-User-ID`: ID của User (hoặc Client ID).
+  - `X-User-Permissions`: Chuỗi CSV chứa danh sách quyền của người dùng.
+  - `X-Permissions-Signature`: Chữ ký HMAC-SHA256 dạng hex.
+- Dịch vụ tính toán signature dự kiến bằng khóa bí mật `GATEWAY_SIGNING_SECRET`:
+  `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+- So sánh chữ ký nhận được với `expected_sig` bằng hàm so sánh an toàn chống side-channel attacks (`hmac.compare_digest`). Nếu không khớp, từ chối request với mã lỗi `403 Forbidden` và tăng counter metric lỗi bảo mật.
+
+### 2. So khớp quyền hạn In-Memory O(1)
+- Khi thực thi các tool hoặc bảo vệ endpoints, AI Core chuyển chuỗi `X-User-Permissions` thành một cấu trúc Set để tìm kiếm với độ phức tạp $O(1)$.
+- Đối với mỗi API endpoint hoặc tool yêu cầu quyền hạn `{service}:{resource}:{action}` (ví dụ: `ai-core:chats:create` hoặc `knowledge-base:documents:read`), dịch vụ so khớp quyền:
+  - Nếu Set chứa `*` (Super Admin), cho phép truy cập.
+  - Nếu Set chứa `{service}:*` (Toàn quyền trên dịch vụ), cho phép truy cập.
+  - Nếu Set chứa `{service}:{resource}:*` (Toàn quyền trên tài nguyên), cho phép truy cập.
+  - Nếu Set chứa chính xác `{service}:{resource}:{action}`, cho phép truy cập.
+  - Ngược lại, từ chối truy cập và trả về mã lỗi `403 Forbidden` kèm log lỗi chi tiết.
+

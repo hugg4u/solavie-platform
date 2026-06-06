@@ -42,6 +42,16 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 2. THE Notification_Service SHALL cung cấp công cụ `send_notification` để gửi thông báo.
 3. THE Notification_Service SHALL thực thi bảo mật đa thuê (Multi-tenancy Isolation): chỉ chấp nhận kết nối mang header `X-Tenant-ID` và tự động tiêm giá trị này để bảo vệ dữ liệu trong cơ sở dữ liệu và cấm gửi thông báo chéo giữa các tenant.
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `notification` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE NOTIFICATION_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE NOTIFICATION_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE NOTIFICATION_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `notification:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `notification:*` (Toàn quyền trên service), và `notification:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs và SSE endpoints của Notification Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `notification`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Notification Service.

@@ -322,6 +322,30 @@ async def generate_content_handler(topic: str, platform: str = None, context: st
 
 ---
 
+
+## Zero-Trust Security & Dynamic RBAC Logic
+
+Dịch vụ thực hiện cơ chế xác thực Zero-Trust và phân quyền động (Dynamic RBAC) dựa trên HMAC Signed Headers được truyền từ API Gateway:
+
+### 1. Quy trình xác thực chữ ký (HMAC Verification Flow)
+- Dịch vụ trích xuất các headers từ request:
+  - `X-Tenant-ID`: ID của Tenant.
+  - `X-User-ID`: ID của User.
+  - `X-User-Permissions`: Chuỗi CSV chứa danh sách quyền của người dùng (ví dụ: `content:{resource}:{action}`).
+  - `X-Permissions-Signature`: Chữ ký HMAC-SHA256 dạng hex.
+- Dịch vụ tính toán signature dự kiến bằng khóa bí mật `GATEWAY_SIGNING_SECRET`:
+  `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+- So sánh chữ ký nhận được với `expected_sig` sử dụng hàm so sánh an toàn chống Side-channel attack (ví dụ: so sánh độ dài không đổi/safe compare). Nếu không khớp, từ chối request với mã lỗi `403 Forbidden` và tăng counter metric lỗi bảo mật.
+
+### 2. So khớp quyền hạn In-Memory O(1)
+- Sau khi chữ ký được xác thực, dịch vụ chuyển chuỗi `X-User-Permissions` thành một cấu trúc Set để tìm kiếm với độ phức tạp $O(1)$.
+- Đối với mỗi API endpoint yêu cầu quyền hạn `content:{resource}:{action}`, dịch vụ kiểm tra quyền trong Set:
+  - Nếu Set chứa `*` (Super Admin), cho phép truy cập.
+  - Nếu Set chứa `content:*` (Toàn quyền trên dịch vụ), cho phép truy cập.
+  - Nếu Set chứa `content:{resource}:*` (Toàn quyền trên tài nguyên), cho phép truy cập.
+  - Nếu Set chứa chính xác `content:{resource}:{action}`, cho phép truy cập.
+  - Ngược lại, từ chối truy cập và trả về mã lỗi `403 Forbidden` kèm log lỗi chi tiết.
+
 ## Error Handling
 
 | Scenario | Xử lý |

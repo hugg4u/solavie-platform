@@ -61,6 +61,16 @@ Dịch vụ kết nối các kênh Facebook, Zalo, TikTok — nhận/gửi tin n
 2. WHEN circuit open, THE Channel_Connector SHALL queue messages cho retry sau
 3. THE Channel_Connector SHALL thông báo Notification_Service khi channel bị disconnect
 
+
+### Requirement: Zero-Trust Access Control & Permission Manifest
+
+**User Story:** Là Tenant Admin, tôi muốn xem danh sách quyền hạn mà dịch vụ `channel-connector` hỗ trợ để thiết lập vai trò tùy chỉnh trên Dashboard và đảm bảo bảo mật Zero-Trust downstream.
+
+#### Acceptance Criteria
+1. THE CHANNEL_CONNECTOR_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
+2. THE CHANNEL_CONNECTOR_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
+3. THE CHANNEL_CONNECTOR_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `channel-connector:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `channel-connector:*` (Toàn quyền trên service), và `channel-connector:{resource}:*` (Toàn quyền trên tài nguyên).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của Channel Connector Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `channel-connector`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Channel Connector Service.
