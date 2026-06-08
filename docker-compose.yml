@@ -106,6 +106,7 @@ services:
       KONG_LOG_LEVEL: info
       KONG_PLUGINS: bundled,dynamic-policy
       GATEWAY_SIGNING_SECRET: ${GATEWAY_SIGNING_SECRET}
+      KONG_MASTER_REALM_TENANT_ID: ${KONG_MASTER_REALM_TENANT_ID:-solavie-system-master}
 
 
     ports:
