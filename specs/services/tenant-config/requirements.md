@@ -86,9 +86,9 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 4. THE Tenant_Config SHALL hỗ trợ gRPC GetAllConfig(tenant_id) trả về toàn bộ cấu hình của Tenant trong một lần gọi
 5. IF tenant_id không tồn tại trong DB, THEN THE Tenant_Config SHALL trả về default config thay vì lỗi
 
-### Requirement 5: Default Config khi Tenant mới
+### Requirement 5: Default Config & Roles Initialization khi Tenant mới
 
-**User Story:** Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình mặc định hợp lý để có thể sử dụng ngay mà không cần cấu hình thủ công.
+**User Story:** Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình và các vai trò mặc định hợp lý để có thể sử dụng ngay mà không cần cấu hình thủ công.
 
 #### Acceptance Criteria
 1. WHEN Auth Service publish event tạo Tenant mới, THE Tenant_Config SHALL tự động tạo bản ghi cấu hình mặc định cho Tenant đó với các giá trị:
@@ -108,8 +108,10 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
    - audit_log_retention_days: 90
    - dms_max_storage_mb: 5000
    - dms_max_file_versions: 5
-2. THE Tenant_Config SHALL hoàn tất tạo default config trong vòng 5 giây sau khi nhận event tạo Tenant mới
-3. IF tạo default config thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần và publish event lỗi lên Kafka để Admin được thông báo
+2. THE Tenant_Config SHALL tự động tạo và seeding 4 vai trò mặc định (`admin`, `manager`, `agent`, `viewer`) cùng danh sách phân quyền mặc định tương ứng vào bảng `roles` và `role_permissions` cho Tenant mới đó.
+3. THE Tenant_Config SHALL đồng bộ toàn bộ danh sách quyền của các vai trò mặc định này lên Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 ngày) ngay trong luồng tạo Tenant mới.
+4. THE Tenant_Config SHALL hoàn tất tạo default config và khởi tạo vai trò trong vòng 5 giây sau khi nhận event tạo Tenant mới.
+5. IF tạo default config hoặc khởi tạo vai trò thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần và publish event lỗi lên Kafka để Admin được thông báo.
 
 ### Requirement 6: Audit Log Thay đổi Cấu hình
 
@@ -188,15 +190,20 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 - **User Story:** Là một Tenant Admin, tôi muốn tự do tạo các vai trò (roles) tùy chỉnh cho tổ chức của mình và gán các quyền hạn (permissions) chi tiết đi kèm nhằm thực thi phân quyền Zero-Trust.
 - **Acceptance Criteria:**
   1. THE Tenant_Config SHALL cung cấp các REST API cho Tenant Admin để quản lý vai trò và quyền hạn:
-     - `GET /api/v1/config/roles`: Xem danh sách các vai trò hiện có của Tenant.
+     - `GET /api/v1/config/roles`: Xem danh sách tất cả các vai trò hiện có của Tenant (bao gồm cả 4 vai trò mặc định của hệ thống và các vai trò tùy chỉnh do tenant tự tạo).
      - `POST /api/v1/config/roles`: Tạo một vai trò tùy chỉnh mới và gán danh sách permissions đi kèm.
      - `PUT /api/v1/config/roles/:role_name/permissions`: Cập nhật danh sách permissions cho vai trò được chỉ định.
      - `DELETE /api/v1/config/roles/:role_name`: Xóa một vai trò tùy chỉnh (chỉ cho phép nếu vai trò không là vai trò hệ thống mặc định).
-  2. THE Tenant_Config SHALL tự động gọi API Keycloak Realm để đồng bộ hóa tạo/xóa vai trò (Realm Role) tương ứng khi có yêu cầu POST hoặc DELETE đối với vai trò từ Dashboard.
-  3. WHEN danh sách permissions của một vai trò được cập nhật thành công trong `config_db`, THE Tenant_Config SHALL lập tức cập nhật/ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 days).
+  2. THE Tenant_Config SHALL tự động gọi REST API của **User Service** (đóng vai trò là Auth Proxy an toàn giữ client credentials của Keycloak) để đồng bộ hóa việc tạo/xóa vai trò (Realm Role) tương ứng trên Keycloak Realm `solavie` khi có yêu cầu POST hoặc DELETE đối với vai trò từ Dashboard. Yêu cầu gọi sang User Service SHALL được bảo vệ bằng chữ ký số HMAC-SHA256 sử dụng `GATEWAY_SIGNING_SECRET`.
+  3. WHEN danh sách permissions của một vai trò được cập nhật thành công trong `config_db`, THE Tenant_Config SHALL lập tức cập nhật/ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 days). Danh sách permissions dạng CSV trước khi lưu vào Redis cache bắt buộc phải được sắp xếp tăng dần theo thứ tự bảng chữ cái (alphabetical order) để chuẩn hóa.
   4. THE Tenant_Config SHALL publish một thông điệp invalidation lên kênh Redis Pub/Sub `config.updates` ngay khi cập nhật permissions để báo cho API Gateway giải phóng local cache của vai trò đó trong vòng < 5 giây.
   5. THE Tenant_Config SHALL chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định của hệ thống (`admin`, `manager`, `agent`, `viewer`) để tránh làm hỏng luồng hoạt động cơ bản của hệ thống. Đồng thời, THE Tenant_Config SHALL chặn các yêu cầu tạo mới hoặc đổi tên vai trò tùy chỉnh trùng với danh sách các từ khóa bảo lưu của hệ thống (`system`, `system_admin`, `super_admin`, `root`) nhằm ngăn ngừa nguy cơ Privilege Escalation.
   6. THE Tenant_Config SHALL đảm bảo cách ly dữ liệu tuyệt đối giữa các tenant: Tenant Admin chỉ được phép CRUD các vai trò của tenant_id của mình (trích xuất từ JWT).
+  7. Bộ phân quyền mặc định (Default Permissions Mapping) khi tạo mới Tenant bao gồm:
+     *   **`admin`**: Toàn quyền trên tất cả các tài nguyên hệ thống (sử dụng wildcard `*` cho các tài nguyên hoặc danh sách đầy đủ: `campaign:*`, `crm:*`, `chatbot:*`, `content:*`, `messaging:*`, `analytics:*`, `ai-core:*`, `tenant-config:*`, `notification:*`, `dms:*`, `link-shortener:*`, `scheduler:*`, `comment-manager:*`, `channel-connector:*`, `media-processor:*`, `knowledge-base:*`, `observability:*`).
+     *   **`manager`**: Có quyền quản trị các module nghiệp vụ như `campaign:*`, `content:*`, `chatbot:conversations:read`, `chatbot:conversations:write`, `chatbot:config:read`, `crm:contacts:read`, `crm:contacts:write`, `messaging:*:read`, `messaging:*:write`, `analytics:*:read`, `ai-core:*:read`, `tenant-config:configs:read`, `notification:*:read`, `notification:*:write`, `dms:*:read`, `dms:*:write`.
+     *   **`agent`**: Có quyền tương tác trực tiếp với khách hàng: `chatbot:conversations:*`, `crm:contacts:read`, `crm:contacts:write`, `messaging:conversations:*`, `notification:messages:send`, `dms:documents:read`.
+     *   **`viewer`**: Chỉ đọc dữ liệu và xem báo cáo: `campaign:*:read`, `crm:*:read`, `chatbot:*:read`, `content:*:read`, `messaging:*:read`, `analytics:*:read`, `ai-core:*:read`, `tenant-config:*:read`, `dms:*:read`.
 
 
 ### Requirement: Zero-Trust Access Control & Permission Manifest
