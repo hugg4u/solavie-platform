@@ -23,13 +23,60 @@ local function to_hex(str)
   end))
 end
 
+local function get_circuit_state()
+  local circuit = ngx.shared.circuit_state
+  if not circuit then
+      return "CLOSED"
+  end
+  local state = circuit:get("state") or "CLOSED"
+  local last_failure = circuit:get("last_failure_time") or 0
+  
+  if state == "OPEN" then
+      if os.time() - last_failure > 10 then -- 10 seconds cooldown
+          circuit:set("state", "HALF-OPEN")
+          state = "HALF-OPEN"
+          kong.log.notice("Circuit Breaker: state transitioning to HALF-OPEN")
+      end
+  end
+  return state
+end
+
+local function record_success()
+  local circuit = ngx.shared.circuit_state
+  if circuit then
+      circuit:set("state", "CLOSED")
+      circuit:set("failures", 0)
+      kong.log.notice("Circuit Breaker: request succeeded, state reset to CLOSED")
+  end
+end
+
+local function record_failure()
+  local circuit = ngx.shared.circuit_state
+  if circuit then
+      local failures = (circuit:get("failures") or 0) + 1
+      circuit:set("failures", failures)
+      circuit:set("last_failure_time", os.time())
+      kong.log.warn("Circuit Breaker: failure recorded, failures=", failures)
+      if failures >= 3 then
+          circuit:set("state", "OPEN")
+          kong.log.alert("Circuit Breaker: failure threshold reached, state set to OPEN")
+      end
+  end
+end
+
 local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
   local cache_key = tenant_id .. ":" .. role
-  local cached = local_cache[cache_key]
   
-  -- 1. Check local memory cache (worker-level)
-  if cached and cached.expire_at > os.time() then
-      return cached.value
+  -- 1. Check L1 Cache (ngx.shared.perm_cache)
+  local perm_cache = ngx.shared.perm_cache
+  if perm_cache then
+      local cached_val = perm_cache:get(cache_key)
+      if cached_val then
+          local success, parsed = pcall(cjson.decode, cached_val)
+          if success and parsed then
+              return parsed
+          end
+      end
   end
 
   -- 2. Check Redis Cache
@@ -39,13 +86,24 @@ local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
       if res and res ~= ngx.null then
           local success, parsed = pcall(cjson.decode, res)
           if success and parsed then
-              local_cache[cache_key] = { value = parsed, expire_at = os.time() + 300 } -- Cache 5 mins
+              if perm_cache then
+                  local success_enc, encoded = pcall(cjson.encode, parsed)
+                  if success_enc and encoded then
+                      perm_cache:set(cache_key, encoded, 300) -- Cache 5 mins in L1
+                  end
+              end
               return parsed
           end
       end
   end
 
-  -- 3. API Fallback to Tenant Config Service
+  -- 3. API Fallback to Tenant Config Service with Circuit Breaker
+  local state = get_circuit_state()
+  if state == "OPEN" then
+      kong.log.warn("Circuit Breaker: state is OPEN, skipping API fallback call to Tenant Config Service")
+      return nil
+  end
+
   if http_ok then
       local httpc = http.new()
       httpc:set_timeout(1000) -- 1s timeout
@@ -59,17 +117,30 @@ local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
           }
       })
       
-      if res and res.status == 200 then
-          local success, parsed = pcall(cjson.decode, res.body)
-          if success and parsed then
-              -- Save back to Redis cache if possible
-              if redis_ok then
-                  local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
-                  red:setex(redis_key, 3600, res.body) -- Cache 1 hour in Redis
+      if res then
+          if res.status == 200 then
+              record_success()
+              local success, parsed = pcall(cjson.decode, res.body)
+              if success and parsed then
+                  -- Save back to Redis cache (L2) if possible
+                  if redis_ok then
+                      local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
+                      red:setex(redis_key, 3600, res.body) -- Cache 1 hour in Redis
+                  end
+                  
+                  if perm_cache then
+                      local success_enc, encoded = pcall(cjson.encode, parsed)
+                      if success_enc and encoded then
+                          perm_cache:set(cache_key, encoded, 300) -- Cache 5 mins in L1
+                      end
+                  end
+                  return parsed
               end
-              local_cache[cache_key] = { value = parsed, expire_at = os.time() + 300 }
-              return parsed
+          else
+              record_failure()
           end
+      else
+          record_failure()
       end
   end
 
@@ -118,8 +189,12 @@ function DynamicPolicyHandler:access(conf)
               local success, parsed_claims = pcall(function() return cjson.decode(decoded) end)
               if success and parsed_claims then
                   claims = parsed_claims
-                  if not tenant_id and claims.tenant_id then
-                      tenant_id = claims.tenant_id
+                  if claims.organization then
+                      if type(claims.organization) == "table" then
+                          tenant_id = claims.organization[1]
+                      elseif type(claims.organization) == "string" then
+                          tenant_id = claims.organization
+                      end
                   end
                   if claims.jti then
                       jti = claims.jti

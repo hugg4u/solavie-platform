@@ -213,11 +213,11 @@ plugins:
 
   - name: openid-connect
     config:
-      issuer: "http://keycloak:8080/realms/master/.well-known/openid-configuration"
-      client_id: "kong-gateway"
+      issuer: "http://keycloak:8080/realms/solavie/.well-known/openid-configuration"
+      client_id: "api-gateway"
       client_secret: "${KONG_OIDC_SECRET}"
       redirect_uri: null
-      scopes: ["openid"]
+      scopes: ["openid", "organization:*"]
       auth_methods: ["bearer"]
       consumer_claim: ["sub"]
       consumer_by: ["custom_id"]
@@ -353,14 +353,22 @@ kong:
 Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện phân giải quyền hạn động từ vai trò người dùng (User Roles) sang danh sách quyền hạn chi tiết (Permissions), sau đó ký số bằng HMAC-SHA256 để chống giả mạo khi chuyển tiếp request xuống downstream.
 
 ### Luồng Phân Giải Quyền Hạn (3-Step Lookup):
-1.  **Bước 1: Giải mã JWT**: Trích xuất `tenant_id` (từ `claims.tenant_id`), `user_id` (`sub`) và `roles` (từ `realm_access.roles` hoặc `roles`).
+1.  **Bước 1: Giải mã JWT**: Trích xuất `tenant_id` từ claim `claims.organization[1]` (hoặc `claims.organization`), `user_id` (`sub`) và `roles` (từ `realm_access.roles` hoặc `roles`).
 2.  **Bước 2: Tìm kiếm Quyền hạn**:
-    - **Tầng 1 (Local Worker Cache)**: Tra cứu bộ nhớ đệm trong memory của Kong worker (`local_cache[tenant_id .. ":" .. role]`). TTL là 5 phút.
-    - **Tầng 2 (Redis Cache)**: Gửi lệnh `GET tenant:{tenant_id}:role:{role}:permissions` tới Redis cho từng vai trò. Nếu thành công, ghi nhận lại vào Local Worker Cache.
-    - **Tầng 3 (API Fallback)**: Nếu Redis sập hoặc cache miss, gửi HTTP Request gọi trực tiếp tới Tenant Config Service:
+    - **Tầng 1 (L1 Cache - ngx.shared.DICT)**: Tra cứu bộ nhớ đệm dùng chung của Kong `perm_cache`. TTL là 5 phút. Cơ chế này đảm bảo dữ liệu cache đồng bộ giữa tất cả các workers của Nginx và tự động giải phóng khi đầy bộ nhớ (LRU eviction).
+    - **Tầng 2 (L2 Cache - Redis)**: Gửi lệnh `GET tenant:{tenant_id}:role:{role}:permissions` tới Redis cho từng vai trò. Nếu thành công, ghi nhận lại vào L1 Cache.
+    - **Tầng 3 (API Fallback qua Circuit Breaker)**: Nếu Redis sập hoặc cache miss, gửi HTTP Request gọi trực tiếp tới Tenant Config Service:
       `GET http://tenant-config:3006/api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role`
-      Sau khi nhận phản hồi, ghi ngược lại vào Redis (TTL 1 hour) và Local Worker Cache (TTL 5 mins).
+      Sau khi nhận phản hồi, ghi ngược lại vào L2 Cache (TTL 1 hour) và L1 Cache (TTL 5 mins).
     - **Fail-Secure**: Nếu cả 3 bước đều thất bại và người dùng có vai trò, trả về lỗi `503 Service Unavailable` (Authorization service offline).
+
+### Thiết kế Circuit Breaker:
+Để tránh nghẽn luồng xử lý của Gateway khi dịch vụ Tenant Config Service bị chậm hoặc sập (gây nghẽn các worker socket), cuộc gọi API Fallback ở Tầng 3 được bọc bởi một bộ **Circuit Breaker** độc lập được cài đặt trực tiếp bằng Lua trong plugin `dynamic-policy`.
+* **Cấu trúc Trạng thái (State Machine)**:
+  - **CLOSED (Đóng)**: Hoạt động bình thường, chuyển tiếp cuộc gọi đến Tenant Config Service. Nếu thất bại liên tiếp 5 lần (timeout > 1s hoặc lỗi 5xx) trong vòng 30 giây, mạch sẽ chuyển sang **OPEN**.
+  - **OPEN (Mở)**: Không gửi request đến Tenant Config Service. Trả về ngay lập tức dữ liệu cũ trong L1 Cache (nếu có, chấp nhận dữ liệu trễ) hoặc chặn và kích hoạt cơ chế *Fail-Secure* (trả về lỗi 503). Sau 30 giây, mạch tự động chuyển sang **HALF-OPEN**.
+  - **HALF-OPEN (Nửa mở)**: Cho phép thử nghiệm gửi 1 request probe (kiểm chứng) đến Tenant Config Service. Nếu request thành công, mạch quay về **CLOSED**. Nếu thất bại, mạch quay về **OPEN** và reset thời gian chờ.
+* **Lưu trữ Trạng thái**: Trạng thái của mạch được lưu trong một vùng nhớ dùng chung (`ngx.shared.circuit_state`) để đồng bộ giữa các worker.
 3.  **Bước 3: Hợp nhất (Union Set) & Deterministic Sorting & Ánh xạ Wildcard**:
     - Gộp tất cả các quyền của các roles lại.
     - Ánh xạ Wildcard an toàn:

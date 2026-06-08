@@ -49,8 +49,6 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 3.5: Viewer: read-only access to dashboards and reports
 - [x] AC 3.6: THE Auth_Service SHALL include roles trong JWT token claims
   - Mapper `roles-mapper` trong Keycloak client config tự động inject roles vào JWT
-- [ ] AC 3.7: THE Auth_Service (Keycloak) SHALL hỗ trợ tạo vai trò tùy chỉnh (Custom Roles) động thông qua các API quản trị của Keycloak (Keycloak Admin APIs)
-- [ ] AC 3.8: THE Auth_Service (Keycloak) SHALL hỗ trợ gán hoặc thu hồi vai trò tùy chỉnh cho người dùng qua các API quản trị của Keycloak
 
 ### Task 4: 4: User Management
 > *User Story: Là admin, tôi muốn quản lý users trong tổ chức.*
@@ -143,13 +141,6 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Deploy service to local Docker / Kubernetes cluster.
 - [x] Perform end-to-end tests using the Gateway (Kong) routing.
 
-### Task: Security Integration & Dynamic RBAC (MỚI)
-- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `auth`.
-- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
-- [ ] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
-- [ ] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `auth:*`, `auth:{resource}:*`).
-- [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
-- [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
 
 ---
 
@@ -164,29 +155,44 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Viết test case kiểm tra block Privilege Escalation
 
 ### Giai đoạn 1 — Foundation (Sprint 1-2)
-- [ ] Upgrade Keycloak v24 → v26+, enable `KC_FEATURES=organization`
-- [ ] Tạo realm `solavie` với shared clients (`dashboard`, `api-gateway`, `user-service-client`)
-- [ ] Cấu hình Token Claims Mapper inject `tenant_id` từ `organization.attributes.tenant_id`
-- [ ] Viết `provision_organization.py` thay thế `provision_realm.py`
-- [ ] Viết `migrate_realm_to_org.py` migration script
+- [x] Upgrade Keycloak v24 → v26+, enable `KC_FEATURES=organization`
+- [x] Tạo realm `solavie` với shared clients (`dashboard`, `api-gateway`, `user-service-client`)
+- [x] Cấu hình Token Claims Mapper inject `tenant_id` từ `organization.attributes.tenant_id`
+- [x] Viết `provision_organization.py` thay thế `provision_realm.py`
+- [x] Viết `migrate_realm_to_org.py` migration script (Dùng để kiểm thử giả lập)
 
 ### Giai đoạn 2 — Core Integration (Sprint 3-4)
-- [ ] Cập nhật Kong OIDC plugin issuer → `http://keycloak:8080/realms/solavie/...`
-- [ ] Cập nhật `handler.lua`: hỗ trợ extract `tenant_id` từ cả hai JWT format (backward compat)
-- [ ] Cập nhật `sync_worker.py`: Admin API calls từ realm-scoped → org-scoped
-- [ ] Cập nhật Dashboard OIDC config → realm `solavie` cố định
+- [x] Cập nhật Kong OIDC plugin issuer → `http://keycloak:8080/realms/solavie/...`
+- [x] Cập nhật `handler.lua`: Trích xuất `tenant_id` trực tiếp từ claim `organization` của JWT (không cần backward compat)
+- [x] Cập nhật `sync_worker.py`: Admin API calls từ realm-scoped → org-scoped
+- [x] Cập nhật Dashboard OIDC config → realm `solavie` cố định (Không áp dụng do không có code Dashboard trong repo)
+- [x] **[CLEANUP]** Xóa bỏ các tệp tin cũ không còn sử dụng:
+  - `services/auth/templates/tenant-realm-template.json`
+  - `services/auth/scripts/provision_realm.py`
+  - `services/auth/scripts/migrate_realm_to_org.py`
+  - `services/auth/scripts/solavie-realm-template.json` (bản sao trùng lặp)
+- [x] **[TEST REFACTOR]** Tái cấu trúc `test_auth.py` và `test_ac47_ac48.py` để sử dụng duy nhất mô hình Organizations trong realm `solavie` (loại bỏ tạo realm động)
 
-### Giai đoạn 3 — Data Migration (Sprint 5-6)
-- [ ] Chạy `migrate_realm_to_org.py` cho từng tenant (batch migration)
-- [ ] Gửi email thông báo reset password tới tất cả users
-- [ ] Flip Kong OIDC issuer → realm `solavie` (cutover)
-- [ ] Monitor 7 ngày, decommission realm cũ
+### Giai đoạn 3 — Security Integration & Dynamic RBAC (Sprint 5-6)
+- [x] **Custom Roles động qua Keycloak Admin API (realm `solavie`):**
+  - [x] Triển khai API tạo Custom Role động với prefix `tenant_id:` trong realm `solavie` tại **User Service (Auth Proxy)**.
+  - [x] Triển khai API gán và thu hồi Custom Role cho người dùng trong Organization tại **User Service (Auth Proxy)**.
+- [x] **Security Integration & Gateway Verification:**
+  - [x] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `auth` (được định tuyến tới User Service Auth Proxy).
+  - [x] Kiểm tra tính cô lập dữ liệu multi-tenant trong Auth Service thông qua header `X-Tenant-ID`.
+  - [x] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway trong **User Service (Auth Proxy)**.
+  - [x] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `auth:*`, `auth:{resource}:*`) tại **User Service (Auth Proxy)**.
+  - [x] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của dịch vụ tại **User Service (Auth Proxy)**.
+  - [x] Bổ sung các integration test cases kiểm tra Signature Verification và Access Control Denied.
 
-### Giai đoạn 4 — Hardening (Sprint 7)
+### Giai đoạn 4 — Hardening, Logging & Load Testing (Sprint 7)
+- [ ] **Cập nhật tài liệu vận hành**:
+  - [ ] Cập nhật `specs/services/auth/logging.md`, `specs/services/gateway/logging.md` và `specs/services/user/logging.md`: Đặc tả chuẩn logging mới cho các sự kiện Organization, Cache Hit/Miss, ngắt mạch Circuit Breaker, và audit log bảo mật.
 - [ ] Migrate Redis standalone → Redis Cluster (3 master + 3 replica)
 - [ ] Đổi Kong L1 cache từ `local_cache` → `ngx.shared.DICT` (fix W2)
 - [ ] Triển khai Circuit Breaker cho API Fallback call tới Tenant Config Service (fix W6)
-- [ ] Load test: 1000 concurrent logins, p95 < 500ms
+- [ ] Chạy kiểm thử tải (load testing) bằng `k6` để xác nhận latencies xác thực token đạt ngưỡng `<5ms`
+- [ ] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway Kong
 
 ---
 

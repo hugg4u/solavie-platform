@@ -76,5 +76,37 @@ GET :8001/metrics    → Prometheus metrics (admin API)
 gateway_security_signature_generated_total: Counter [tenant_id, service]
 gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache_layer: local_worker, redis, fallback
 gateway_security_rbac_fetch_failures_total: Counter [tenant_id, source] // source: redis, fallback_tcs
+
+
+## Giai đoạn 4 — Logging & Metrics cho Cache & Circuit Breaker (MỚI)
+
+### 1. Log sự kiện thay đổi trạng thái Circuit Breaker
+Khi Circuit Breaker chuyển đổi trạng thái (CLOSED -> OPEN -> HALF-OPEN -> CLOSED), Gateway sẽ ghi nhận log có cấu trúc để hệ thống giám sát (Elasticsearch/Fluentd) có thể bắt được sự kiện và gửi cảnh báo:
+
+```json
+{
+  "timestamp": "2026-06-08T15:30:00.123Z",
+  "level": "warn",
+  "category": "gateway.circuit_breaker",
+  "message": "Circuit Breaker state changed",
+  "service": "tenant-config",
+  "previous_state": "CLOSED",
+  "new_state": "OPEN",
+  "failure_count": 5,
+  "reason": "Consecutive timeouts/errors calling Tenant Config Service"
+}
+```
+
+### 2. Các chỉ số đo lường hiệu năng mới (Prometheus Metrics)
+```
+# Theo dõi tỉ lệ Hit/Miss của L1 Cache (ngx.shared.DICT) và L2 Cache (Redis)
+gateway_cache_requests_total: Counter [cache_layer, status] // cache_layer: l1_dict, l2_redis; status: hit, miss
+
+# Theo dõi trạng thái hiện tại của Circuit Breaker
+gateway_circuit_breaker_state: Gauge [service] // value: 0 (CLOSED), 1 (OPEN), 2 (HALF-OPEN)
+
+# Theo dõi số lần kích hoạt ngắt mạch
+gateway_circuit_breaker_trips_total: Counter [service]
+```
 ```
 

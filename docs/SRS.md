@@ -109,7 +109,7 @@ graph TB
 | # | Service | Language | Framework | Port | Database | Nhiệm vụ chính |
 |---|---------|----------|-----------|------|----------|----------------|
 | 1 | **Gateway** | - | Kong 3.7 | 8000/8001 | DB-less (kong.yml) | Định tuyến API, giới hạn tần suất, SSL termination, tích hợp xác thực JWT. |
-| 2 | **Auth** | Java | Keycloak 24+ | 8080 | keycloak_db (Postgres) | Xác thực OIDC, quản lý Realm đa tenant, phân quyền RBAC. |
+| 2 | **Auth** | Java | Keycloak 26.1.2 | 8080 | keycloak_db (Postgres) | Xác thực OIDC, quản lý Organization đa tenant, phân quyền RBAC. |
 | 3 | **Channel Connector** | Node.js | NestJS | 3001 | channel_connector_db | Đăng ký webhook các kênh, normalize message, refresh token mạng xã hội. |
 | 4 | **Messaging** | Node.js | NestJS | 3002 | messaging_db | Quản lý Unified Inbox, luồng hội thoại Bot/Human, WebSocket realtime. |
 | 5 | **Chatbot** | Python | FastAPI + LangGraph | 8001/50051 | chatbot_db | Quản lý state đồ thị LangGraph (State/Memory), điều phối hội thoại, tự động tóm tắt tin nhắn, tạm dừng breakpoint duyệt bởi Agent. |
@@ -128,7 +128,7 @@ graph TB
 | 18| **Media Processor**| Python  | FastAPI | 8008 | - | Chạy Celery worker nén ảnh, tạo thumbnail và transcode video chuẩn API mạng xã hội. |
 
 ### 2.3. Chiến lược Multi-tenancy & Cô lập dữ liệu (Data Isolation)
-*   **Identity & Access:** Tận dụng tính năng Multi-realm của Keycloak để cung cấp mỗi Tenant một không gian định danh cô lập hoàn toàn. Token Access JWT chứa `tenant_id` và `roles` claims. API Gateway (Kong) tự động phân giải các vai trò này thành danh sách quyền hạn chi tiết (permissions dạng CSV, sắp xếp alphabet tăng dần) qua cơ chế cache 3 tầng (local shm cache -> Redis -> API Fallback). Để chặn đứng nguy cơ Header Spoofing nội bộ, Gateway thực hiện ký số payload `tenant_id:user_id:user_permissions` bằng thuật toán HMAC-SHA256 qua khóa bí mật `GATEWAY_SIGNING_SECRET` và gửi kèm chữ ký trên header `X-Permissions-Signature`. Tất cả downstream services bắt buộc verify chữ ký này bằng phương pháp timing-safe (`compare_digest` / `timingSafeEqual`).
+*   **Identity & Access:** Tận dụng tính năng Keycloak Organizations của Keycloak để cung cấp mỗi Tenant một không gian định danh cô lập hoàn toàn dưới dạng một Organization trong shared Realm 'solavie'. Token Access JWT chứa `organization` (chứa ID, Name, Roles của Org) và `tenant_id` claims. API Gateway (Kong) tự động phân giải các vai trò này thành danh sách quyền hạn chi tiết (permissions dạng CSV, sắp xếp alphabet tăng dần) qua cơ chế cache 3 tầng (local shm cache -> Redis -> API Fallback). Để chặn đứng nguy cơ Header Spoofing nội bộ, Gateway thực hiện ký số payload `tenant_id:user_id:user_permissions` bằng thuật toán HMAC-SHA256 qua khóa bí mật `GATEWAY_SIGNING_SECRET` và gửi kèm chữ ký trên header `X-Permissions-Signature`. Tất cả downstream services bắt buộc verify chữ ký này bằng phương pháp timing-safe (`compare_digest` / `timingSafeEqual`).
 *   **Database Isolation:** Áp dụng mô hình **Shared Database, Shared Schema** nhưng bắt buộc áp dụng **PostgreSQL Row-Level Security (RLS)** trên cột `tenant_id` đối với tất cả các bảng. Mọi câu lệnh SQL từ backend bắt buộc phải filter theo `tenant_id` hiện tại lấy từ JWT.
 *   **Event-Driven Routing:** Message payload truyền qua Kafka bắt buộc chứa trường `tenant_id` trong Kafka Headers để các consumer thực hiện xử lý tách biệt.
 *   **Vector Database:** Qdrant cấu hình metadata filter `tenant_id` trên mọi Collection để ngăn chặn việc chatbot đọc chéo dữ liệu tri thức của Tenant khác.
@@ -229,14 +229,14 @@ graph TD
 
 #### Auth Service (Keycloak)
 1.  **Cấp phát Token:** Hỗ trợ luồng OAuth2 Authorization Code Flow đối với Dashboard và Client Credentials Flow đối với service-to-service.
-2.  **Role-Based Access Control (RBAC):** Định nghĩa và phân phát các Roles sau trong JWT claims:
-    -   `admin`: Toàn quyền cấu hình Tenant, quản lý tích hợp, phân quyền user.
+2.  **Role-Based Access Control (RBAC):** Định nghĩa và phân phát các Org Roles sau trong JWT `organization.roles` claims:
+    -   `admin`: Toàn quyền cấu hình Tenant, quản lý tích hợp, phân quyền user trong Organization.
     -   `manager`: Quản lý chiến dịch, phê duyệt nội dung AI, cấu hình chatbot, xem báo cáo.
     -   `agent`: Truy cập hộp thư hợp nhất, tương tác chat, xử lý danh bạ khách hàng.
     -   `viewer`: Chỉ xem báo cáo analytics và lịch đăng bài.
-3.  **Tenant Realm Management:** API cho phép tự động khởi tạo Realm mới độc lập cùng cấu hình bảo mật mặc định khi một Tenant mới onboard trên hệ thống.
-4.  **Bảo mật nâng cao (Advanced Hardening):** Ép buộc PKCE chuẩn `S256` cho public client (`dashboard`) để bảo vệ Authorization Code Flow, áp dụng cơ chế Refresh Token Rotation (RTR) vô hiệu hóa tức thì refresh token cũ ngay sau khi sử dụng, và cấu hình chính sách OTP (MFA) mặc định sử dụng TOTP.
-5.  **Custom Realm Role Synchronization:** Đồng bộ hóa tạo/xóa các Realm Roles tương ứng khi Tenant Admin CRUD các vai trò tùy chỉnh trên Dashboard của Tenant Config Service thông qua Keycloak Admin API `/admin/realms/{realm}/roles`.
+3.  **Tenant Organization Management:** API cho phép tự động khởi tạo Organization mới độc lập cùng cấu hình bảo mật mặc định khi một Tenant mới onboard trên hệ thống.
+4.  **Bảo mật nâng cao (Advanced Hardening):** Ép buộc PKCE chuẩn `S256` cho public client (`dashboard`) để bảo vệ Authorization Code Flow, áp dụng cơ chế Refresh Token Rotation (RTR) vô hiệu hóa tức thì refresh token cũ ngay sau khi sử dụng, và cấu hình chính sách OTP (MFA) mặc định sử dụng TOTP cho shared Realm 'solavie'.
+5.  **Custom Org Role Synchronization:** Đồng bộ hóa tạo/xóa các Org Roles tương ứng khi Tenant Admin CRUD các vai trò tùy chỉnh trên Dashboard của Tenant Config Service thông qua Keycloak Admin API `/admin/realms/solavie/organizations/{org_id}/roles`.
 
 
 ### 3.2. Phân hệ Tương tác Khách hàng & Kênh

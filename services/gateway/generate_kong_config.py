@@ -26,7 +26,7 @@ KEYCLOAK_URL: str = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
 TENANT_ID: str = os.environ.get("TENANT_ID", "tenant-test-uuid")
 # Issuer URL that the token will contain (must exactly match Keycloak's generated token 'iss')
 KONG_ISSUER_URL: str = os.environ.get(
-    "KONG_ISSUER_URL", f"http://localhost:8081/realms/{TENANT_ID}"
+    "KONG_ISSUER_URL", "http://localhost:8081/realms/solavie"
 )
 KONG_CONFIG_PATH: str = os.environ.get("KONG_CONFIG_PATH", "/etc/kong/kong.yml")
 
@@ -53,7 +53,7 @@ def get_requests_session() -> requests.Session:
 
 def get_public_key(session: requests.Session) -> str:
     """Fetches the realm's public key from Keycloak."""
-    url = f"{KEYCLOAK_URL}/realms/{TENANT_ID}/"
+    url = f"{KEYCLOAK_URL}/realms/solavie/"
     logger.info(f"Fetching public key from {url}")
     
     try:
@@ -188,7 +188,13 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "name": "user-api",
                         "paths": ["/api/v1/users"],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:auth"]
+                    },
+                    {
+                        "name": "user-permissions-manifest",
+                        "paths": ["/api/v1/permissions/manifest"],
+                        "strip_path": False
                     }
                 ]
             },

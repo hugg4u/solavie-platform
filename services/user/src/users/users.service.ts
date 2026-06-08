@@ -43,13 +43,12 @@ export class UsersService {
         let keycloakUser: any = null;
         try {
           const response = await firstValueFrom(
-            this.httpService.get(`${this.keycloakUrl}/admin/realms/${tenantId}/users/${userId}`, {
+            this.httpService.get(`${this.keycloakUrl}/admin/realms/solavie/users/${userId}`, {
               headers: { Authorization: `Bearer ${token}` },
             }),
           );
           keycloakUser = response.data;
         } catch (e) {
-          // Nếu không tìm thấy trên Keycloak, ta ném lỗi
           throw new NotFoundException({ errorCode: UserErrorCode.AUTH_ACCOUNT_NOT_FOUND, message: 'Auth account not found on Keycloak' });
         }
 
@@ -86,7 +85,7 @@ export class UsersService {
       let lastName = '';
       try {
         const response = await firstValueFrom(
-          this.httpService.get(`${this.keycloakUrl}/admin/realms/${tenantId}/users/${userId}`, {
+          this.httpService.get(`${this.keycloakUrl}/admin/realms/solavie/users/${userId}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         );
@@ -132,7 +131,7 @@ export class UsersService {
         try {
           const response = await firstValueFrom(
             this.httpService.get(
-              `${this.keycloakUrl}/admin/realms/${tenantId}/users?email=${encodeURIComponent(data.email)}&exact=true`,
+              `${this.keycloakUrl}/admin/realms/solavie/users?email=${encodeURIComponent(data.email)}&exact=true`,
               {
                 headers: { Authorization: `Bearer ${token}` },
               },
@@ -147,13 +146,12 @@ export class UsersService {
           }
         } catch (e: any) {
           if (e instanceof ConflictException) throw e;
-          // Bỏ qua các lỗi mạng khác
         }
       }
 
       // 3. Đồng bộ lên Keycloak các thông tin định tính
       if (data.email !== undefined || data.firstName !== undefined || data.lastName !== undefined) {
-        await this.keycloakAdmin.updateUser(tenantId, userId, {
+        await this.keycloakAdmin.updateUser('solavie', userId, {
           email: data.email,
           firstName: data.firstName,
           lastName: data.lastName,
@@ -202,12 +200,12 @@ export class UsersService {
    * Tạo tài khoản tạm thời trên Keycloak và DB local, sinh token kích hoạt.
    */
   async inviteUser(adminTenantId: string, data: InviteUserDto) {
-    // 1. Kiểm tra email trùng trên Keycloak Realm của Tenant
+    // 1. Kiểm tra email trùng trên Keycloak Realm solavie
     const token = await this.getAdminToken();
     try {
       const response = await firstValueFrom(
         this.httpService.get(
-          `${this.keycloakUrl}/admin/realms/${adminTenantId}/users?email=${encodeURIComponent(data.email)}&exact=true`,
+          `${this.keycloakUrl}/admin/realms/solavie/users?email=${encodeURIComponent(data.email)}&exact=true`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -221,7 +219,7 @@ export class UsersService {
     }
 
     // 2. Tạo User Shadow bị vô hiệu hóa trên Keycloak
-    const keycloakUserId = await this.keycloakAdmin.createUser(adminTenantId, {
+    const keycloakUserId = await this.keycloakAdmin.createUser('solavie', {
       email: data.email,
       tenantId: adminTenantId,
       firstName: data.firstName,
@@ -254,7 +252,6 @@ export class UsersService {
       email: data.email,
     });
 
-    // Lưu vào Redis với TTL 24 giờ (86400 giây)
     await this.redis.setEx(`invite:token:${inviteToken}`, 86400, invitePayload);
 
     // Link kích hoạt tài khoản
@@ -294,10 +291,9 @@ export class UsersService {
       }
 
       // 1. Gọi Keycloak Admin API đặt enabled=false và Force Logout sessions
-      await this.keycloakAdmin.suspendUser(adminTenantId, targetUserId);
+      await this.keycloakAdmin.suspendUser('solavie', targetUserId);
 
       // 2. Ghi nhận User ID vào Redis Blacklist để Gateway chặn đứng tức thì
-      // Access Token sống tối đa 15 phút (900 giây)
       await this.redis.setEx(`blacklist:user:${targetUserId}`, 900, 'suspended');
 
       // 3. Cập nhật trạng thái cục bộ sang SUSPENDED
@@ -324,7 +320,7 @@ export class UsersService {
       }
 
       // 1. Kích hoạt lại trên Keycloak
-      await this.keycloakAdmin.updateUser(adminTenantId, targetUserId, { enabled: true });
+      await this.keycloakAdmin.updateUser('solavie', targetUserId, { enabled: true });
 
       // 2. Xóa User ID khỏi Redis Blacklist
       const redisClient = this.redis.getClient();
@@ -348,7 +344,7 @@ export class UsersService {
     try {
       const response = await firstValueFrom(
         this.httpService.get(
-          `${this.keycloakUrl}/admin/realms/${tenantId}/users/${userId}/role-mappings/realm`,
+          `${this.keycloakUrl}/admin/realms/solavie/users/${userId}/role-mappings/realm`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -357,8 +353,14 @@ export class UsersService {
       const roles = response.data;
       if (!roles || roles.length === 0) return false;
 
-      // So khớp không phân biệt hoa thường
-      return roles.some((role: any) => role.name.toLowerCase() === requiredRole.toLowerCase());
+      // So khớp không phân biệt hoa thường, hỗ trợ cả role mặc định và custom role prefix tenantId:
+      const reqRoleLower = requiredRole.toLowerCase();
+      const tenantRoleLower = `${tenantId.toLowerCase()}:${reqRoleLower}`;
+
+      return roles.some((role: any) => {
+        const roleNameLower = role.name.toLowerCase();
+        return roleNameLower === reqRoleLower || roleNameLower === tenantRoleLower;
+      });
     } catch (e) {
       return false;
     }
@@ -370,7 +372,6 @@ export class UsersService {
   async handleWebhookEvent(payload: { event: string; userId: string; realm: string; email?: string }) {
     const { event, userId, realm, email } = payload;
 
-    // Webhook chạy với tenantId là realm để thỏa mãn chính sách RLS của database
     return tenantContextStorage.run({ tenantId: realm }, () => {
       return this.prisma.runInTenantContext(async (tx) => {
         switch (event) {
@@ -400,7 +401,6 @@ export class UsersService {
             break;
 
           case 'user.deleted':
-            // Xóa mềm (Soft Delete) hồ sơ nghiệp vụ bằng cách đổi trạng thái sang DELETED
             await tx.user.updateMany({
               where: { id: userId },
               data: { status: 'DELETED' },
@@ -408,7 +408,6 @@ export class UsersService {
             break;
 
           case 'user.email_updated':
-            // Cục bộ DB chỉ cache thông tin nghiệp vụ, thông tin email được lưu trên Keycloak
             this.logger.log(`User ${userId} in realm ${realm} updated email to ${email}`);
             break;
 
@@ -419,16 +418,86 @@ export class UsersService {
     });
   }
 
+  // --- Dynamic Custom Roles Management APIs ---
+
   /**
-   * Helper lấy Admin token phục vụ các request HTTP
+   * Tạo Custom Role động với prefix tenantId
+   */
+  async createCustomRole(tenantId: string, roleName: string): Promise<void> {
+    const normalizedRole = roleName.trim().toLowerCase();
+    if (['system', 'system_admin', 'super_admin', 'root'].includes(normalizedRole)) {
+      throw new BadRequestException({
+        errorCode: UserErrorCode.RESERVED_ROLE_BLOCKED,
+        message: `Role name '${roleName}' is reserved and cannot be created or assigned.`,
+      });
+    }
+    const fullRoleName = `${tenantId}:${roleName}`;
+    await this.keycloakAdmin.createCustomRole(fullRoleName);
+  }
+
+  /**
+   * Xóa Custom Role động
+   */
+  async deleteCustomRole(tenantId: string, roleName: string): Promise<void> {
+    const fullRoleName = `${tenantId}:${roleName}`;
+    await this.keycloakAdmin.deleteCustomRole(fullRoleName);
+  }
+
+  /**
+   * Gán Custom Role cho người dùng (chỉ được gán cho user cùng tenant)
+   */
+  async assignRoleToUser(tenantId: string, userId: string, roleName: string): Promise<void> {
+    const normalizedRole = roleName.trim().toLowerCase();
+    if (['system', 'system_admin', 'super_admin', 'root'].includes(normalizedRole)) {
+      throw new BadRequestException({
+        errorCode: UserErrorCode.RESERVED_ROLE_BLOCKED,
+        message: `Role name '${roleName}' is reserved and cannot be created or assigned.`,
+      });
+    }
+
+    // Verify user belongs to tenant first
+    const user = await this.prisma.runInTenantContext(async (tx) => {
+      return tx.user.findUnique({ where: { id: userId } });
+    });
+    if (!user) {
+      throw new NotFoundException({ errorCode: UserErrorCode.USER_NOT_FOUND, message: 'User not found locally' });
+    }
+    if (user.tenantId !== tenantId) {
+      throw new ForbiddenException({ errorCode: UserErrorCode.TENANT_ACCESS_DENIED, message: 'Access denied: Target user belongs to a different tenant' });
+    }
+
+    const fullRoleName = `${tenantId}:${roleName}`;
+    await this.keycloakAdmin.assignCustomRoleToUser(userId, fullRoleName);
+  }
+
+  /**
+   * Thu hồi Custom Role từ người dùng
+   */
+  async revokeRoleFromUser(tenantId: string, userId: string, roleName: string): Promise<void> {
+    // Verify user belongs to tenant
+    const user = await this.prisma.runInTenantContext(async (tx) => {
+      return tx.user.findUnique({ where: { id: userId } });
+    });
+    if (!user) {
+      throw new NotFoundException({ errorCode: UserErrorCode.USER_NOT_FOUND, message: 'User not found locally' });
+    }
+    if (user.tenantId !== tenantId) {
+      throw new ForbiddenException({ errorCode: UserErrorCode.TENANT_ACCESS_DENIED, message: 'Access denied: Target user belongs to a different tenant' });
+    }
+
+    const fullRoleName = `${tenantId}:${roleName}`;
+    await this.keycloakAdmin.revokeCustomRoleFromUser(userId, fullRoleName);
+  }
+
+  /**
+   * Helper lấy Admin token phục vụ các request HTTP (Client Credentials Flow)
    */
   private async getAdminToken(): Promise<string> {
-    const url = `${this.keycloakUrl}/realms/master/protocol/openid-connect/token`;
+    const url = `${this.keycloakUrl}/realms/solavie/protocol/openid-connect/token`;
     const params = new URLSearchParams();
-    params.append('client_id', 'admin-cli');
-    params.append('username', process.env.KC_ADMIN || 'admin');
-    params.append('password', process.env.KC_ADMIN_PASSWORD || 'admin_secret_pass');
-    params.append('grant_type', 'password');
+    params.append('client_id', 'user-service-client');
+    params.append('client_secret', process.env.KEYCLOAK_CLIENT_SECRET || 'default-user-service-client-secret-key-change-me-in-production');
+    params.append('grant_type', 'client_credentials');
 
     try {
       const response = await firstValueFrom(

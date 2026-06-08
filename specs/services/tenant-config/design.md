@@ -31,7 +31,7 @@ graph TB
         
         subgraph "Modules"
             CONFIG_MOD["Config Module\n(CRUD + Validation)"]
-            ROLE_MOD["Role & Permission Module\n(Keycloak Admin Sync)"]
+            ROLE_MOD["Role & Permission Module\n(Auth Proxy Role Sync)"]
             HOTRELOAD["Hot Reload Module\n(Redis Pub/Sub)"]
             AUDIT["Audit Log Module"]
             DEFAULT["Default Config Module"]
@@ -48,6 +48,7 @@ graph TB
         Gateway["Kong API Gateway\n(Cache 3 tầng & Verification)"]
         AICore["AI Core Service"]
         CRMSvc["CRM Service"]
+        US["User Service (Auth Proxy)"]
     end
 
     Dashboard["Dashboard (Admin)"] -->|HTTPS| REST
@@ -56,7 +57,8 @@ graph TB
     
     CONFIG_MOD --> PG
     ROLE_MOD --> PG
-    ROLE_MOD -->|Keycloak Admin API| Keycloak
+    ROLE_MOD -->|HTTP HMAC REST (Proxy)| US
+    US -->|Keycloak Admin API| Keycloak
     
     CONFIG_MOD & ROLE_MOD --> HOTRELOAD
     CONFIG_MOD --> AUDIT --> PG
@@ -198,9 +200,52 @@ model ConfigAuditLog {
 
 ---
 
+## Tenant Onboarding & Default Roles Seeding Flow
+
+Khi Auth Service (hoặc Platform Admin) kích hoạt tạo Tenant mới, Tenant Config Service nhận sự kiện và tự động khởi tạo cấu hình cùng gieo mầm (seed) các vai trò và quyền hạn mặc định:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant System as Auth Service (Event Broker)
+    participant TCS as Tenant Config Service
+    participant DB as PostgreSQL (config_db)
+    participant Redis as Redis Cache
+    participant GW as Kong API Gateway
+
+    System->>TCS: Publish event "tenant.created" { tenant_id: "tenant-abc-uuid" }
+    TCS->>TCS: Verify event payload & extract tenant_id
+    
+    rect rgb(240, 248, 255)
+        note right of TCS: 1. Khởi tạo cấu hình default
+        TCS->>DB: Save default configs (chatbot_enabled, confidence_threshold, v.v.)
+    end
+
+    rect rgb(255, 240, 245)
+        note right of TCS: 2. Gieo mầm các vai trò & quyền mặc định
+        TCS->>DB: Save Default Roles (admin, manager, agent, viewer) & default RolePermissions mapping
+        DB-->>TCS: Saved OK
+    end
+
+    rect rgb(240, 255, 240)
+        note right of TCS: 3. Ghi đè lên Redis Cache & Pub/Sub
+        TCS->>Redis: SET tenant:tenant-abc-uuid:role:admin:permissions "[admin_permissions_csv]"
+        TCS->>Redis: SET tenant:tenant-abc-uuid:role:manager:permissions "[manager_permissions_csv]"
+        TCS->>Redis: SET tenant:tenant-abc-uuid:role:agent:permissions "[agent_permissions_csv]"
+        TCS->>Redis: SET tenant:tenant-abc-uuid:role:viewer:permissions "[viewer_permissions_csv]"
+        TCS->>Redis: PUBLISH config.updates { tenant_id: "tenant-abc-uuid", category: "roles" }
+    end
+
+    Redis-->>GW: Broadcast event config.updates
+    GW->>GW: Invalidate local cache for tenant's default roles
+    TCS-->>System: Acknowledge event processed successfully
+```
+
+---
+
 ## Custom Role Sync & Invalidation Flow
 
-Khi Tenant Admin cập nhật vai trò hoặc danh sách quyền hạn, hệ thống thực hiện đồng bộ song song tới Keycloak Realm và lưu trữ Redis Cache, đồng thời bắn tin hiệu hủy cache (invalidation) cho API Gateway.
+Khi Tenant Admin cập nhật vai trò hoặc danh sách quyền hạn tùy chỉnh, hệ thống thực hiện đồng bộ song song tới Keycloak Realm (qua Auth Proxy) và lưu trữ Redis Cache, đồng thời bắn tín hiệu hủy cache (invalidation) cho API Gateway.
 
 ```mermaid
 sequenceDiagram
@@ -208,6 +253,7 @@ sequenceDiagram
     participant Admin as Dashboard (Tenant Admin)
     participant API as Tenant Config Service
     participant DB as PostgreSQL
+    participant US as User Service (Auth Proxy)
     participant Keycloak as Keycloak IDP
     participant Redis as Redis Cache
     participant GW as Kong API Gateway
@@ -218,9 +264,11 @@ sequenceDiagram
     DB-->>API: Saved OK
 
     rect rgb(230, 245, 255)
-        note right of API: Đồng bộ hóa định danh sang IDP
-        API->>Keycloak: POST /admin/realms/{realm}/roles { roleName: "custom_agent" }
-        Keycloak-->>API: Created 201 Created
+        note right of API: Đồng bộ hóa định danh sang IDP qua Auth Proxy
+        API->>US: POST /api/v1/users/roles { roleName: "custom_agent" } (HMAC Signed)
+        US->>Keycloak: POST /admin/realms/solavie/roles { name: "tenant_id:custom_agent" } (Keycloak Admin API)
+        Keycloak-->>US: 201 Created
+        US-->>API: 201 Created
     end
 
     rect rgb(240, 255, 240)

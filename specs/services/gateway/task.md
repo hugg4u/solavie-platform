@@ -158,5 +158,25 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Triển khai kiểm tra User Blacklist trong Redis key `blacklist:user:{user_id}` để từ chối các người dùng đang bị đình chỉ (Suspended).
 
 ---
-*Last updated: 2026-06-07 — Core tasks, Dynamic RBAC, HMAC signing, JTI/User blacklists, and MCP tasks completed.*
+*Last updated: 2026-06-08 — Phase 1 completed, Phase 2 & 4 tasks added for Organizations, L1/L2 Cache and Circuit Breaker.*
 
+## Giai đoạn 2 — Core Integration (Sprint 3-4) [PLANNED]
+- [ ] **Tích hợp Keycloak Organizations**:
+  - [ ] Cập nhật `generate_kong_config.py` để lấy public key từ duy nhất realm `solavie` và cấu hình OIDC plugin.
+  - [ ] Cập nhật `handler.lua` để trích xuất `tenant_id` từ claim `organization` của JWT (không dùng tương thích ngược).
+- [ ] **Tối ưu hóa L1/L2 Cache**:
+  - [ ] Cấu hình vùng nhớ dùng chung `lua_shared_dict perm_cache 10m` trong Kong Gateway.
+  - [ ] Cập nhật Lua plugin `dynamic-policy` để tra cứu quyền hạn trên L1 Cache (`ngx.shared.DICT`) thay thế cho bảng Lua local.
+- [ ] **Tích hợp Circuit Breaker**:
+  - [ ] Khai báo vùng nhớ trạng thái `lua_shared_dict circuit_state 1m` trong Kong.
+  - [ ] Triển khai bộ ngắt mạch Circuit Breaker trong Lua cho API Fallback cuộc gọi Tenant Config Service.
+- [ ] **Tích hợp BFF (Backend-for-Frontend)**:
+  - [ ] Cấu hình Next.js Dashboard BFF trung chuyển JWT và cookie bảo mật qua Gateway.
+
+## Giai đoạn 4 — Hardening & Testing (Sprint 7) [PLANNED]
+- [ ] **Cập nhật tài liệu vận hành**:
+  - [ ] Cập nhật `specs/services/gateway/logging.md` để ghi nhận sự kiện Cache Hit/Miss của L1/L2 Cache.
+  - [ ] Định nghĩa chuẩn log cho trạng thái Circuit Breaker (CLOSED -> OPEN, Half-Open).
+- [ ] **Kiểm thử hiệu năng & Độ chịu lỗi**:
+  - [ ] Chạy kiểm thử k6 kiểm chứng độ trễ xác thực token dưới 5ms.
+  - [ ] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway.

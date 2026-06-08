@@ -50,12 +50,14 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 - [ ] AC 4.3: Triển khai gRPC Interceptor để xác thực cuộc gọi nội bộ (Service-to-Service) qua JWT Client Credentials token.
 - [ ] AC 4.4: Trả về bộ cấu hình mặc định (default config) nếu `tenant_id` truy vấn không tồn tại trong DB, tránh quăng lỗi làm sập downstream flow.
 
-### Task 5: Default Config khi Tenant mới
-> *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình mặc định hợp lý.*
+### Task 5: Default Config & Default Roles Initialization khi Tenant mới
+> *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình và các vai trò mặc định hợp lý.*
 - [ ] AC 5.1: Đăng ký lắng nghe sự kiện tạo tenant mới từ hệ thống (qua Kafka/RabbitMQ hoặc nội bộ).
 - [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, ...).
-- [ ] AC 5.3: Giới hạn thời gian tạo mặc định hoàn tất trong vòng < 5 giây từ khi nhận sự kiện.
-- [ ] AC 5.4: Thiết lập cơ chế retry 3 lần nếu tạo default config lỗi, gửi alert tới quản trị viên qua Kafka DLQ hoặc Alertmanager.
+- [ ] AC 5.3: Triển khai luồng gieo mầm (seed) 4 vai trò mặc định (`admin`, `manager`, `agent`, `viewer`) cùng phân quyền mặc định tương ứng vào bảng `roles` và `role_permissions` của PostgreSQL.
+- [ ] AC 5.4: Đồng bộ danh sách quyền mặc định của 4 vai trò này lên Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` (được sắp xếp alphabet tăng dần).
+- [ ] AC 5.5: Giới hạn thời gian tạo mặc định hoàn tất trong vòng < 5 giây từ khi nhận sự kiện.
+- [ ] AC 5.6: Thiết lập cơ chế retry 3 lần nếu tạo default config hoặc vai trò lỗi, gửi alert tới quản trị viên qua Kafka DLQ hoặc Alertmanager.
 
 ### Task 6: Audit Log Thay đổi Cấu hình
 > *User Story: Là một Tenant Admin, tôi muốn xem lịch sử thay đổi cấu hình.*
@@ -85,11 +87,11 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 - [ ] AC 11.2: Triển khai Guard chặn cuộc gọi API từ các tài khoản không mang role `system_admin`.
 - [ ] AC 11.3: Cập nhật Redis cache key `tier:{tier_name}:limits` và publish tin hiệu lên `system.limits.updates` khi lưu thành công vào DB.
 
-### Task 12: Quản lý Vai trò & Quyền hạn Tùy chỉnh (Custom Roles & Permissions)
-- [ ] AC 12.1: Xây dựng REST API `GET /api/v1/config/roles` để lấy danh sách vai trò hiện tại của Tenant.
-- [ ] AC 12.2: Xây dựng REST API `POST /api/v1/config/roles` để khởi tạo một Realm Role trên Keycloak qua Keycloak Admin API, đồng thời lưu trữ thông tin phân quyền tương ứng vào PostgreSQL.
-- [ ] AC 12.3: Xây dựng REST API `PUT /api/v1/config/roles/:role_name/permissions` để cập nhật danh sách quyền cho vai trò, ghi đè trực tiếp Redis key `tenant:{tenant_id}:role:{role_name}:permissions` (Long TTL: 30 ngày) và bắn tin hiệu Pub/Sub hủy cache Gateway.
-- [ ] AC 12.4: Xây dựng REST API `DELETE /api/v1/config/roles/:role_name` để xóa Realm Role trên Keycloak và dữ liệu liên quan ở PostgreSQL.
+### Task 12: Quản lý Vai trò & Quyền hạn (Default & Custom Roles)
+- [ ] AC 12.1: Xây dựng REST API `GET /api/v1/config/roles` để lấy danh sách vai trò hiện tại của Tenant (bao gồm cả vai trò mặc định hệ thống và tùy chỉnh).
+- [ ] AC 12.2: Xây dựng REST API `POST /api/v1/config/roles` để khởi tạo một Custom Realm Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC, đồng thời lưu trữ thông tin phân quyền tương ứng vào PostgreSQL.
+- [ ] AC 12.3: Xây dựng REST API `PUT /api/v1/config/roles/:role_name/permissions` để cập nhật danh sách quyền cho vai trò, sắp xếp tăng dần alphabet, ghi đè trực tiếp Redis key `tenant:{tenant_id}:role:{role_name}:permissions` (Long TTL: 30 ngày) và bắn tín hiệu Pub/Sub hủy cache Gateway.
+- [ ] AC 12.4: Xây dựng REST API `DELETE /api/v1/config/roles/:role_name` để xóa Custom Realm Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC và xóa dữ liệu liên quan ở PostgreSQL.
 - [ ] AC 12.5: Triển khai cơ chế bảo vệ chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định (`admin`, `manager`, `agent`, `viewer`), đồng thời cấm tạo mới hoặc đổi tên vai trò trùng với blacklist bảo lưu (`system`, `system_admin`, `super_admin`, `root`).
 
 ### Task 13: Zero-Trust HMAC Guard & Permission Manifest
