@@ -89,7 +89,7 @@ services:
     command: sh -c "pip install requests pyyaml && python /app/generate_kong_config.py"
     environment:
       KEYCLOAK_URL: http://keycloak:8080
-      KONG_ISSUER_URL: ${KONG_ISSUER_URL:-http://localhost:8081/realms/tenant-test-uuid}
+      KONG_ISSUER_URL: ${KONG_ISSUER_URL:-http://localhost:8081/realms/solavie}
       TENANT_ID: ${DEFAULT_TENANT_ID:-tenant-test-uuid}
       RATE_LIMIT_MINUTE: ${RATE_LIMIT_MINUTE:-200}
       RATE_LIMIT_HOUR: ${RATE_LIMIT_HOUR:-5000}
@@ -109,6 +109,7 @@ services:
       KONG_PLUGINS: bundled,dynamic-policy
       GATEWAY_SIGNING_SECRET: ${GATEWAY_SIGNING_SECRET}
       KONG_MASTER_REALM_TENANT_ID: ${KONG_MASTER_REALM_TENANT_ID:-solavie-system-master}
+      KONG_NGINX_HTTP_LUA_SHARED_DICT: "perm_cache 10m, circuit_state 1m"
 
 
     ports:

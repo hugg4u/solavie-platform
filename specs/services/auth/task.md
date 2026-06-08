@@ -171,16 +171,16 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Viết `migrate_realm_to_org.py` migration script (Dùng để kiểm thử giả lập)
 
 ### Giai đoạn 2 — Core Integration (Sprint 3-4)
-- [ ] Cập nhật Kong OIDC plugin issuer → `http://keycloak:8080/realms/solavie/...`
-- [ ] Cập nhật `handler.lua`: Trích xuất `tenant_id` trực tiếp từ claim `organization` của JWT (không cần backward compat)
-- [ ] Cập nhật `sync_worker.py`: Admin API calls từ realm-scoped → org-scoped
-- [ ] Cập nhật Dashboard OIDC config → realm `solavie` cố định
-- [ ] **[CLEANUP]** Xóa bỏ các tệp tin cũ không còn sử dụng:
+- [x] Cập nhật Kong OIDC plugin issuer → `http://keycloak:8080/realms/solavie/...`
+- [x] Cập nhật `handler.lua`: Trích xuất `tenant_id` trực tiếp từ claim `organization` của JWT (không cần backward compat)
+- [x] Cập nhật `sync_worker.py`: Admin API calls từ realm-scoped → org-scoped
+- [x] Cập nhật Dashboard OIDC config → realm `solavie` cố định (Không áp dụng do không có code Dashboard trong repo)
+- [x] **[CLEANUP]** Xóa bỏ các tệp tin cũ không còn sử dụng:
   - `services/auth/templates/tenant-realm-template.json`
   - `services/auth/scripts/provision_realm.py`
   - `services/auth/scripts/migrate_realm_to_org.py`
   - `services/auth/scripts/solavie-realm-template.json` (bản sao trùng lặp)
-- [ ] **[TEST REFACTOR]** Tái cấu trúc `test_auth.py` và `test_ac47_ac48.py` để sử dụng duy nhất mô hình Organizations trong realm `solavie` (loại bỏ tạo realm động)
+- [x] **[TEST REFACTOR]** Tái cấu trúc `test_auth.py` và `test_ac47_ac48.py` để sử dụng duy nhất mô hình Organizations trong realm `solavie` (loại bỏ tạo realm động)
 
 ### Giai đoạn 3 — Data Migration (Sprint 5-6)
 - [x] **[SKIPPED]** Bỏ qua giai đoạn di trú dữ liệu thực tế do hệ thống đang trong giai đoạn phát triển (Dev) và chưa release. Tiến hành chuyển đổi kiến trúc trực tiếp và sạch sẽ.

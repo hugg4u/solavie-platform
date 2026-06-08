@@ -65,32 +65,54 @@ def get_admin_token(keycloak_url, admin_username, admin_password):
     response.raise_for_status()
     return response.json()["access_token"]
 
-def get_realms(keycloak_url, admin_token):
-    url = f"{keycloak_url.rstrip('/')}/admin/realms"
+def get_organizations(keycloak_url, admin_token, realm_name):
+    url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/organizations"
     headers = {
         "Authorization": f"Bearer {admin_token}"
     }
-    response = requests.get(url, headers=headers, timeout=10)
+    response = requests.get(url, headers=headers, params={"max": 1000}, timeout=10)
     response.raise_for_status()
-    return [realm["realm"] for realm in response.json() if realm["realm"] != "master"]
+    return response.json()
 
-def update_realm_security(keycloak_url, admin_token, realm_name, min_length, max_attempts):
-    url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}"
+def get_organization_id(keycloak_url, admin_token, realm_name, alias):
+    url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/organizations"
     headers = {
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "passwordPolicy": f"length({min_length}) and upperCase(1) and digits(1) and specialChars(1)",
-        "bruteForceProtected": True,
-        "failureFactor": max_attempts
+    response = requests.get(url, headers=headers, params={"max": 1000}, timeout=10)
+    response.raise_for_status()
+    orgs = response.json()
+    for org in orgs:
+        if org.get("alias") == alias:
+            return org.get("id")
+    return None
+
+def update_org_security_config(keycloak_url, admin_token, realm_name, org_id, min_length, max_attempts):
+    get_url = f"{keycloak_url.rstrip('/')}/admin/realms/{realm_name}/organizations/{org_id}"
+    headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
     }
-    logger.info(f"Updating realm '{realm_name}' with passwordPolicy length({min_length}) and failureFactor({max_attempts})")
-    response = requests.put(url, headers=headers, json=payload, timeout=10)
-    if response.status_code == 204:
-        logger.info(f"Successfully updated realm '{realm_name}' security policy.")
+    logger.info(f"Fetching Organization details for Org ID '{org_id}' from {get_url}")
+    response = requests.get(get_url, headers=headers, timeout=10)
+    response.raise_for_status()
+    org_data = response.json()
+    
+    attributes = org_data.get("attributes", {})
+    if not attributes:
+        attributes = {}
+    attributes["auth_password_min_length"] = [str(min_length)]
+    attributes["auth_max_login_attempts"] = [str(max_attempts)]
+    org_data["attributes"] = attributes
+    
+    logger.info(f"Updating Organization '{org_data.get('name')}' (Org ID: {org_id}) with attributes: {attributes}")
+    put_response = requests.put(get_url, headers=headers, json=org_data, timeout=10)
+    if put_response.status_code in [200, 204]:
+        logger.info(f"Successfully updated Organization '{org_data.get('name')}' security config.")
     else:
-        logger.error(f"Failed to update realm '{realm_name}' security policy. Status: {response.status_code}, Body: {response.text}")
+        logger.error(f"Failed to update Organization security config. Status: {put_response.status_code}, Body: {put_response.text}")
+        put_response.raise_for_status()
 
 def forward_user_event_to_service(event_payload: dict):
     """
@@ -144,7 +166,7 @@ def forward_user_event_to_service(event_payload: dict):
         logger.error(f"[ac4.8] Error forwarding user event to User Service: {e}")
 
 
-def sync_realm_security(r, tenant_id):
+def sync_org_security(r, tenant_id):
     keys = [
         f"tenant:{tenant_id}:config:security_comments_notif",
         f"{tenant_id}:config:security_comments_notif"
@@ -170,17 +192,23 @@ def sync_realm_security(r, tenant_id):
         
     try:
         admin_token = get_admin_token(KEYCLOAK_URL, KC_ADMIN, KC_ADMIN_PASSWORD)
-        update_realm_security(KEYCLOAK_URL, admin_token, tenant_id, min_length, max_attempts)
+        org_id = get_organization_id(KEYCLOAK_URL, admin_token, "solavie", tenant_id)
+        if org_id:
+            update_org_security_config(KEYCLOAK_URL, admin_token, "solavie", org_id, min_length, max_attempts)
+        else:
+            logger.error(f"Organization not found for tenant_id (alias): {tenant_id}")
     except Exception as e:
         logger.error(f"Failed to update Keycloak settings for tenant {tenant_id}: {str(e)}")
 
 def initial_sync(r):
     try:
         admin_token = get_admin_token(KEYCLOAK_URL, KC_ADMIN, KC_ADMIN_PASSWORD)
-        realms = get_realms(KEYCLOAK_URL, admin_token)
-        logger.info(f"Found {len(realms)} active tenant realms: {realms}. Starting initial sync...")
-        for realm in realms:
-            sync_realm_security(r, realm)
+        orgs = get_organizations(KEYCLOAK_URL, admin_token, "solavie")
+        logger.info(f"Found {len(orgs)} active organizations in 'solavie' realm. Starting initial sync...")
+        for org in orgs:
+            tenant_id = org.get("alias")
+            if tenant_id:
+                sync_org_security(r, tenant_id)
     except Exception as e:
         logger.error(f"Initial sync failed: {str(e)}")
 
@@ -230,7 +258,7 @@ def main():
                         tenant_id = data.get("tenant_id")
                         if category == "security_comments_notif" and tenant_id:
                             logger.info(f"Triggering security sync for tenant: {tenant_id}")
-                            sync_realm_security(r, tenant_id)
+                            sync_org_security(r, tenant_id)
                     elif channel == "token.revoked":
                         jti = data.get("jti")
                         exp = data.get("exp")
@@ -261,7 +289,7 @@ def main():
                                 tenant_id = data.get("tenant_id")
                                 if category == "security_comments_notif" and tenant_id:
                                     logger.info(f"Stream Sync: Triggering security sync for tenant: {tenant_id}")
-                                    sync_realm_security(r, tenant_id)
+                                    sync_org_security(r, tenant_id)
                             # Acknowledge the message has been processed successfully
                             r.xack(stream_name, group_name, message_id)
                             logger.info(f"ACKed stream message [{message_id}]")

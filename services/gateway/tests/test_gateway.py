@@ -1,9 +1,13 @@
 import os
 import time
 import json
+import base64
+import uuid
 import redis
 import requests
 import pytest
+import subprocess
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,25 +16,65 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8081")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+ADMIN_USER = os.getenv("KC_ADMIN", "admin")
+ADMIN_PASSWORD = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
 
-TEST_TENANT_ID = "tenant-test-uuid"
-ADMIN_PASSWORD = "SolavieSecurePass123!"
-
+TEST_TENANT_ID = os.getenv("TEST_TENANT_ID", f"tenant-gw-{uuid.uuid4()}")
+TEST_TENANT_NAME = f"GW Test Tenant {uuid.uuid4().hex[:8]}"
+TEST_ADMIN_EMAIL = f"admin@{uuid.uuid4().hex[:8]}.com"
+TEST_ADMIN_PASSWORD = "SolavieSecurePass123!"
 
 # ============================================================
 # Helper Fixtures
 # ============================================================
 
+@pytest.fixture(scope="session", autouse=True)
+def ensure_tenant_exists():
+    """Provision the test tenant organization in Keycloak if it doesn't already exist."""
+    script_path = os.path.join(os.path.dirname(__file__), "../../auth/scripts/provision_organization.py")
+    cmd = [
+        sys.executable, script_path,
+        "--keycloak-url", KEYCLOAK_URL,
+        "--admin-username", ADMIN_USER,
+        "--admin-password", ADMIN_PASSWORD,
+        "--tenant-id", TEST_TENANT_ID,
+        "--tenant-name", TEST_TENANT_NAME,
+        "--admin-email", TEST_ADMIN_EMAIL,
+        "--admin-password-user", TEST_ADMIN_PASSWORD,
+    ]
+    print(f"Running provisioning CLI script command: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode == 0, f"Provisioning failed: {result.stderr}"
+    
+    # Extract output
+    output_lines = result.stdout.split('\n')
+    json_lines = []
+    capture = False
+    for line in output_lines:
+        if line.strip() == "PROVISION_OUTPUT_START":
+            capture = True
+            continue
+        if line.strip() == "PROVISION_OUTPUT_END":
+            capture = False
+            continue
+        if capture:
+            json_lines.append(line)
+            
+    assert json_lines, "Could not find PROVISION_OUTPUT block in provisioning script output"
+    provision_data = json.loads('\n'.join(json_lines))
+    return provision_data
+
+
 @pytest.fixture(scope="module")
-def access_token():
+def access_token(ensure_tenant_exists):
     """Lấy access token từ Keycloak để dùng trong các gateway tests."""
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
-        "password": ADMIN_PASSWORD,
+        "username": f"admin-{TEST_TENANT_ID}",
+        "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     response = requests.post(token_url, data=payload, timeout=10)
     if response.status_code != 200:
@@ -58,7 +102,7 @@ def test_gateway_routing_no_auth():
     AC 2.2: WHEN token invalid hoặc expired, THE Gateway SHALL trả về 401 Unauthorized.
     Request không có token đến route được bảo vệ phải nhận 401.
     """
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/master/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     response = requests.get(url, timeout=5)
     # 401 Unauthorized is expected because we provided no token
     assert response.status_code == 401
@@ -70,7 +114,7 @@ def test_gateway_routing_with_auth(access_token):
     AC 2.1: Validate JWT tokens via OIDC/JWT plugin.
     Request có token hợp lệ phải được forward đến upstream service.
     """
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(url, headers=headers, timeout=10)
     # If the token is valid, it should forward the request to Keycloak and get a 200
@@ -124,7 +168,7 @@ def test_gateway_rate_limiting_headers(access_token, redis_client):
     })
     redis_client.set(f"tenant:{TEST_TENANT_ID}:config:security_comments_notif", config_data)
 
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "X-Tenant-ID": TEST_TENANT_ID
@@ -149,38 +193,41 @@ def test_gateway_dynamic_rate_limit_per_tenant(access_token, redis_client):
     AC 3.5: Dynamic rate limiting - đọc limits từ Redis cache per-tenant.
     Seed low rate limit (5/min) vào Redis → verify sau 6 requests nhận 429.
     """
-    # Seed low rate limit for specific test tenant
-    low_limit_tenant = "tenant-rate-limit-test"
+    # Seed low rate limit for our actual test tenant
     config_data = json.dumps({
         "gateway_rate_limit_minute": 5,
         "gateway_rate_limit_hour": 100,
         "allowed_cors_origins": ["*"]
     })
-    redis_client.set(f"tenant:{low_limit_tenant}:config:security_comments_notif", config_data)
+    redis_client.set(f"tenant:{TEST_TENANT_ID}:config:security_comments_notif", config_data)
 
     # Xóa rate limit counters cũ nếu còn tồn tại
     import math
     min_bucket = math.floor(time.time() / 60)
-    redis_client.delete(f"rate:{low_limit_tenant}:min:{min_bucket}")
+    redis_client.delete(f"rate:{TEST_TENANT_ID}:min:{min_bucket}")
 
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     headers = {
-        "Authorization": f"Bearer {access_token}",
-        "X-Tenant-ID": low_limit_tenant
+        "Authorization": f"Bearer {access_token}"
     }
 
     # Manually set a rate limit counter above threshold in Redis (simulating exhausted limit)
-    redis_client.set(f"rate:{low_limit_tenant}:min:{min_bucket}", 6)
-    redis_client.expire(f"rate:{low_limit_tenant}:min:{min_bucket}", 60)
+    redis_client.set(f"rate:{TEST_TENANT_ID}:min:{min_bucket}", 6)
+    redis_client.expire(f"rate:{TEST_TENANT_ID}:min:{min_bucket}", 60)
 
     # Next request should be rejected with 429
     response = requests.get(url, headers=headers, timeout=10)
     assert response.status_code == 429, \
         f"Expected 429 Too Many Requests after rate limit exceeded, got: {response.status_code}"
 
-    # Cleanup
-    redis_client.delete(f"rate:{low_limit_tenant}:min:{min_bucket}")
-    redis_client.delete(f"tenant:{low_limit_tenant}:config:security_comments_notif")
+    # Cleanup: restore to normal limit (200) and delete counter
+    redis_client.delete(f"rate:{TEST_TENANT_ID}:min:{min_bucket}")
+    config_data_reset = json.dumps({
+        "gateway_rate_limit_minute": 200,
+        "gateway_rate_limit_hour": 5000,
+        "allowed_cors_origins": ["*"]
+    })
+    redis_client.set(f"tenant:{TEST_TENANT_ID}:config:security_comments_notif", config_data_reset)
 
 
 # ============================================================
@@ -200,7 +247,7 @@ def test_gateway_cors_valid_origin(access_token, redis_client):
     })
     redis_client.set(f"tenant:{TEST_TENANT_ID}:config:security_comments_notif", config_data)
 
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
 
     # OPTIONS preflight request với valid origin → không cần auth
     response = requests.options(url, headers={
@@ -231,7 +278,7 @@ def test_gateway_cors_invalid_origin(access_token, redis_client):
     })
     redis_client.set(f"tenant:{TEST_TENANT_ID}:config:security_comments_notif", config_data)
 
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Origin": "https://evil-site.hacker.com",  # Invalid origin NOT in allowed list
@@ -278,7 +325,7 @@ def test_gateway_tenant_id_header_injected(access_token):
     AC 2.3: Gateway SHALL inject tenant_id và user_id từ token claims vào request headers.
     Xác minh X-Tenant-ID header được set bởi dynamic-policy plugin.
     """
-    url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(url, headers=headers, timeout=10)
     # The response itself doesn't contain the request headers, but if we get 200
@@ -294,7 +341,6 @@ def test_gateway_jti_blacklisting(access_token, redis_client):
     parts = access_token.split('.')
     payload_b64 = parts[1]
     payload_b64 += '=' * (-len(payload_b64) % 4)
-    import base64
     payload_json = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
     claims = json.loads(payload_json)
     jti = claims.get("jti")
@@ -306,7 +352,7 @@ def test_gateway_jti_blacklisting(access_token, redis_client):
 
     try:
         # 3. Gửi request qua Gateway với token bị revoked
-        url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+        url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
         headers = {"Authorization": f"Bearer {access_token}"}
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -321,13 +367,13 @@ def test_gateway_jti_blacklisting(access_token, redis_client):
 
 def get_token_with_scopes(scopes_str):
     """Helper to request a token from Keycloak with specific optional scopes."""
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
-        "password": ADMIN_PASSWORD,
+        "username": f"admin-{TEST_TENANT_ID}",
+        "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": f"openid email profile {scopes_str}"
+        "scope": f"openid email profile organization {scopes_str}"
     }
     response = requests.post(token_url, data=payload, timeout=10)
     response.raise_for_status()
@@ -338,7 +384,7 @@ def test_gateway_scope_validation_blocking(access_token):
     """
     Xác minh Gateway chặn các request thiếu scope thích hợp (trả về 403 Forbidden).
     """
-    # Gọi endpoint /api/v1/completions với token mặc định (chỉ có openid email profile, không có ai-core scope)
+    # Gọi endpoint /api/v1/completions với token mặc định (chỉ có openid email profile organization, không có ai-core scope)
     url = f"{GATEWAY_URL}/api/v1/completions"
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(url, headers=headers, timeout=10)
@@ -397,7 +443,7 @@ def test_gateway_scope_nested_path_matching():
     assert resp_configs.status_code == 403, f"Expected 403 for /api/v1/configs with only tenant-config scope, got {resp_configs.status_code}"
 
 
-def test_gateway_privilege_escalation_blocked(redis_client):
+def test_gateway_privilege_escalation_blocked(ensure_tenant_exists):
     """
     AC 2.6: Verify that system roles (system, system_admin)
     belonging to a regular tenant are BLOCKED by Kong with 403 Forbidden to prevent Privilege Escalation.
@@ -424,17 +470,17 @@ def test_gateway_privilege_escalation_blocked(redis_client):
         "Content-Type": "application/json"
     }
     
-    # 2. Check and Create the 'system' realm role in tenant realm if it doesn't exist
-    role_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles"
+    # 2. Check and Create the 'system' realm role in solavie realm if it doesn't exist
+    role_url = f"{KEYCLOAK_URL}/admin/realms/solavie/roles"
     roles_resp = requests.get(role_url, headers=admin_headers, timeout=10)
     roles_list = roles_resp.json()
-    role_exists = any(r["name"] == "system" for r in roles_list)
+    role_exists = any(r["name"] == "System" or r["name"] == "system" for r in roles_list)
     
     if not role_exists:
         create_role_resp = requests.post(role_url, headers=admin_headers, json={"name": "system"}, timeout=10)
         assert create_role_resp.status_code in [201, 409], f"Failed to create system role: {create_role_resp.text}"
     
-    # 3. Create a temporary user in the tenant realm
+    # 3. Create a temporary user in the solavie realm
     temp_username = f"pe-test-{int(time.time())}"
     temp_email = f"{temp_username}@solavie-test.com"
     user_payload = {
@@ -452,56 +498,60 @@ def test_gateway_privilege_escalation_blocked(redis_client):
             }
         ]
     }
-    users_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users"
+    users_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users"
     create_user_resp = requests.post(users_url, headers=admin_headers, json=user_payload, timeout=10)
     assert create_user_resp.status_code == 201, f"Failed to create temp user: {create_user_resp.text}"
     
     # Retrieve the new user's ID
-    user_id_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users?username={temp_username}"
+    user_id_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users?username={temp_username}"
     user_list_resp = requests.get(user_id_url, headers=admin_headers, timeout=10)
     user_id = user_list_resp.json()[0]["id"]
     
-    # 4. Map the 'system' role to the temp user
+    # 4. Link temporary user to Organization
+    org_id = ensure_tenant_exists["organization_id"]
+    add_member_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}/members"
+    add_member_resp = requests.post(add_member_url, headers=admin_headers, json=user_id, timeout=10)
+    assert add_member_resp.status_code in [204, 201, 200], f"Failed to link temp user to organization: {add_member_resp.text}"
+    
+    # 5. Map the 'system' role to the temp user
     # Get the system role representation
-    role_rep_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles/system"
+    role_rep_url = f"{KEYCLOAK_URL}/admin/realms/solavie/roles/system"
     role_rep_resp = requests.get(role_rep_url, headers=admin_headers, timeout=10)
+    if role_rep_resp.status_code != 200:
+        role_rep_url = f"{KEYCLOAK_URL}/admin/realms/solavie/roles/System"
+        role_rep_resp = requests.get(role_rep_url, headers=admin_headers, timeout=10)
+    
     role_rep = role_rep_resp.json()
     
-    mapping_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}/role-mappings/realm"
+    mapping_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}/role-mappings/realm"
     map_role_resp = requests.post(mapping_url, headers=admin_headers, json=[role_rep], timeout=10)
     assert map_role_resp.status_code == 204, f"Failed to map system role to user: {map_role_resp.text}"
     
     try:
-        # 5. Authenticate as the temp user to get their token
-        user_token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+        # 6. Authenticate as the temp user to get their token (with organization scope)
+        user_token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
         user_payload = {
             "client_id": "dashboard",
             "username": temp_username,
             "password": "TempPassword123!",
             "grant_type": "password",
-            "scope": "openid email profile"
+            "scope": "openid email profile organization"
         }
         user_token_resp = requests.post(user_token_url, data=user_payload, timeout=10)
         assert user_token_resp.status_code == 200, f"Failed to get token for temp user: {user_token_resp.text}"
         user_token = user_token_resp.json()["access_token"]
         
-        # 6. Send request through Gateway
-        url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+        # 7. Send request through Gateway
+        url = f"{GATEWAY_URL}/api/v1/auth/realms/solavie/.well-known/openid-configuration"
         headers = {"Authorization": f"Bearer {user_token}"}
         resp = requests.get(url, headers=headers, timeout=10)
         
-        # 7. Verify we get 403 Forbidden with PE Blocked message
+        # 8. Verify we get 403 Forbidden with PE Blocked message
         assert resp.status_code == 403, f"Expected 403 Forbidden, got {resp.status_code}"
         assert "System roles not allowed in tenant realm" in resp.text, f"Expected PE message, got: {resp.text}"
         
     finally:
-        # 8. Clean up Keycloak
+        # 9. Clean up Keycloak
         # Delete user
-        del_user_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}"
+        del_user_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}"
         requests.delete(del_user_url, headers=admin_headers, timeout=10)
-        # Delete role if it was created during this test
-        if not role_exists:
-            del_role_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles/system"
-            requests.delete(del_role_url, headers=admin_headers, timeout=10)
-
-

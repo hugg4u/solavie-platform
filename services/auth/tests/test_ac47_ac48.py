@@ -20,8 +20,8 @@ ADMIN_PASSWORD = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
 # Reuse the same tenant provisioned by test_auth.py session fixture.
 # If run standalone, provision a fresh one.
 TEST_TENANT_ID = os.getenv("TEST_TENANT_ID", f"tenant-ac47-{uuid.uuid4()}")
-TEST_TENANT_NAME = "AC47 Test Tenant"
-TEST_ADMIN_EMAIL = "admin@ac47tenant.com"
+TEST_TENANT_NAME = f"AC47 Test Tenant {uuid.uuid4().hex[:8]}"
+TEST_ADMIN_EMAIL = f"admin@{uuid.uuid4().hex[:8]}.com"
 TEST_ADMIN_PASSWORD = "SolavieSecurePass123!"
 
 
@@ -33,7 +33,7 @@ TEST_ADMIN_PASSWORD = "SolavieSecurePass123!"
 def ensure_tenant_exists():
     """Provision the test tenant if it doesn't already exist."""
     import subprocess
-    script_path = os.path.join(os.path.dirname(__file__), "../scripts/provision_realm.py")
+    script_path = os.path.join(os.path.dirname(__file__), "../scripts/provision_organization.py")
     cmd = [
         sys.executable, script_path,
         "--keycloak-url", KEYCLOAK_URL,
@@ -84,7 +84,7 @@ class TestAC47UserServiceClient:
         headers = {"Authorization": f"Bearer {admin_token}"}
 
         resp = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/clients",
+            f"{KEYCLOAK_URL}/admin/realms/solavie/clients",
             headers=headers, timeout=10
         )
         assert resp.status_code == 200, f"Failed to fetch clients: {resp.text}"
@@ -115,7 +115,7 @@ class TestAC47UserServiceClient:
 
         # 1. Lấy UUIDs
         clients_resp = requests.get(
-            f"{base}/admin/realms/{TEST_TENANT_ID}/clients",
+            f"{base}/admin/realms/solavie/clients",
             headers=headers, timeout=10
         )
         clients_resp.raise_for_status()
@@ -127,7 +127,7 @@ class TestAC47UserServiceClient:
 
         # 2. Lấy service account user
         sa_resp = requests.get(
-            f"{base}/admin/realms/{TEST_TENANT_ID}/clients/{user_svc['id']}/service-account-user",
+            f"{base}/admin/realms/solavie/clients/{user_svc['id']}/service-account-user",
             headers=headers, timeout=10
         )
         assert sa_resp.status_code == 200, f"Service account not accessible: {sa_resp.text}"
@@ -135,7 +135,7 @@ class TestAC47UserServiceClient:
 
         # 3. Kiểm tra role mappings
         roles_resp = requests.get(
-            f"{base}/admin/realms/{TEST_TENANT_ID}/users/{sa_user_id}/role-mappings/clients/{realm_mgmt['id']}",
+            f"{base}/admin/realms/solavie/users/{sa_user_id}/role-mappings/clients/{realm_mgmt['id']}",
             headers=headers, timeout=10
         )
         assert roles_resp.status_code == 200

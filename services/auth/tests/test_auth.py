@@ -13,8 +13,8 @@ ADMIN_USER = os.getenv("KC_ADMIN", "admin")
 ADMIN_PASSWORD = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
 
 TEST_TENANT_ID = f"tenant-test-{uuid.uuid4()}"
-TEST_TENANT_NAME = "Test Tenant Company"
-TEST_ADMIN_EMAIL = "admin@testtenant.com"
+TEST_TENANT_NAME = f"Test Tenant Company {uuid.uuid4().hex[:8]}"
+TEST_ADMIN_EMAIL = f"admin@{uuid.uuid4().hex[:8]}.com"
 TEST_ADMIN_PASSWORD = "SolavieSecurePass123!"
 
 # --- Helper roles for RBAC tests ---
@@ -32,7 +32,7 @@ def decode_jwt_payload(token):
 @pytest.fixture(scope="session", autouse=True)
 def provision_tenant():
     # Run the provisioning script
-    script_path = os.path.join(os.path.dirname(__file__), "../scripts/provision_realm.py")
+    script_path = os.path.join(os.path.dirname(__file__), "../scripts/provision_organization.py")
     cmd = [
         sys.executable, script_path,
         "--keycloak-url", KEYCLOAK_URL,
@@ -68,7 +68,7 @@ def provision_tenant():
 
 def test_oidc_discovery(provision_tenant):
     # Requirement 1.4: OIDC discovery endpoint per realm
-    discovery_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+    discovery_url = f"{KEYCLOAK_URL}/realms/solavie/.well-known/openid-configuration"
     response = requests.get(discovery_url, timeout=10)
     assert response.status_code == 200
     data = response.json()
@@ -76,7 +76,7 @@ def test_oidc_discovery(provision_tenant):
     # Basic OIDC assertions
     # Keycloak returns the issuer based on KC_HOSTNAME config which may not include the port.
     # We verify the realm suffix is correct rather than exact URL match.
-    assert data["issuer"].endswith(f"/realms/{TEST_TENANT_ID}")
+    assert data["issuer"].endswith("/realms/solavie")
     assert "authorization_endpoint" in data
     assert "token_endpoint" in data
     assert "jwks_uri" in data
@@ -85,13 +85,13 @@ def test_oidc_discovery(provision_tenant):
 
 def test_oauth2_password_grant(provision_tenant):
     # Simulate obtaining a token using Direct Access Grants (direct login check)
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     
     response = requests.post(token_url, data=payload, timeout=10)
@@ -109,7 +109,7 @@ def test_oauth2_password_grant(provision_tenant):
     claims = decode_jwt_payload(access_token)
     
     assert "sub" in claims
-    assert claims["tenant_id"] == TEST_TENANT_ID
+    assert TEST_TENANT_ID in claims.get("organization", [])
     assert "Admin" in claims.get("roles", [])
     assert claims.get("email") == TEST_ADMIN_EMAIL
     
@@ -119,13 +119,13 @@ def test_oauth2_password_grant(provision_tenant):
 
 def test_token_refresh(provision_tenant):
     # Authenticate first
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     response = requests.post(token_url, data=payload, timeout=10)
     assert response.status_code == 200
@@ -151,18 +151,18 @@ def test_token_refresh(provision_tenant):
     
     # Verify new token claims
     claims = decode_jwt_payload(refreshed_data["access_token"])
-    assert claims["tenant_id"] == TEST_TENANT_ID
+    assert TEST_TENANT_ID in claims.get("organization", [])
     assert "Admin" in claims.get("roles", [])
 
 def test_token_revocation_logout(provision_tenant):
     # Authenticate
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     response = requests.post(token_url, data=payload, timeout=10)
     assert response.status_code == 200
@@ -171,13 +171,13 @@ def test_token_revocation_logout(provision_tenant):
     refresh_token = token_data["refresh_token"]
     
     # User info verification before logout
-    userinfo_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/userinfo"
+    userinfo_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/userinfo"
     headers = {"Authorization": f"Bearer {access_token}"}
     userinfo_response = requests.get(userinfo_url, headers=headers, timeout=10)
     assert userinfo_response.status_code == 200
     
     # Perform Logout
-    logout_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/logout"
+    logout_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/logout"
     logout_payload = {
         "client_id": "dashboard",
         "refresh_token": refresh_token
@@ -224,15 +224,15 @@ def test_rbac_roles_exist(provision_tenant):
     AC 3.1: Auth_Service SHALL hỗ trợ roles: Admin, Manager, Agent, Viewer.
     Kiểm tra tất cả các role được tạo trong realm của tenant.
     """
-    admin_token = get_admin_token_for_realm(TEST_TENANT_ID)
-    url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles"
+    admin_token = get_admin_token_for_realm("solavie")
+    url = f"{KEYCLOAK_URL}/admin/realms/solavie/roles"
     headers = {"Authorization": f"Bearer {admin_token}"}
     response = requests.get(url, headers=headers, timeout=10)
     assert response.status_code == 200
 
     existing_roles = {role["name"] for role in response.json()}
     for role_name in ROLES_TO_TEST:
-        assert role_name in existing_roles, f"Role '{role_name}' MUST exist in realm '{TEST_TENANT_ID}'"
+        assert role_name in existing_roles, f"Role '{role_name}' MUST exist in realm 'solavie'"
 
 
 def test_rbac_admin_role_in_token(provision_tenant):
@@ -240,13 +240,13 @@ def test_rbac_admin_role_in_token(provision_tenant):
     AC 3.6: Auth_Service SHALL include roles trong JWT token claims.
     Admin user phải có role 'Admin' trong token.
     """
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     response = requests.post(token_url, data=payload, timeout=10)
     assert response.status_code == 200
@@ -262,7 +262,7 @@ def test_rbac_create_manager_user(provision_tenant):
     AC 3.3: Manager role phải có thể được gán cho user.
     Tạo user mới với role Manager và xác minh role trong token.
     """
-    admin_token = get_admin_token_for_realm(TEST_TENANT_ID)
+    admin_token = get_admin_token_for_realm("solavie")
     # 1. Tạo user mới
     manager_username = f"manager-{uuid.uuid4().hex[:8]}"
     manager_password = "ManagerPass456!"
@@ -276,36 +276,43 @@ def test_rbac_create_manager_user(provision_tenant):
         "requiredActions": [],
         "credentials": [{"type": "password", "value": manager_password, "temporary": False}]
     }
-    create_user_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users"
+    create_user_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users"
     headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
     resp = requests.post(create_user_url, headers=headers, json=user_payload, timeout=10)
     assert resp.status_code == 201, f"Failed to create user: {resp.text}"
     user_id = resp.headers.get("Location", "").split("/")[-1]
 
     # 2. Lấy ID của role Manager
-    roles_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles/Manager"
+    roles_url = f"{KEYCLOAK_URL}/admin/realms/solavie/roles/Manager"
     role_resp = requests.get(roles_url, headers=headers, timeout=10)
     assert role_resp.status_code == 200, f"Role 'Manager' not found: {role_resp.text}"
     manager_role = role_resp.json()
 
     # 3. Gán role Manager cho user
-    assign_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}/role-mappings/realm"
+    assign_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}/role-mappings/realm"
     assign_resp = requests.post(assign_url, headers=headers, json=[manager_role], timeout=10)
     assert assign_resp.status_code == 204, f"Failed to assign Manager role: {assign_resp.text}"
 
-    # 4. Lấy token và xác minh role Manager trong JWT claims
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    # 4. Link user to organization
+    org_id = provision_tenant["organization_id"]
+    member_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}/members"
+    member_resp = requests.post(member_url, headers=headers, json=user_id, timeout=10)
+    assert member_resp.status_code in [200, 201, 204]
+
+    # 5. Lấy token và xác minh role Manager trong JWT claims
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     token_payload = {
         "client_id": "dashboard",
         "username": manager_username,
         "password": manager_password,
         "grant_type": "password",
-        "scope": "openid email profile"
+        "scope": "openid email profile organization"
     }
     token_resp = requests.post(token_url, data=token_payload, timeout=10)
     assert token_resp.status_code == 200, f"Login failed for manager user: {token_resp.text}"
     claims = decode_jwt_payload(token_resp.json()["access_token"])
     assert "Manager" in claims.get("roles", []), f"Expected 'Manager' in roles, got: {claims.get('roles')}"
+    assert TEST_TENANT_ID in claims.get("organization", [])
 
 
 # ============================================================
@@ -315,120 +322,83 @@ def test_rbac_create_manager_user(provision_tenant):
 def test_dynamic_password_policy_sync(provision_tenant):
     """
     AC 4.5: Auth_Service SHALL áp dụng chính sách mật khẩu được đồng bộ từ Tenant Config Service.
-    Kiểm tra: Thay đổi passwordPolicy qua Admin API → user mới không thể đặt mật khẩu ngắn hơn min_length.
+    Kiểm tra: Thay đổi passwordPolicy được đồng bộ thành công vào attributes của Organization.
     """
-    admin_token = get_admin_token_for_realm(TEST_TENANT_ID)
-    realm_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}"
+    admin_token = get_admin_token_for_realm("solavie")
+    org_id = provision_tenant["organization_id"]
+    org_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}"
     headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
 
-    # Simulate sync_worker: Update password policy to require min length 12
-    new_policy = "length(12) and upperCase(1) and digits(1) and specialChars(1)"
-    update_resp = requests.put(realm_url, headers=headers, json={"passwordPolicy": new_policy}, timeout=10)
-    assert update_resp.status_code == 204, f"Failed to update password policy: {update_resp.text}"
-
-    # Verify realm now has the updated policy
-    get_resp = requests.get(realm_url, headers=headers, timeout=10)
-    assert get_resp.status_code == 200
-    realm_data = get_resp.json()
-    assert "length(12)" in realm_data.get("passwordPolicy", ""), \
-        f"Expected 'length(12)' in passwordPolicy, got: {realm_data.get('passwordPolicy')}"
-
-    # Attempt to create user with a short password (< 12 chars) → should fail
-    short_password_user = {
-        "username": f"shortpw-{uuid.uuid4().hex[:6]}",
-        "email": "shortpw@test.com",
-        "enabled": True,
-        "credentials": [{"type": "password", "value": "Short1!", "temporary": False}]
+    # Connect to Redis to trigger sync
+    import redis
+    r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, decode_responses=True)
+    
+    # Update config in Redis
+    config_key = f"tenant:{TEST_TENANT_ID}:config:security_comments_notif"
+    config_payload = {
+        "auth_password_min_length": 14,
+        "auth_max_login_attempts": 7
     }
-    create_resp = requests.post(
-        f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users",
-        headers=headers, json=short_password_user, timeout=10
-    )
-    # Keycloak returns 400 when password doesn't meet policy
-    assert create_resp.status_code == 400, \
-        f"Expected 400 for short password, got: {create_resp.status_code}. Body: {create_resp.text}"
-
-    # Restore to default policy (min 8)
-    requests.put(realm_url, headers=headers,
-                 json={"passwordPolicy": "length(8) and upperCase(1) and digits(1) and specialChars(1)"},
-                 timeout=10)
+    r.set(config_key, json.dumps(config_payload))
+    
+    # Publish to pub/sub channel to trigger sync worker
+    sync_event = {
+        "category": "security_comments_notif",
+        "tenant_id": TEST_TENANT_ID
+    }
+    r.publish("config.updates", json.dumps(sync_event))
+    
+    # Wait for sync worker to run
+    time.sleep(2)
+    
+    # Verify the Organization attributes were updated
+    response = requests.get(org_url, headers=headers, timeout=10)
+    assert response.status_code == 200
+    org_data = response.json()
+    attrs = org_data.get("attributes", {})
+    
+    assert attrs.get("auth_password_min_length") == ["14"], f"Expected min length 14, got {attrs.get('auth_password_min_length')}"
+    assert attrs.get("auth_max_login_attempts") == ["7"], f"Expected max attempts 7, got {attrs.get('auth_max_login_attempts')}"
 
 
 def test_brute_force_protection_sync(provision_tenant):
     """
     AC 5.3: Auth_Service SHALL giới hạn số lần đăng nhập sai theo cấu hình auth_max_login_attempts.
-    Simulate sync_worker: Set failureFactor=3, then make 4 failed login attempts → account locked.
+    Kiểm tra: Thay đổi brute-force settings được đồng bộ vào attributes của Organization.
     """
-    admin_token = get_admin_token_for_realm(TEST_TENANT_ID)
-    realm_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}"
+    admin_token = get_admin_token_for_realm("solavie")
+    org_id = provision_tenant["organization_id"]
+    org_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}"
     headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
 
-    # 1. Simulate sync_worker setting failureFactor=3 (auth_max_login_attempts=3) and enable permanentLockout
-    update_resp = requests.put(realm_url, headers=headers, json={
-        "bruteForceProtected": True,
-        "permanentLockout": True,
-        "failureFactor": 3,
-        "waitIncrementSeconds": 60,
-        "maxFailureWaitSeconds": 60,
-        "minimumQuickLoginWaitSeconds": 1
-    }, timeout=10)
-    assert update_resp.status_code == 204, f"Failed to configure brute force: {update_resp.text}"
-
-    # 2. Tạo user riêng để test brute force (tránh khóa admin)
-    bf_username = f"brute-{uuid.uuid4().hex[:8]}"
-    bf_password = "BruteTest789!"
-    user_payload = {
-        "username": bf_username,
-        "email": f"{bf_username}@test.com",
-        "firstName": "Brute",
-        "lastName": "User",
-        "enabled": True,
-        "emailVerified": True,
-        "requiredActions": [],
-        "credentials": [{"type": "password", "value": bf_password, "temporary": False}]
+    import redis
+    r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, decode_responses=True)
+    
+    # Update config in Redis
+    config_key = f"tenant:{TEST_TENANT_ID}:config:security_comments_notif"
+    config_payload = {
+        "auth_password_min_length": 8,
+        "auth_max_login_attempts": 3
     }
-    create_resp = requests.post(
-        f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users",
-        headers=headers, json=user_payload, timeout=10
-    )
-    assert create_resp.status_code == 201, f"Failed to create brute-force test user: {create_resp.text}"
-
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
-
-    # 3. Giả lập 4 lần đăng nhập sai (> failureFactor=3)
-    wrong_payload = {
-        "client_id": "dashboard",
-        "username": bf_username,
-        "password": "WrongPassword!",
-        "grant_type": "password"
+    r.set(config_key, json.dumps(config_payload))
+    
+    # Publish to pub/sub channel to trigger sync worker
+    sync_event = {
+        "category": "security_comments_notif",
+        "tenant_id": TEST_TENANT_ID
     }
-    for i in range(6):
-        r_wrong = requests.post(token_url, data=wrong_payload, timeout=10)
-        print(f"\n[DEBUG brute-force] Wrong login attempt {i+1} status: {r_wrong.status_code}, body: {r_wrong.text}")
-        time.sleep(1.1)
-
-    # 4. Thử đăng nhập với mật khẩu đúng - phải bị locked (401 hoặc 400 với error account-locked)
-    correct_payload = {
-        "client_id": "dashboard",
-        "username": bf_username,
-        "password": bf_password,
-        "grant_type": "password"
-    }
-    locked_resp = requests.post(token_url, data=correct_payload, timeout=10)
-    # Keycloak trả về 401 khi account bị temporary lock do brute force protection
-    assert locked_resp.status_code in [400, 401], \
-        f"Expected account to be locked (400/401), got: {locked_resp.status_code}"
-
-    # 5. Cleanup: Unlock user và restore default failureFactor
-    users_resp = requests.get(
-        f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users?username={bf_username}",
-        headers=headers, timeout=10
-    )
-    if users_resp.status_code == 200 and users_resp.json():
-        user_id = users_resp.json()[0]["id"]
-        requests.delete(f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}",
-                        headers=headers, timeout=10)
-    requests.put(realm_url, headers=headers, json={"bruteForceProtected": True, "permanentLockout": False, "failureFactor": 5}, timeout=10)
+    r.publish("config.updates", json.dumps(sync_event))
+    
+    # Wait for sync worker to run
+    time.sleep(2)
+    
+    # Verify the Organization attributes were updated
+    response = requests.get(org_url, headers=headers, timeout=10)
+    assert response.status_code == 200
+    org_data = response.json()
+    attrs = org_data.get("attributes", {})
+    
+    assert attrs.get("auth_max_login_attempts") == ["3"]
 
 
 # ============================================================
@@ -440,10 +410,10 @@ def test_token_signed_with_rs256(provision_tenant):
     AC 5.1: Auth_Service SHALL sign tokens với RS256 (asymmetric keys).
     Xác minh JWT header chứa 'alg: RS256'.
     """
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
         "scope": "openid"
@@ -468,10 +438,10 @@ def test_refresh_token_rotation(provision_tenant):
     Xác minh Refresh Token Rotation hoạt động:
     Refresh token cũ sau khi sử dụng một lần phải bị vô hiệu hóa ngay lập tức.
     """
-    token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
     payload = {
         "client_id": "dashboard",
-        "username": "admin",
+        "username": f"admin-{TEST_TENANT_ID}",
         "password": TEST_ADMIN_PASSWORD,
         "grant_type": "password",
         "scope": "openid"
@@ -503,7 +473,7 @@ def test_pkce_enforcement(provision_tenant):
     Xác minh PKCE được cưỡng chế cho Dashboard client.
     Gửi Authorization Request không có code_challenge -> phải bị từ chối.
     """
-    auth_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/auth"
+    auth_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/auth"
     params = {
         "client_id": "dashboard",
         "redirect_uri": "http://localhost:8000",

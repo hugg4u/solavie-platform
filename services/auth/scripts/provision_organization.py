@@ -106,7 +106,7 @@ def get_organization_id(keycloak_url, admin_token, realm_name, alias):
         "Authorization": f"Bearer {admin_token}",
         "Content-Type": "application/json"
     }
-    response = requests.get(url, headers=headers, timeout=10)
+    response = requests.get(url, headers=headers, params={"max": 1000}, timeout=10)
     response.raise_for_status()
     orgs = response.json()
     for org in orgs:
