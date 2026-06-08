@@ -29,17 +29,26 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
 
 def wait_for_keycloak(keycloak_url, timeout=120):
-    url = f"{keycloak_url.rstrip('/')}/health/ready"
+    from urllib.parse import urlparse
+    parsed = urlparse(keycloak_url)
+    
+    urls_to_try = []
+    if parsed.hostname:
+        scheme = parsed.scheme or "http"
+        urls_to_try.append(f"{scheme}://{parsed.hostname}:9000/health/ready")
+    urls_to_try.append(f"{keycloak_url.rstrip('/')}/health/ready")
+    
     start_time = time.time()
-    logger.info(f"Waiting for Keycloak to become ready at: {url}")
+    logger.info(f"Waiting for Keycloak to become ready (trying URLs: {', '.join(urls_to_try)})")
     while True:
-        try:
-            response = requests.get(url, timeout=2)
-            if response.status_code == 200:
-                logger.info("Keycloak is ready for synchronization!")
-                return True
-        except Exception:
-            pass
+        for url in urls_to_try:
+            try:
+                response = requests.get(url, timeout=2)
+                if response.status_code == 200:
+                    logger.info("Keycloak is ready for synchronization!")
+                    return True
+            except Exception:
+                pass
         if time.time() - start_time > timeout:
             raise TimeoutError("Timed out waiting for Keycloak to start up and become ready.")
         time.sleep(3)
