@@ -5,12 +5,13 @@ Keycloak logs qua stdout (JSON format khi cấu hình `--log-format=json`):
 
 ```json
 {
-  "timestamp": "2025-01-15T10:30:00.123Z",
+  "timestamp": "2026-06-08T10:30:00.123Z",
   "level": "INFO",
   "category": "org.keycloak.events",
   "message": "LOGIN",
   "context": {
-    "realm": "tenant-abc",
+    "realm": "solavie",
+    "organization": "tenant-abc",
     "client_id": "dashboard",
     "user_id": "user-uuid",
     "ip_address": "192.168.1.100",
@@ -62,10 +63,10 @@ GET /metrics       → Prometheus metrics
 Auth Sync Worker chạy bằng Python xuất bản log stdout ở định dạng cấu trúc JSON:
 ```json
 {
-  "timestamp": "2026-06-07 01:50:00,123",
+  "timestamp": "2026-06-08 01:50:00,123",
   "level": "INFO",
   "category": "solavie.auth.sync_worker",
-  "message": "Updating realm 'tenant-test-uuid' with passwordPolicy length(12) and failureFactor(5)"
+  "message": "Updating organization 'tenant-test-uuid' security attributes with passwordPolicy length(12) and failureFactor(5)"
 }
 ```
 

@@ -29,21 +29,22 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 1. THE Gateway SHALL validate JWT tokens qua OIDC plugin kết nối Keycloak.
 2. WHEN token invalid hoặc expired, THE Gateway SHALL trả về 401 Unauthorized.
 3. THE Gateway SHALL trích xuất claims (tenant_id, user_id, roles), tự động phân giải chúng thành danh sách quyền hạn động theo quy chuẩn `{service}:{resource}:{action}` thông qua 3 tầng lookup:
-   - **Tầng 1 (Local Worker Cache):** Bộ nhớ đệm tại worker-level của Kong, hết hạn sau 5 phút.
-   - **Tầng 2 (Redis Cache):** Bộ nhớ đệm phân tán Redis key `tenant:{tenant_id}:role:{role}:permissions`.
-   - **Tầng 3 (API Fallback):** Gọi REST API trực tiếp đến Tenant Config Service (`GET /api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role`). Khi thành công, ghi ngược vào Redis (TTL 1 hour) và Local cache (TTL 5 mins).
-4. THE Gateway SHALL gộp các quyền của tất cả các vai trò lại (Union Set), tiến hành sắp xếp theo bảng chữ cái (deterministic sorting) để đảm bảo tính nhất quán của chữ ký, và ký số danh sách quyền này bằng thuật toán HMAC-SHA256 trên chuỗi payload `tenant_id:user_id:user_permissions` bằng khóa bí mật chung `GATEWAY_SIGNING_SECRET`.
-5. THE Gateway SHALL inject 4 security headers trước khi forward tới downstream services:
-   - `X-Tenant-ID`: Tenant ID đã validate.
+   - **Tầng 1 (L1 Cache - ngx.shared.DICT):** Bộ nhớ đệm dùng chung giữa các worker (shared memory zone `perm_cache`), hết hạn sau 5 phút, tự động giải phóng khi đầy bộ nhớ (LRU eviction).
+   - **Tầng 2 (L2 Cache - Redis):** Bộ nhớ đệm phân tán Redis key `tenant:{tenant_id}:role:{role}:permissions`.
+   - **Tầng 3 (API Fallback):** Gọi REST API trực tiếp đến Tenant Config Service (`GET /api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role`). Khi thành công, ghi ngược vào L2 Cache (TTL 1 hour) và L1 Cache (TTL 5 mins).
+4. THE Gateway SHALL bảo vệ luồng gọi API Fallback (Tầng 3) bằng **Circuit Breaker** độc lập per-service. Nếu Tenant Config Service gặp lỗi hoặc timeout liên tiếp quá 5 lần trong 30 giây, mạch sẽ chuyển sang trạng thái OPEN (Mở) trong 30 giây để từ chối các request fallback tiếp theo (tránh nghẽn Gateway), sử dụng dữ liệu cũ trong L1 Cache (stale cache) hoặc áp dụng cơ chế Fail-Secure.
+5. THE Gateway SHALL gộp các quyền của tất cả các vai trò lại (Union Set), tiến hành sắp xếp theo bảng chữ cái (deterministic sorting) để đảm bảo tính nhất quán của chữ ký, và ký số danh sách quyền này bằng thuật toán HMAC-SHA256 trên chuỗi payload `tenant_id:user_id:user_permissions` bằng khóa bí mật chung `GATEWAY_SIGNING_SECRET`.
+6. THE Gateway SHALL inject 4 security headers trước khi forward tới downstream services:
+   - `X-Tenant-ID`: Tenant ID được lấy từ Organization alias hoặc name đã được xác thực qua JWT.
    - `X-User-ID`: User ID (sub claim).
    - `X-User-Permissions`: Chuỗi CSV các quyền đã được sắp xếp tăng dần.
    - `X-Permissions-Signature`: Chữ ký số HMAC-SHA256 của payload.
-6. THE Gateway SHALL tự động gán quyền wildcard `*` cho vai trò `admin` nội bộ của tenant (chỉ có quyền trong phạm vi tenant của họ). Đối với vai trò `system` hoặc `system_admin`, THE Gateway SHALL chỉ tự động gán quyền wildcard `*` và cho phép bypass khi và chỉ khi `tenant_id` trích xuất từ JWT trùng khớp với ID của Realm Master (`solavie-system-master`); nếu vai trò `system` hoặc `system_admin` thuộc Realm của một tenant thông thường, Gateway SHALL từ chối gán wildcard `*` và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
-7. THE Gateway SHALL áp dụng nguyên tắc **Fail-Secure**: Nếu người dùng có vai trò nhưng hệ thống Gateway không thể kết nối tới cả Redis và API Fallback để phân giải quyền, Gateway SHALL chặn request và trả về lỗi `503 Service Unavailable` thay vì cho qua với quyền mặc định.
-8. THE Gateway SHALL whitelist các webhook endpoints (không cần auth) và health check endpoints.
-9. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist.
-10. THE Gateway SHALL thực hiện kiểm tra tính hợp lệ của OAuth2 client scopes (Scope Validation) đối với các API request. Khi forward request đến một service nghiệp vụ cụ thể, Gateway phải xác minh Access Token chứa scope được chỉ định của service đó (ví dụ: route `/api/v1/campaigns` yêu cầu scope `campaign`). Nếu thiếu scope hợp lệ, Gateway SHALL từ chối request với mã lỗi `403 Forbidden`.
-11. THE Gateway SHALL thực hiện kiểm tra User Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:user:{user_id}`) để chặn các người dùng đang bị đình chỉ (Suspended), trả về `401 Unauthorized` nếu user bị khóa.
+7. THE Gateway SHALL tự động gán quyền wildcard `*` cho vai trò `admin` nội bộ của tenant (chỉ có quyền trong phạm vi tenant của họ). Đối với vai trò `system` hoặc `system_admin`, THE Gateway SHALL chỉ tự động gán quyền wildcard `*` và cho phép bypass khi và chỉ khi `tenant_id` trích xuất từ JWT trùng khớp với ID của Realm Master (`solavie-system-master`); nếu vai trò `system` hoặc `system_admin` thuộc Realm của một tenant thông thường, Gateway SHALL từ chối gán wildcard `*` và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
+8. THE Gateway SHALL áp dụng nguyên tắc **Fail-Secure**: Nếu người dùng có vai trò nhưng hệ thống Gateway không thể kết nối tới cả Redis và API Fallback để phân giải quyền, Gateway SHALL chặn request và trả về lỗi `503 Service Unavailable` thay vì cho qua với quyền mặc định.
+9. THE Gateway SHALL whitelist các webhook endpoints (không cần auth) và health check endpoints.
+10. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist.
+11. THE Gateway SHALL thực hiện kiểm tra tính hợp lệ của OAuth2 client scopes (Scope Validation) đối với các API request. Khi forward request đến một service nghiệp vụ cụ thể, Gateway phải xác minh Access Token chứa scope được chỉ định của service đó (ví dụ: route `/api/v1/campaigns` yêu cầu scope `campaign`). Nếu thiếu scope hợp lệ, Gateway SHALL từ chối request với mã lỗi `403 Forbidden`.
+12. THE Gateway SHALL thực hiện kiểm tra User Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:user:{user_id}`) để chặn các người dùng đang bị đình chỉ (Suspended), trả về `401 Unauthorized` nếu user bị khóa.
 
 ### Requirement 3: Rate Limiting
 

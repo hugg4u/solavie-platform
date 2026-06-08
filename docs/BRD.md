@@ -7,8 +7,8 @@
 | Thông tin dự án | Chi tiết |
 |-----------------|----------|
 | **Dự án** | Nền tảng Marketing & Chăm sóc khách hàng tự động đa kênh |
-| **Phiên bản** | 1.3.0 |
-| **Ngày cập nhật** | 30/05/2026 |
+| **Phiên bản** | 1.4.0 |
+| **Ngày cập nhật** | 08/06/2026 |
 | **Trạng thái** | Bản dự thảo (Chờ Ban Giám đốc phê duyệt) |
 | **Mức độ bảo mật** | Lưu hành nội bộ (Confidential) |
 | **Người soạn thảo** | Đội ngũ Phân tích Nghiệp vụ (BA Team) |
@@ -23,6 +23,7 @@
 | 0.5.0 | 29/05/2026 | BA Team | Bổ sung quy tắc quản lý quyền nhân viên, so sánh kết nối Zalo/Facebook và quy trình chuyển giao khách cho nhân viên tư vấn. |
 | 1.0.0 | 30/05/2026 | BA Team | Tích hợp quy trình lưu trữ tài liệu, quản lý ảnh/video dự án và tự động rút gọn link chiến dịch marketing. |
 | 1.3.0 | 30/05/2026 | BA Team | **Nâng cấp toàn diện đặc tả nghiệp vụ Solar và Chatbot:** Khảo sát mái nhà, tính toán tài chính (ROI), báo giá PDF, O&M bảo trì, chi tiết nghiệp vụ Trợ lý ảo AI (Chatbot) tự động, hệ thống cấu hình động và dự toán máy chủ. |
+| 1.4.0 | 08/06/2026 | BA Team | **Nâng cấp kiến trúc đa doanh nghiệp (SaaS Multi-tenancy):** Chuyển đổi mô hình quản lý tenant sang Keycloak Organizations và áp dụng giải pháp tối ưu BFF, L1/L2 Cache để sẵn sàng mở rộng tới 10,000+ doanh nghiệp. |
 
 ---
 

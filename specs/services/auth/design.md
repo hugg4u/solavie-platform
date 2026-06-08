@@ -2,7 +2,7 @@
 
 ## Overview
 
-Dịch vụ xác thực và phân quyền tập trung — Keycloak 24+, Java (Quarkus), Port 8080, PostgreSQL (keycloak_db). Cung cấp OAuth2 Authorization Code Flow cho Dashboard, Client Credentials cho service-to-service, Multi-realm per tenant, Dynamic RBAC, Automated Tenant Provisioning, và JWT token với claims tenant_id/user_id/roles.
+Dịch vụ xác thực và phân quyền tập trung — Keycloak 26.1.2, Java (Quarkus), Port 8080, PostgreSQL (keycloak_db). Cung cấp OAuth2 Authorization Code Flow cho Dashboard, Client Credentials cho service-to-service, Keycloak Organizations (Single realm 'solavie' với các Organizations cô lập cho từng tenant), Dynamic RBAC, Automated Tenant Provisioning, và JWT token với claims organization/tenant_id/user_id/roles.
 
 ## Components and Interfaces
 
@@ -36,7 +36,7 @@ Keycloak quản lý dữ liệu xác thực nội bộ trong `keycloak_db` (Post
 
 | Component | Technology |
 |-----------|-----------|
-| Platform | Keycloak 24+ |
+| Platform | Keycloak 26.1.2 |
 | Runtime | Java (Quarkus-based) |
 | Database | PostgreSQL 16 (keycloak_db) |
 | Port | 8080 (HTTP), 8443 (HTTPS) |
@@ -81,60 +81,63 @@ Keycloak Instance
 ├── master realm (platform admin only)
 │   └── Users: [platform-admin]
 │
-├── tenant-{uuid} realm
-│   ├── Clients:
-│   │   ├── dashboard (public, Authorization Code + PKCE)
-│   │   ├── api-gateway (confidential, for Kong OIDC)
-│   │   └── user-service-client (confidential, Client Credentials, roles: realm-management/manage-users)
-│   │
-│   ├── Client Scopes (Optional):
-│   │   ├── campaign (for Campaign Service APIs)
-│   │   ├── crm (for CRM Service APIs)
-│   │   ├── chatbot (for Chatbot Service APIs)
-│   │   ├── content (for Content Service APIs)
-│   │   ├── messaging (for Messaging Service APIs)
-│   │   ├── analytics (for Analytics Service APIs)
-│   │   ├── ai-core (for AI Core Service APIs)
-│   │   └── tenant-config (for Tenant Config Service APIs)
-│   │
-│   ├── Realm Roles:
-│   │   ├── admin
-│   │   ├── manager
-│   │   ├── agent
-│   │   ├── viewer
-│   │   └── (custom roles - dynamic creation)
-│   │
-│   ├── Users:
-│   │   ├── user-1 (roles: [admin])
-│   │   ├── user-2 (roles: [manager])
-│   │   └── user-3 (roles: [agent, custom_role])
-│   │
-│   ├── Token Settings:
-│   │   ├── Access Token Lifespan: 15 minutes
-│   │   ├── Refresh Token Lifespan: 30 days
-│   │   └── SSO Session Idle: 30 minutes
-│   │
-│   └── Security:
-│       ├── Brute Force Detection: enabled (Dynamic: auth_max_login_attempts failures → 5 min lockout)
-│       ├── Password Policy: minLength(auth_password_min_length), upperCase(1), digit(1), specialChars(1) (Dynamic from Tenant Config)
-│       └── Required Actions: [VERIFY_EMAIL, UPDATE_PASSWORD]
-│
-└── tenant-{uuid-2} realm
-    └── ... (same structure)
+└── solavie realm (shared SaaS realm)
+    ├── Clients (shared):
+    │   ├── dashboard (public, Authorization Code + PKCE)
+    │   ├── api-gateway (confidential, for Kong OIDC)
+    │   └── user-service-client (confidential, Client Credentials, roles: realm-management/manage-users)
+    │
+    ├── Client Scopes (Optional):
+    │   ├── campaign (for Campaign Service APIs)
+    │   ├── crm (for CRM Service APIs)
+    │   ├── chatbot (for Chatbot Service APIs)
+    │   ├── content (for Content Service APIs)
+    │   ├── messaging (for Messaging Service APIs)
+    │   ├── analytics (for Analytics Service APIs)
+    │   ├── ai-core (for AI Core Service APIs)
+    │   └── tenant-config (for Tenant Config Service APIs)
+    │
+    ├── Realm Roles (system):
+    │   ├── system (Platform Operator)
+    │   └── system_admin (Platform Admin)
+    │
+    ├── Organizations (Tenants):
+    │   ├── org-{tenant-a-uuid}
+    │   │   ├── Members: [user-1, user-2]
+    │   │   ├── Org Roles: [admin, manager, agent, viewer]
+    │   │   └── Attributes: { tenant_id: "tenant-a-uuid" }
+    │   │
+    │   └── org-{tenant-b-uuid}
+    │       └── ...
+    │
+    ├── Token Settings (global):
+    │   ├── Access Token Lifespan: 15 minutes
+    │   ├── Refresh Token Lifespan: 30 days
+    │   └── SSO Session Idle: 30 minutes
+    │
+    └── Security (global/override per-org):
+        ├── Brute Force Detection: enabled
+        ├── Password Policy: minLength(8), upperCase(1), digit(1), specialChars(1)
+        └── Required Actions: [VERIFY_EMAIL, UPDATE_PASSWORD]
 ```
 
 ## JWT Token Structure
 
 ```json
 {
-  "iss": "http://keycloak:8080/realms/tenant-abc",
+  "iss": "http://keycloak:8080/realms/solavie",
   "sub": "user-uuid-123",
   "aud": "dashboard",
   "exp": 1700000900,
   "iat": 1700000000,
   "azp": "dashboard",
   "realm_access": {
-    "roles": ["manager", "sales_agent"]
+    "roles": []
+  },
+  "organization": {
+    "id": "tenant-abc-uuid",
+    "name": "Company ABC",
+    "roles": ["manager", "agent"]
   },
   "tenant_id": "tenant-abc-uuid",
   "email": "user@company.com",
@@ -144,49 +147,49 @@ Keycloak Instance
 }
 ```
 
-## Key Endpoints (per realm)
+## Key Endpoints (solavie realm)
 
 ```
 # OIDC Discovery
-GET  /realms/{realm}/.well-known/openid-configuration
+GET  /realms/solavie/.well-known/openid-configuration
 
 # Token
-POST /realms/{realm}/protocol/openid-connect/token
+POST /realms/solavie/protocol/openid-connect/token
      - grant_type=authorization_code (login)
      - grant_type=refresh_token (refresh)
 
 # User Info
-GET  /realms/{realm}/protocol/openid-connect/userinfo
+GET  /realms/solavie/protocol/openid-connect/userinfo
 
 # JWKS (for token verification)
-GET  /realms/{realm}/protocol/openid-connect/certs
+GET  /realms/solavie/protocol/openid-connect/certs
 
 # Logout
-POST /realms/{realm}/protocol/openid-connect/logout
+POST /realms/solavie/protocol/openid-connect/logout
 
-# Admin API (master realm admin only)
-GET    /admin/realms                    — List realms
-POST   /admin/realms                    — Create realm
-GET    /admin/realms/{realm}/users      — List users
-POST   /admin/realms/{realm}/users      — Create user
-PUT    /admin/realms/{realm}/users/{id} — Update user
-DELETE /admin/realms/{realm}/users/{id} — Delete user
+# Organizations API
+GET    /admin/realms/solavie/organizations                      — List orgs
+POST   /admin/realms/solavie/organizations                      — Create org
+GET    /admin/realms/solavie/organizations/{id}/members         — List members
+POST   /admin/realms/solavie/organizations/{id}/members         — Add member
+GET    /admin/realms/solavie/organizations/{id}/roles           — List org roles
+POST   /admin/realms/solavie/organizations/{id}/roles           — Create org role
+POST   /admin/realms/solavie/organizations/{id}/members/{u_id}/roles — Assign org role
 ```
 
 ## Tenant Onboarding Flow
 
 ```mermaid
 sequenceDiagram
-    PlatformAdmin->>Keycloak: POST /admin/realms (create tenant realm)
-    Keycloak-->>PlatformAdmin: Realm created
-    PlatformAdmin->>Keycloak: Create clients (dashboard, api-gateway)
-    PlatformAdmin->>Keycloak: Create roles (admin, manager, agent, viewer)
-    PlatformAdmin->>Keycloak: Fetch initial config from Tenant Config Service
-    PlatformAdmin->>Keycloak: Set initial password policy & brute force limit
-    PlatformAdmin->>Keycloak: Create first admin user
+    PlatformAdmin->>Keycloak: POST /admin/realms/solavie/organizations (create tenant organization)
+    Keycloak-->>PlatformAdmin: Org created (alias = tenant_id)
+    PlatformAdmin->>Keycloak: POST /admin/realms/solavie/organizations/{id}/roles (create default roles)
+    PlatformAdmin->>Keycloak: POST /admin/realms/solavie/users (create admin user)
+    PlatformAdmin->>Keycloak: POST /admin/realms/solavie/organizations/{id}/members (add user to org)
+    PlatformAdmin->>Keycloak: POST /admin/realms/solavie/organizations/{id}/members/{u_id}/roles (assign role admin)
     Keycloak-->>User: Email invitation (set password)
     User->>Keycloak: Set password + login
-    Keycloak-->>User: JWT token (tenant_id in claims)
+    Keycloak-->>User: JWT token (claims organization & tenant_id)
 ```
 
 ## Custom Role Creation & Synchronization Flow
