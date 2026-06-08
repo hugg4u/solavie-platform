@@ -1,6 +1,7 @@
 local cjson = require "cjson"
 local redis = require "resty.redis"
 local http_ok, http = pcall(require, "resty.http")
+local hmac = require "resty.hmac"
 
 -- Worker-level in-memory cache for role permissions
 local local_cache = {}
@@ -196,25 +197,47 @@ function DynamicPolicyHandler:access(conf)
       local has_wildcard = false
       local resolved_any = false
 
+      -- 1. Check default admin/system roles first (Wildcard bypass / Privilege Escalation protection)
+      local MASTER_REALM_TENANT_ID = os.getenv("KONG_MASTER_REALM_TENANT_ID") or "solavie-system-master"
+      local has_bypass_role = false
+
       for _, role in ipairs(roles) do
-          local perms = get_permissions_for_role(tenant_id, role, red, ok, conf)
-          if perms then
+          local lower_role = string.lower(role)
+          if lower_role == "admin" then
+              has_wildcard = true
               resolved_any = true
-              for _, perm in ipairs(perms) do
-                  if perm == "*" then
-                      has_wildcard = true
-                  else
-                      permissions_set[perm] = true
-                  end
+              has_bypass_role = true
+          elseif lower_role == "system" or lower_role == "system_admin" then
+              -- CRITICAL: Chỉ cấp system wildcard nếu token từ Master Realm
+              if tenant_id == MASTER_REALM_TENANT_ID then
+                  has_wildcard = true
+                  resolved_any = true
+                  has_bypass_role = true
+              else
+                  -- Privilege Escalation attempt detected — block immediately!
+                  kong.log.warn("[SECURITY] Privilege Escalation Blocked: role='", role,
+                      "' tenant_id='", tenant_id, "'")
+                  close_redis(red, ok)
+                  return kong.response.exit(403,
+                      { message = "Forbidden: System roles not allowed in tenant realm" })
               end
           end
       end
 
-      -- Automatic wildcard bypass for default admin/system roles
-      for _, role in ipairs(roles) do
-          if role == "admin" or role == "system" then
-              has_wildcard = true
-              resolved_any = true
+      -- 2. If not bypassed by default roles, query permissions for custom/business roles
+      if not has_bypass_role then
+          for _, role in ipairs(roles) do
+              local perms = get_permissions_for_role(tenant_id, role, red, ok, conf)
+              if perms then
+                  resolved_any = true
+                  for _, perm in ipairs(perms) do
+                      if perm == "*" then
+                          has_wildcard = true
+                      else
+                          permissions_set[perm] = true
+                      end
+                  end
+              end
           end
       end
 
@@ -240,7 +263,14 @@ function DynamicPolicyHandler:access(conf)
   -- Sign Permissions via HMAC-SHA256
   local secret = os.getenv("GATEWAY_SIGNING_SECRET") or os.getenv("KONG_GATEWAY_SIGNING_SECRET") or "default-gateway-signing-secret-key-change-me-in-production"
   local payload = tenant_id .. ":" .. user_id .. ":" .. user_permissions
-  local signature = to_hex(ngx.hmac_sha256(secret, payload))
+  local hm = hmac:new(secret, hmac.ALG_SHA256)
+  if not hm then
+      kong.log.err("Failed to initialize HMAC object")
+      close_redis(red, ok)
+      return kong.response.exit(500, { message = "Internal Server Error" })
+  end
+  hm:update(payload)
+  local signature = to_hex(hm:final())
 
   -- Inject security headers
   kong.service.request.set_header("X-User-ID", user_id)

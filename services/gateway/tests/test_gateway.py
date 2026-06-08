@@ -4,6 +4,9 @@ import json
 import redis
 import requests
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8081")
@@ -392,5 +395,113 @@ def test_gateway_scope_nested_path_matching():
     headers_configs = {"Authorization": f"Bearer {token_config}"}
     resp_configs = requests.get(url_configs, headers=headers_configs, timeout=10)
     assert resp_configs.status_code == 403, f"Expected 403 for /api/v1/configs with only tenant-config scope, got {resp_configs.status_code}"
+
+
+def test_gateway_privilege_escalation_blocked(redis_client):
+    """
+    AC 2.6: Verify that system roles (system, system_admin)
+    belonging to a regular tenant are BLOCKED by Kong with 403 Forbidden to prevent Privilege Escalation.
+    """
+    kc_admin = os.getenv("KC_ADMIN", "admin")
+    kc_admin_pass = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
+    
+    # 1. Get Master admin token
+    master_token_url = f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
+    admin_auth_payload = {
+        "client_id": "admin-cli",
+        "username": kc_admin,
+        "password": kc_admin_pass,
+        "grant_type": "password"
+    }
+    admin_resp = requests.post(master_token_url, data=admin_auth_payload, timeout=10)
+    if admin_resp.status_code != 200:
+        pytest.skip(f"Could not authenticate as master admin to set up test: {admin_resp.text}")
+    admin_token = admin_resp.json()["access_token"]
+    
+    # Headers for Keycloak Admin API
+    admin_headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # 2. Check and Create the 'system' realm role in tenant realm if it doesn't exist
+    role_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles"
+    roles_resp = requests.get(role_url, headers=admin_headers, timeout=10)
+    roles_list = roles_resp.json()
+    role_exists = any(r["name"] == "system" for r in roles_list)
+    
+    if not role_exists:
+        create_role_resp = requests.post(role_url, headers=admin_headers, json={"name": "system"}, timeout=10)
+        assert create_role_resp.status_code in [201, 409], f"Failed to create system role: {create_role_resp.text}"
+    
+    # 3. Create a temporary user in the tenant realm
+    temp_username = f"pe-test-{int(time.time())}"
+    temp_email = f"{temp_username}@solavie-test.com"
+    user_payload = {
+        "username": temp_username,
+        "email": temp_email,
+        "firstName": "Privilege",
+        "lastName": "Escalation",
+        "enabled": True,
+        "emailVerified": True,
+        "credentials": [
+            {
+                "type": "password",
+                "value": "TempPassword123!",
+                "temporary": False
+            }
+        ]
+    }
+    users_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users"
+    create_user_resp = requests.post(users_url, headers=admin_headers, json=user_payload, timeout=10)
+    assert create_user_resp.status_code == 201, f"Failed to create temp user: {create_user_resp.text}"
+    
+    # Retrieve the new user's ID
+    user_id_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users?username={temp_username}"
+    user_list_resp = requests.get(user_id_url, headers=admin_headers, timeout=10)
+    user_id = user_list_resp.json()[0]["id"]
+    
+    # 4. Map the 'system' role to the temp user
+    # Get the system role representation
+    role_rep_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles/system"
+    role_rep_resp = requests.get(role_rep_url, headers=admin_headers, timeout=10)
+    role_rep = role_rep_resp.json()
+    
+    mapping_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}/role-mappings/realm"
+    map_role_resp = requests.post(mapping_url, headers=admin_headers, json=[role_rep], timeout=10)
+    assert map_role_resp.status_code == 204, f"Failed to map system role to user: {map_role_resp.text}"
+    
+    try:
+        # 5. Authenticate as the temp user to get their token
+        user_token_url = f"{KEYCLOAK_URL}/realms/{TEST_TENANT_ID}/protocol/openid-connect/token"
+        user_payload = {
+            "client_id": "dashboard",
+            "username": temp_username,
+            "password": "TempPassword123!",
+            "grant_type": "password",
+            "scope": "openid email profile"
+        }
+        user_token_resp = requests.post(user_token_url, data=user_payload, timeout=10)
+        assert user_token_resp.status_code == 200, f"Failed to get token for temp user: {user_token_resp.text}"
+        user_token = user_token_resp.json()["access_token"]
+        
+        # 6. Send request through Gateway
+        url = f"{GATEWAY_URL}/api/v1/auth/realms/{TEST_TENANT_ID}/.well-known/openid-configuration"
+        headers = {"Authorization": f"Bearer {user_token}"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        
+        # 7. Verify we get 403 Forbidden with PE Blocked message
+        assert resp.status_code == 403, f"Expected 403 Forbidden, got {resp.status_code}"
+        assert "System roles not allowed in tenant realm" in resp.text, f"Expected PE message, got: {resp.text}"
+        
+    finally:
+        # 8. Clean up Keycloak
+        # Delete user
+        del_user_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/users/{user_id}"
+        requests.delete(del_user_url, headers=admin_headers, timeout=10)
+        # Delete role if it was created during this test
+        if not role_exists:
+            del_role_url = f"{KEYCLOAK_URL}/admin/realms/{TEST_TENANT_ID}/roles/system"
+            requests.delete(del_role_url, headers=admin_headers, timeout=10)
 
 
