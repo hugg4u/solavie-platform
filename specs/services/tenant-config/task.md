@@ -1,193 +1,113 @@
 # Task Checklist — TENANT-CONFIG Service
 
 ## Overview
-This document tracks the implementation checklist for **TENANT-CONFIG Service** based on the system specifications.
+Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính năng của dịch vụ **TENANT-CONFIG Service** theo đặc tả yêu cầu kỹ thuật.
 
 ### Technical Stack & Configuration
 - **Language:** Node.js 20
-- **Framework:** NestJS
-- **Port:** 3006
+- **Framework:** NestJS 10
+- **Port:** 3006 (REST) / 50053 (gRPC)
 - **Database:** PostgreSQL
 - **Cache:** Redis
 
 ### Reference Specifications
-- [Requirements](file:///specs/solavie-system/services/tenant-config/requirements.md)
-- [Design](file:///specs/solavie-system/services/tenant-config/design.md)
+- [Requirements](file:///d:/workspace/project/solavie-system/specs/services/tenant-config/requirements.md)
+- [Design](file:///d:/workspace/project/solavie-system/specs/services/tenant-config/design.md)
 
 ---
 
 ## Tasks Checklist
 
-### Task 1: 1: REST API CRUD Cấu hình
+### Task 1: REST API CRUD Cấu hình
 > *User Story: Là một Tenant Admin, tôi muốn xem và chỉnh sửa cấu hình hệ thống từ Dashboard mà không cần can thiệp kỹ thuật.*
+- [ ] AC 1.1: Cung cấp REST API `GET /api/v1/config/:category` trả về cấu hình hiện tại của Tenant theo từng nhóm: `ai_kb`, `chat_routing`, `content_scheduler`, `crm_campaign`, `security_comments_notif`.
+- [ ] AC 1.2: Cung cấp REST API `PATCH /api/v1/config/:category` cho phép cập nhật một phần cấu hình (partial update).
+- [ ] AC 1.3: Cung cấp REST API `GET /api/v1/config` trả về toàn bộ cấu hình gộp của Tenant dưới dạng một JSON object lồng nhau.
+- [ ] AC 1.4: Tích hợp middleware/guard kiểm tra tính hợp lệ của JWT Bearer token, trả về HTTP 401 nếu token không hợp lệ hoặc hết hạn.
+- [ ] AC 1.5: Phân quyền API PATCH: Chỉ người dùng có vai trò Admin mới được phép thực thi, trả về HTTP 403 cho các vai trò khác. GET request mở cho tất cả vai trò của tenant.
+- [ ] AC 1.6: Áp dụng Tenant Isolation: Trích xuất `tenant_id` từ JWT, cô lập dữ liệu hoàn toàn dựa trên trường này.
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 1.1: THE Tenant_Config SHALL cung cấp REST API GET /config/{category} trả về cấu hình hiện tại của Tenant theo từng nhóm: ai_kb, chat_routing, content_scheduler, crm_campaign, security_comments_notif
-- [ ] AC 1.2: THE Tenant_Config SHALL cung cấp REST API PATCH /config/{category} cho phép cập nhật một phần (partial update) cấu hình của nhóm chỉ định; chỉ các field được gửi trong request body mới được cập nhật
-- [ ] AC 1.3: THE Tenant_Config SHALL cung cấp REST API GET /config trả về toàn bộ cấu hình của Tenant dưới dạng một JSON object lồng nhau theo 5 nhóm
-- [ ] AC 1.4: IF request không có JWT Bearer token hợp lệ, THEN THE Tenant_Config SHALL từ chối và trả về HTTP 401
-- [ ] AC 1.5: IF JWT hợp lệ nhưng role không phải Admin, THEN THE Tenant_Config SHALL từ chối PATCH request và trả về HTTP 403; GET request vẫn được phép cho tất cả roles
-- [ ] AC 1.6: THE Tenant_Config SHALL áp dụng tenant isolation: mọi API call phải filter theo tenant_id từ JWT claims; từ chối nếu thiếu tenant_id
+### Task 2: Validation Schema
+> *User Story: Là một Tenant Admin, tôi muốn hệ thống kiểm tra tính hợp lệ của giá trị cấu hình trước khi lưu.*
+- [ ] AC 2.1: Triển khai NestJS `ValidationPipe` với class-validator để kiểm tra kiểu dữ liệu và giá trị biên của cấu hình.
+- [ ] AC 2.2: Validate giới hạn của các trường số thực, số nguyên, enum trong 5 categories (ví dụ: `confidence_threshold` trong khoảng `[0.60, 0.95]`, `offline_mode_behavior` thuộc enum hợp lệ).
+- [ ] AC 2.3: Validate định dạng whitelist Custom MCP SSE Servers (`sse_url` phải có schema http/https hợp lệ, phòng tránh SSRF).
+- [ ] AC 2.4: Trả về HTTP 422 kèm danh sách chi tiết các lỗi validation nếu phát hiện giá trị không hợp lệ.
+- [ ] AC 2.5: Ràng buộc kiểu Boolean: Kiểm tra strict true/false, không chấp nhận chuỗi `"true"`/`"false"` hoặc số `1`/`0`.
 
-### Task 2: 2: Validation Schema
-> *User Story: Là một Tenant Admin, tôi muốn hệ thống kiểm tra tính hợp lệ của giá trị cấu hình trước khi lưu để tránh cấu hình sai gây lỗi hệ thống.*
+### Task 3: Hot Reload qua Redis Pub/Sub
+> *User Story: Là một Tenant Admin, tôi muốn thay đổi cấu hình có hiệu lực ngay lập tức trên toàn hệ thống.*
+- [ ] AC 3.1: Đồng bộ hóa ghi dữ liệu: Trong cùng một transaction nghiệp vụ, thực hiện ghi giá trị mới vào Redis Cache và gọi Redis client `PUBLISH` lên kênh `config.updates`.
+- [ ] AC 3.2: Đảm bảo thời gian lan truyền cấu hình xuống downstream memory của các service khác trong vòng < 5 giây.
+- [ ] AC 3.3: Định nghĩa cấu trúc payload của event `config.updates` gồm: `tenant_id`, `category`, `updated_fields`, `updated_at`.
+- [ ] AC 3.4: Xử lý lỗi Redis Cache: Retry tối đa 3 lần với backoff 1s; nếu lỗi tiếp diễn, ghi nhận log lỗi hệ thống và trả về HTTP 207 (Multi-Status).
+- [ ] AC 3.5: Xử lý lỗi Pub/Sub: Retry tối đa 3 lần; nếu lỗi, ghi nhận hệ thống nhưng vẫn trả về HTTP 200 (vì DB đã lưu thành công).
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 2.1: THE Tenant_Config SHALL validate mọi giá trị cấu hình trước khi lưu vào DB theo schema sau:
-- [ ] AC 2.2: confidence_threshold: số thực trong khoảng [0.60, 0.95]
-- [ ] AC 2.3: kb_chunk_size: số nguyên trong khoảng [128, 1024]
-- [ ] AC 2.4: kb_chunk_overlap_percentage: số thực trong khoảng [5, 30]
-- [ ] AC 2.5: rag_relevance_threshold: số thực trong khoảng [0.0, 1.0]
-- [ ] AC 2.6: offline_mode_behavior: một trong các giá trị: lead_capture, ai_warning, offline_msg
-- [ ] AC 2.7: handoff_routing_algorithm: một trong: round_robin, least_busy, queue_claim, hybrid
-- [ ] AC 2.8: manual_to_auto_timeout_hours: số thực trong khoảng [1, 24]
-- [ ] AC 2.9: auto_close_timeout_hours: số thực trong khoảng [1, 48]
-- [ ] AC 2.10: auto_approve_quality_threshold: số thực trong khoảng [0.0, 1.0]
-- [ ] AC 2.11: max_post_retry_attempts: số nguyên trong khoảng [1, 5]
-- [ ] AC 2.12: max_daily_posts_per_channel: số nguyên trong khoảng [1, 50]
-- [ ] AC 2.13: hot_lead_threshold: số nguyên trong khoảng [0, 100]
-- [ ] AC 2.14: contact_auto_merge_threshold: số thực trong khoảng [0.0, 1.0]
-- [ ] AC 2.15: session_timeout_minutes: số nguyên trong khoảng [5, 480]
-- [ ] AC 2.16: audit_log_retention_days: số nguyên trong khoảng [30, 365]
-- [ ] AC 2.17: dms_max_storage_mb: số nguyên trong khoảng [100, 100000]
-- [ ] AC 2.18: dms_max_file_versions: số nguyên trong khoảng [1, 20]
-- [ ] AC 2.19: campaign_fb_outside_24h_action: một trong: skip, use_tag, paid
-- [ ] AC 2.20: gateway_rate_limit_minute: số nguyên trong khoảng [10, 1000]
-- [ ] AC 2.21: gateway_rate_limit_hour: số nguyên trong khoảng [100, 50000]
-- [ ] AC 2.22: allowed_cors_origins: danh sách chuỗi (array string)
-- [ ] AC 2.23: auth_password_min_length: số nguyên trong khoảng [6, 30]
-- [ ] AC 2.24: auth_max_login_attempts: số nguyên trong khoảng [3, 20]
-- [ ] AC 2.25: mcp_server_whitelist: danh sách các Custom MCP SSE Servers được phê duyệt, chứa server_name, sse_url, status, description, custom_headers
-- [ ] AC 2.26: IF bất kỳ giá trị nào không hợp lệ, THEN THE Tenant_Config SHALL từ chối toàn bộ PATCH request và trả về HTTP 422 với danh sách chi tiết các field lỗi và lý do
-- [ ] AC 2.26: THE Tenant_Config SHALL validate kiểu dữ liệu: boolean fields phải là true/false, không chấp nhận 0/1 hoặc "true"/"false" dạng string
+### Task 4: gRPC Config Reader
+> *User Story: Là một microservice nội bộ, tôi muốn truy vấn cấu hình nhanh qua gRPC khi Redis cache miss.*
+- [ ] AC 4.1: Định nghĩa file protobuf `tenant_config.proto` với dịch vụ `GetConfig` và `GetAllConfig`.
+- [ ] AC 4.2: Tối ưu hóa hiệu năng phản hồi gRPC đảm bảo latency trung bình < 100ms.
+- [ ] AC 4.3: Triển khai gRPC Interceptor để xác thực cuộc gọi nội bộ (Service-to-Service) qua JWT Client Credentials token.
+- [ ] AC 4.4: Trả về bộ cấu hình mặc định (default config) nếu `tenant_id` truy vấn không tồn tại trong DB, tránh quăng lỗi làm sập downstream flow.
 
-### Task 3: 3: Hot Reload qua Redis Pub/Sub
-> *User Story: Là một Tenant Admin, tôi muốn thay đổi cấu hình có hiệu lực ngay lập tức trên toàn hệ thống mà không cần restart bất kỳ service nào.*
+### Task 5: Default Config khi Tenant mới
+> *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình mặc định hợp lý.*
+- [ ] AC 5.1: Đăng ký lắng nghe sự kiện tạo tenant mới từ hệ thống (qua Kafka/RabbitMQ hoặc nội bộ).
+- [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, ...).
+- [ ] AC 5.3: Giới hạn thời gian tạo mặc định hoàn tất trong vòng < 5 giây từ khi nhận sự kiện.
+- [ ] AC 5.4: Thiết lập cơ chế retry 3 lần nếu tạo default config lỗi, gửi alert tới quản trị viên qua Kafka DLQ hoặc Alertmanager.
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 3.1: WHEN cấu hình được lưu thành công vào DB, THE Tenant_Config SHALL ghi giá trị mới vào Redis cache key `{tenant_id}:config:{category}` và publish event tới Redis channel `config.updates` trong cùng một transaction
-- [ ] AC 3.2: THE Tenant_Config SHALL đảm bảo tất cả services đang chạy nhận và áp dụng cấu hình mới trong < 5 giây sau khi Admin lưu thay đổi
-- [ ] AC 3.3: THE Tenant_Config SHALL publish event `config.updates` với payload: tenant_id, category, updated_fields (danh sách tên field đã thay đổi), updated_at
-- [ ] AC 3.4: IF ghi Redis cache thất bại sau khi lưu DB thành công, THEN THE Tenant_Config SHALL retry ghi Redis tối đa 3 lần với backoff 1s; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi và trả về HTTP 207 (Multi-Status) chỉ rõ DB đã lưu nhưng cache chưa đồng bộ
-- [ ] AC 3.5: IF publish Redis Pub/Sub thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi nhưng vẫn trả về HTTP 200 vì DB đã lưu thành công; services sẽ nhận config mới qua cache miss fallback
+### Task 6: Audit Log Thay đổi Cấu hình
+> *User Story: Là một Tenant Admin, tôi muốn xem lịch sử thay đổi cấu hình.*
+- [ ] AC 6.1: Tự động ghi nhận log thay đổi vào bảng `config_audit_logs` khi có cập nhật cấu hình thành công (lưu rõ user thực hiện, category, trường thay đổi, giá trị cũ/mới).
+- [ ] AC 6.2: Cung cấp API `GET /api/v1/config/audit-log` (phân trang tối đa 50 items/page, sắp xếp theo thời gian mới nhất).
+- [ ] AC 6.3: Thiết lập background cron job định kỳ chạy hàng ngày để dọn dẹp các log cũ vượt quá hạn định `audit_log_retention_days` của tenant.
+- [ ] AC 6.4: Triển khai module che giấu dữ liệu nhạy cảm (`[REDACTED]`) đối với các trường bí mật như API Keys, passwords trước khi ghi vào log DB.
 
-### Task 4: 4: gRPC Config Reader
-> *User Story: Là một microservice nội bộ, tôi muốn truy vấn cấu hình nhanh qua gRPC khi Redis cache miss để không bị gián đoạn.*
+### Task 7: Cấu hình Chatbot & AI (ai_kb)
+- [ ] AC 7.1: Cho phép cấu hình các API keys của LLM Providers, thực hiện mã hóa đối xứng AES-256-GCM sử dụng `ENCRYPTION_KEY` trước khi lưu vào DB.
+- [ ] AC 7.2: Quản lý whitelist các SSE MCP Server, kiểm tra định dạng và validate an toàn đầu vào cho `sse_url` để chặn tấn công SSRF.
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 4.1: THE Tenant_Config SHALL cung cấp gRPC service GetConfig(tenant_id, category) trả về cấu hình của nhóm chỉ định từ DB
-- [ ] AC 4.2: THE Tenant_Config SHALL trả về response gRPC trong vòng 100ms cho mọi truy vấn
-- [ ] AC 4.3: THE Tenant_Config SHALL xác thực service-to-service calls qua JWT Client Credentials token; từ chối request không có token hợp lệ
-- [ ] AC 4.4: THE Tenant_Config SHALL hỗ trợ gRPC GetAllConfig(tenant_id) trả về toàn bộ cấu hình của Tenant trong một lần gọi
-- [ ] AC 4.5: IF tenant_id không tồn tại trong DB, THEN THE Tenant_Config SHALL trả về default config thay vì lỗi
+### Task 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
+- [ ] AC 8.1: Cho phép cấu hình object `working_hours` kiểm soát khung giờ làm việc chi tiết của từng ngày trong tuần.
+- [ ] AC 8.2: Hỗ trợ cấu hình thuật toán định tuyến `handoff_routing_algorithm` và các mức thời gian chờ chuyển trạng thái hội thoại.
 
-### Task 5: 5: Default Config khi Tenant mới
-> *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình mặc định hợp lý để có thể sử dụng ngay mà không cần cấu hình thủ công.*
+### Task 9: Cấu hình CRM, Rate Limits & CORS
+- [ ] AC 9.1: Cho phép cấu hình giới hạn tốc độ truy cập Gateway (`gateway_rate_limit_minute`, `gateway_rate_limit_hour`) để kiểm soát lưu lượng.
+- [ ] AC 9.2: Cho phép thiết lập danh sách `allowed_cors_origins` để Gateway áp dụng CORS cho chatbot widget của tenant.
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 5.1: WHEN Auth Service publish event tạo Tenant mới, THE Tenant_Config SHALL tự động tạo bản ghi cấu hình mặc định cho Tenant đó với các giá trị:
-- [ ] AC 5.2: chatbot_enabled: true
-- [ ] AC 5.3: confidence_threshold: 0.70
-- [ ] AC 5.4: auto_handoff_on_negative: true
-- [ ] AC 5.5: ai_vision_invoice_reading: true
-- [ ] AC 5.6: rag_relevance_threshold: 0.50
-- [ ] AC 5.7: offline_mode_behavior: lead_capture
-- [ ] AC 5.8: handoff_routing_algorithm: hybrid
-- [ ] AC 5.9: manual_to_auto_timeout_hours: 2
-- [ ] AC 5.10: auto_close_timeout_hours: 24
-- [ ] AC 5.11: require_content_approval: true
-- [ ] AC 5.12: auto_approve_quality_threshold: 0.85
-- [ ] AC 5.13: data_masking_enabled: true
-- [ ] AC 5.14: session_timeout_minutes: 60
-- [ ] AC 5.15: mcp_server_whitelist: mặc định là mảng rỗng []
-- [ ] AC 5.15: audit_log_retention_days: 90
-- [ ] AC 5.16: dms_max_storage_mb: 5000
-- [ ] AC 5.17: dms_max_file_versions: 5
-- [ ] AC 5.18: THE Tenant_Config SHALL hoàn tất tạo default config trong vòng 5 giây sau khi nhận event tạo Tenant mới
-- [ ] AC 5.19: IF tạo default config thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần và publish event lỗi lên Kafka để Admin được thông báo
+### Task 10: Phân tách vai trò cấu hình (System Admin vs Tenant Admin)
+- [ ] AC 10.1: Chặn không cho Tenant Admin chỉnh sửa hạng gói cước (Subscription Tier) hay các hạn mức thô của gói.
+- [ ] AC 10.2: Đồng bộ hóa sự thay đổi hạng gói từ System Admin Panel vào Redis key `tenant:{tenant_id}:tier` để các service kiểm soát hạn mức tức thì.
 
-### Task 6: 6: Audit Log Thay đổi Cấu hình
-> *User Story: Là một Tenant Admin, tôi muốn xem lịch sử thay đổi cấu hình để biết ai đã thay đổi gì và khi nào.*
+### Task 11: REST API Quản lý Gói cước (System Admin Only)
+- [ ] AC 11.1: Xây dựng các REST API CRUD `/api/v1/system/tiers` để System Admin cấu hình gói cước động.
+- [ ] AC 11.2: Triển khai Guard chặn cuộc gọi API từ các tài khoản không mang role `system_admin`.
+- [ ] AC 11.3: Cập nhật Redis cache key `tier:{tier_name}:limits` và publish tin hiệu lên `system.limits.updates` khi lưu thành công vào DB.
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 6.1: WHEN cấu hình được cập nhật thành công, THE Tenant_Config SHALL ghi audit log với: tenant_id, changed_by (user_id từ JWT), category, field_name, old_value, new_value, changed_at (UTC timestamp)
-- [ ] AC 6.2: THE Tenant_Config SHALL cung cấp API GET /config/audit-log trả về lịch sử thay đổi cấu hình của Tenant, sắp xếp theo changed_at giảm dần, phân trang tối đa 50 items/page
-- [ ] AC 6.3: THE Tenant_Config SHALL lưu giữ audit log trong số ngày cấu hình bởi audit_log_retention_days (mặc định 90 ngày)
-- [ ] AC 6.4: THE Tenant_Config SHALL chạy background job hàng ngày để xóa audit log cũ hơn audit_log_retention_days
-- [ ] AC 6.5: THE Tenant_Config SHALL che giá trị nhạy cảm trong audit log (ví dụ: API keys, passwords) bằng cách thay thế bằng `[REDACTED]`
+### Task 12: Quản lý Vai trò & Quyền hạn Tùy chỉnh (Custom Roles & Permissions)
+- [ ] AC 12.1: Xây dựng REST API `GET /api/v1/config/roles` để lấy danh sách vai trò hiện tại của Tenant.
+- [ ] AC 12.2: Xây dựng REST API `POST /api/v1/config/roles` để khởi tạo một Realm Role trên Keycloak qua Keycloak Admin API, đồng thời lưu trữ thông tin phân quyền tương ứng vào PostgreSQL.
+- [ ] AC 12.3: Xây dựng REST API `PUT /api/v1/config/roles/:role_name/permissions` để cập nhật danh sách quyền cho vai trò, ghi đè trực tiếp Redis key `tenant:{tenant_id}:role:{role_name}:permissions` (Long TTL: 30 ngày) và bắn tin hiệu Pub/Sub hủy cache Gateway.
+- [ ] AC 12.4: Xây dựng REST API `DELETE /api/v1/config/roles/:role_name` để xóa Realm Role trên Keycloak và dữ liệu liên quan ở PostgreSQL.
+- [ ] AC 12.5: Triển khai cơ chế bảo vệ chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định (`admin`, `manager`, `agent`, `viewer`), đồng thời cấm tạo mới hoặc đổi tên vai trò trùng với blacklist bảo lưu (`system`, `system_admin`, `super_admin`, `root`).
 
-### Task 7: 7: Cấu hình Chatbot & AI (ai_kb)
-> *User Story: Là một Tenant Admin, tôi muốn cấu hình linh hoạt hành vi của chatbot AI để phù hợp với nhu cầu kinh doanh của tổ chức.*
+### Task 13: Zero-Trust HMAC Guard & Permission Manifest
+- [ ] AC 13.1: Phát triển API manifest `GET /api/v1/permissions/manifest` trả về JSON danh sách tài nguyên và quyền dịch vụ này hỗ trợ.
+- [ ] AC 13.2: Triển khai NestJS NestGuard thực hiện kiểm tra chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET`.
+- [ ] AC 13.3: Triển khai module kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` hỗ trợ wildcard (`*`, `tenant-config:*`, `tenant-config:{resource}:*`).
 
-**Acceptance Criteria Implementation:**
-- [ ] AC 7.1: THE Tenant_Config SHALL cho phép bật/tắt chatbot (chatbot_enabled) để chuyển 100% sang chế độ nhân viên tự chat
-- [ ] AC 7.2: THE Tenant_Config SHALL cho phép ghi đè System Prompt của chatbot (chatbot_system_prompt_override) với nội dung tùy chỉnh tối đa 10,000 ký tự
-- [ ] AC 7.3: THE Tenant_Config SHALL cho phép cấu hình ngưỡng confidence_threshold trong khoảng [0.60, 0.95] để kiểm soát độ chắc chắn trước khi bot tự động trả lời
-- [ ] AC 7.4: THE Tenant_Config SHALL cho phép bật/tắt tính năng đọc hóa đơn bằng AI Vision (ai_vision_invoice_reading)
-- [ ] AC 7.5: THE Tenant_Config SHALL cho phép cấu hình model routing (llm_model_routing) dạng JSON map: use_case → model_name
-- [ ] AC 7.6: THE Tenant_Config SHALL cho phép cấu hình danh sách fallback models (ai_fallback_models) dạng array string
-- [ ] AC 7.7: THE Tenant_Config SHALL quản lý cấu hình các khóa API (API Keys) và API Base URL của các LLM Provider tại trang quản trị tập trung, thực hiện mã hóa đối xứng (AES-256) khóa API trước khi lưu trữ vào DB
-- [ ] AC 7.8: THE Tenant_Config SHALL tự động gửi thông báo đồng bộ cấu hình qua kênh Redis Pub/Sub `config.updates` ngay khi Admin lưu thay đổi để AI Core cập nhật
-- [ ] Triển khai Encryption Module: Sử dụng `aes-256-gcm` với biến môi trường `ENCRYPTION_KEY` để mã hóa và giải mã API keys trong cấu hình `ai_kb`
-- [ ] Triển khai Redis Pub/Sub Publisher Module: Tạo module trong NestJS để phát sự kiện đồng bộ lên kênh `config.updates` mỗi khi lưu/cập nhật cấu hình thành công
+---
 
-### Task 8: 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
-> *User Story: Là một Tenant Admin, tôi muốn cấu hình giờ làm việc và hành vi ngoài giờ để chatbot hoạt động đúng theo lịch của tổ chức.*
-
-**Acceptance Criteria Implementation:**
-- [ ] AC 8.1: THE Tenant_Config SHALL cho phép cấu hình working_hours dạng object: {day_of_week: {start: "HH:MM", end: "HH:MM"}} cho từng ngày trong tuần (0=Chủ nhật, 6=Thứ bảy)
-- [ ] AC 8.2: THE Tenant_Config SHALL cho phép cấu hình offline_mode_behavior: lead_capture (thu thập thông tin), ai_warning (cảnh báo ngoài giờ), offline_msg (tin nhắn tĩnh)
-- [ ] AC 8.3: THE Tenant_Config SHALL cho phép cấu hình handoff_routing_algorithm: round_robin, least_busy, queue_claim, hoặc hybrid
-- [ ] AC 8.4: THE Tenant_Config SHALL cho phép cấu hình manual_to_auto_timeout_hours (1-24 giờ) — thời gian chờ trước khi tự động chuyển từ Manual về Auto
-- [ ] AC 8.5: THE Tenant_Config SHALL cho phép cấu hình auto_close_timeout_hours (1-48 giờ) — thời gian không hoạt động trước khi tự động đóng hội thoại
-
-### Task 9: 9: Cấu hình CRM & Bảo mật
-> *User Story: Là một Tenant Admin, tôi muốn cấu hình quy tắc lead scoring và bảo mật dữ liệu phù hợp với chính sách của tổ chức.*
-
-**Acceptance Criteria Implementation:**
-- [ ] AC 9.1: THE Tenant_Config SHALL cho phép cấu hình lead_scoring_rules dạng JSON dynamic weights: {factor_name: weight_value} để tính điểm tiềm năng khách hàng
-- [ ] AC 9.2: THE Tenant_Config SHALL cho phép cấu hình hot_lead_threshold (0-100) — ngưỡng điểm để kích hoạt cảnh báo Hot Lead
-- [ ] AC 9.3: THE Tenant_Config SHALL cho phép bật/tắt data_masking_enabled để che thông tin nhạy cảm của khách hàng
-- [ ] AC 9.4: THE Tenant_Config SHALL cho phép cấu hình session_timeout_minutes (5-480) — thời gian không hoạt động trước khi tự động đăng xuất
-- [ ] AC 9.5: THE Tenant_Config SHALL cho phép cấu hình banned_keywords dạng array string — danh sách từ cấm trong bài viết và chatbot
-- [ ] AC 9.6: THE Tenant_Config SHALL cho phép cấu hình giới hạn tốc độ truy cập Gateway (gateway_rate_limit_minute trong khoảng [10, 1000], gateway_rate_limit_hour trong khoảng [100, 50000]) để chống DDOS và kiểm soát hạn mức sử dụng API của từng tenant
-- [ ] AC 9.7: THE Tenant_Config SHALL cho phép cấu hình danh sách domain được phép gọi API (allowed_cors_origins dạng array string) để thiết lập CORS an toàn cho chatbot widget
-- [ ] AC 9.8: THE Tenant_Config SHALL cho phép cấu hình chính sách bảo mật xác thực (auth_password_min_length trong khoảng [6, 30] và auth_max_login_attempts trong khoảng [3, 20] lần nhập sai trước khi khóa tài khoản) để đồng bộ chính sách bảo mật tài khoản cho Keycloak
-
-### Task 10: 10: Phân tách vai trò cấu hình (System Admin vs Tenant Admin)
-> *User Story: Là một System Admin, tôi muốn cấu hình gói cước và gán hạng mức sử dụng cho từng Tenant, đồng thời đảm bảo Admin của các Tenant chỉ có thể chỉnh sửa cấu hình riêng biệt của họ mà không ảnh hưởng đến hạn mức gói.*
-
-**Acceptance Criteria Implementation:**
-- [ ] AC 10.1: THE Tenant_Config SHALL KHÔNG cho phép Admin Tenant sửa đổi hạng gói cước (Subscription Tier) hay hạn mức API thô của gói cước từ trang Dashboard của Tenant
-- [ ] AC 10.2: THE Tenant_Config/Keycloak DB SHALL lưu trữ hạng gói cước (`free`, `standard`, `enterprise`) của Tenant độc lập và chỉ cho phép System Admin sửa đổi qua trang quản trị hệ thống (System Admin Panel)
-- [ ] AC 10.3: WHEN System Admin cập nhật hạng gói của Tenant, sự thay đổi đó SHALL được lưu vào Redis dưới dạng key `tenant:{tenant_id}:tier` để các service downstream thực hiện kiểm tra hạn mức tần suất gọi API (Rate Limiting) ngay lập tức
-- [ ] AC 10.4: THE Tenant_Config SHALL cho phép Tenant Admin tự do cấu hình các tham số nội bộ (như API Keys riêng - BYOK, System Prompt riêng, confidence thresholds) thông qua REST API, các thông số này được mã hóa bảo mật và cách ly tuyệt đối giữa các tenant
-
-## Verification & Testing
+## Verification & Testing Checklist
 
 ### Automated Tests
-- [ ] Write unit tests verifying core logic of each Requirement (including NestJS config service, validation pipes, and audit log generation).
-- [ ] Write unit tests verifying the symmetric Encryption/Decryption utility (AES-256-GCM) with correct key padding.
-- [ ] Write integration tests for API endpoints (`/config`, `/config/audit-log`).
-- [ ] Verify tenant isolation by querying data across different tenant IDs via gRPC and REST APIs.
-- [ ] Verify that sensitive fields are masked as `[REDACTED]` in the audit logs but stored encrypted in the database.
+- [ ] Viết các case unit test cho `HmacVerificationGuard` kiểm thử tính hợp lệ của chữ ký, kiểm tra trường hợp timing attacks và từ chối truy cập khi sai chữ ký.
+- [ ] Viết unit test kiểm thử logic gán quyền in-memory O(1) và khả năng phân giải wildcard.
+- [ ] Viết integration test cho endpoint quản lý custom roles (`POST /api/v1/config/roles`, `PUT /api/v1/config/roles/:role_name/permissions`) kiểm tra việc đồng bộ sang mô hình DB và ghi đè Redis.
+- [ ] Viết test mock cho cuộc gọi đồng bộ Keycloak Admin API để kiểm tra tính toàn vẹn khi API Keycloak trả lỗi.
 
 ### Manual Verification
-- [ ] Deploy service to local Docker / Kubernetes cluster.
-- [ ] Perform end-to-end tests using the Gateway (Kong) routing.
-- [ ] Test the Redis Pub/Sub event emission on patch requests and confirm event payload format.
-
-## Done When
-
-- [ ] All Acceptance Criteria for Requirements are implemented and verified.
-- [ ] Unit test coverage is >80%.
-- [ ] Logs are formatted as structured JSON and trace context is propagated.
-- [ ] Tenant isolation (RLS / metadata filtering) is strictly enforced.
-
-### Task: Security Integration & Dynamic RBAC (MỚI)
-- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `tenant-config`.
-- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
-- [ ] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
-- [ ] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `tenant-config:*`, `tenant-config:{resource}:*`).
-- [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
-- [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
+- [ ] Khởi chạy cục bộ docker-compose, thực hiện gọi API qua Gateway để kiểm chứng Gateway inject signature và downstream verify thành công.
+- [ ] Kiểm tra Redis CLI xem dữ liệu permissions lưu dưới key `tenant:{tenant_id}:role:{role_name}:permissions` có đúng định dạng CSV phân tách alphabet không.
+- [ ] Test trường hợp thay đổi permissions của một custom role và kiểm chứng Gateway invalidate local cache trong < 5 giây.

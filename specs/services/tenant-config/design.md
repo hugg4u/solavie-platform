@@ -2,288 +2,244 @@
 
 ## Overview
 
-Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Solavie Marketing Platform — Node.js 20, NestJS, Port 3006 (REST) / 50053 (gRPC), PostgreSQL (config_db), Redis. Cung cấp REST API CRUD cho Dashboard, hot-reload qua Redis Pub/Sub (< 5 giây), gRPC Config Reader cho services truy vấn khi cache miss, validation schema, audit log, và default config khi Tenant mới được tạo.
+Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống và phân quyền tùy chỉnh (Custom Roles & Permissions) của Solavie Marketing Platform. 
+- **Tech Stack:** Node.js 20, NestJS 10, Port 3006 (REST) / port 50053 (gRPC).
+- **Storage & Cache:** PostgreSQL 16 (`config_db`), Redis 7.
+- **Cơ chế Hot Reload:** Truyền tải cấu hình và quyền hạn mới xuống các dịch vụ nội bộ qua Redis Pub/Sub trong vòng < 5 giây.
+- **Phân quyền Zero-Trust:** Verify chữ ký HMAC trên header `X-Permissions-Signature` để đảm bảo request đi qua API Gateway tin cậy.
 
-### Phân cấp & Lưu trữ Cấu hình (System Admin vs Tenant Admin)
+### Phân cấp & Lưu trữ Cấu hình
 
 1. **Cấu hình do System Admin kiểm soát (Gói cước & Phân hạng):**
-   - **Định nghĩa Tiers/Plans:** Quy chuẩn hạn mức các gói cước được định nghĩa chung trên toàn hệ thống.
-   - **Gán hạng gói cho Tenant:** Được lưu trữ tập trung tại Redis dưới khóa `tenant:{tenant_id}:tier` (các giá trị: `free`, `standard`, `enterprise`) và trong DB quản lý tài khoản hệ thống của Admin.
-   - **Không sử dụng System Master Keys:** Hệ thống không sử dụng bất kỳ khóa API dùng chung hay fallback nào của hệ thống. Mỗi Tenant bắt buộc phải tự cấu hình khóa API riêng (BYOK) để sử dụng dịch vụ AI.
+   - **Định nghĩa Tiers/Plans:** Quy chuẩn hạn mức các gói cước (`free`, `standard`, `enterprise`) được định nghĩa chung trên toàn hệ thống.
+   - **Gán hạng gói cho Tenant:** Được lưu trữ tại Redis dưới khóa `tenant:{tenant_id}:tier` và trong DB hệ thống.
+   - **Không sử dụng System Master Keys:** Mỗi Tenant bắt buộc phải tự cấu hình khóa API riêng (BYOK) để sử dụng dịch vụ AI.
 
+2. **Cấu hình do Tenant Admin kiểm soát:**
+   - **Cấu hình nghiệp vụ (BYOK, Prompts, Thresholds):** Nằm trong bảng `tenant_configs` phân chia theo `tenant_id`. Các trường nhạy cảm được mã hóa đối xứng (AES-256).
+   - **Quản lý vai trò & quyền hạn tùy chỉnh (Custom Roles & Permissions):** Lưu trữ trong bảng `roles` và `role_permissions`. Khi cập nhật, hệ thống tự động đồng bộ vai trò sang Keycloak và ghi đè permissions vào Redis cache để Gateway tra cứu.
 
-2. **Cấu hình do Tenant Admin kiểm soát (BYOK, Prompts, Thresholds):**
-   - **Vị trí lưu trữ:** Nằm hoàn toàn trong bảng `tenant_configs` của `config_db` (phân chia theo `tenant_id`). Các trường nhạy cảm như API Keys của riêng Tenant (BYOK) được mã hóa đối xứng (AES-256) trước khi lưu.
-   - **Cách thức hoạt động:** Chỉ có tài khoản Admin của chính Tenant đó mới có quyền sửa đổi cấu hình của mình thông qua API Dashboard. Cấu hình mới được sync tự động đến các downstream services (như AI Core) thông qua sự kiện Redis Pub/Sub `config.updates` để cập nhật database local.
+---
 
-## Components and Interfaces
-
-Xem **REST API Design**, **gRPC Interface**, và **Hot Reload Flow** bên dưới.
-
-## Tech Stack
-| Component | Technology |
-|-----------|-----------|
-| Runtime | Node.js 20 |
-| Framework | NestJS 10 |
-| Language | TypeScript 5 |
-| Database | PostgreSQL 16 (config_db) |
-| ORM | Prisma |
-| Cache | Redis 7 (hot-reload pub/sub, config cache) |
-| gRPC | @grpc/grpc-js + @grpc/proto-loader |
-| Testing | Jest |
-| Port | 3006 (REST) / 50053 (gRPC) |
-
-## Architecture
+## Architecture & Components
 
 ```mermaid
 graph TB
-    subgraph "Tenant Config Service"
-        REST["REST API (port 3006)"]
-        GRPC_S["gRPC Server (port 50053)"]
+    subgraph "Tenant Config Service (Port 3006 / 50053)"
+        REST["REST API Controllers"]
+        GRPC_S["gRPC Server"]
         
         subgraph "Modules"
             CONFIG_MOD["Config Module\n(CRUD + Validation)"]
+            ROLE_MOD["Role & Permission Module\n(Keycloak Admin Sync)"]
             HOTRELOAD["Hot Reload Module\n(Redis Pub/Sub)"]
             AUDIT["Audit Log Module"]
             DEFAULT["Default Config Module"]
         end
     end
 
-    subgraph "Storage"
-        PG["PostgreSQL (config_db)"]
-        Redis["Redis\n(cache + pub/sub)"]
+    subgraph "Storage & Cache"
+        PG[("PostgreSQL (config_db)")]
+        Redis[("Redis Cache & Pub/Sub")]
+        Keycloak[("Keycloak IDP")]
     end
 
-    subgraph "Consumers (Hot Reload)"
-        CB["Chatbot Service"]
-        CRM_S["CRM Service"]
-        DMS_S["DMS Service"]
-        CONTENT_S["Content Service"]
-        OTHER["Other Services..."]
+    subgraph "Consumers & Gateway"
+        Gateway["Kong API Gateway\n(Cache 3 tầng & Verification)"]
+        AICore["AI Core Service"]
+        CRMSvc["CRM Service"]
     end
 
     Dashboard["Dashboard (Admin)"] -->|HTTPS| REST
-    Services["Internal Services"] -->|gRPC| GRPC_S
-    REST --> CONFIG_MOD --> PG
-    CONFIG_MOD --> HOTRELOAD
-    CONFIG_MOD --> AUDIT --> PG
-    HOTRELOAD -->|SETEX| Redis
-    HOTRELOAD -->|PUBLISH config.updates| Redis
-    Redis -->|SUBSCRIBE config.updates| CB & CRM_S & DMS_S & CONTENT_S & OTHER
+    REST --> CONFIG_MOD & ROLE_MOD
     GRPC_S --> CONFIG_MOD
+    
+    CONFIG_MOD --> PG
+    ROLE_MOD --> PG
+    ROLE_MOD -->|Keycloak Admin API| Keycloak
+    
+    CONFIG_MOD & ROLE_MOD --> HOTRELOAD
+    CONFIG_MOD --> AUDIT --> PG
+    
+    HOTRELOAD -->|SET / PUBLISH| Redis
+    Redis -->|Pub/Sub Notification| Gateway & AICore & CRMSvc
 ```
 
-## REST API Design
+---
 
-```
-# Config CRUD
-GET    /api/v1/config                    — Get all config (5 categories) for tenant
-GET    /api/v1/config/:category          — Get config by category
-PATCH  /api/v1/config/:category          — Partial update config (Admin only)
+## Data Models (Prisma Schema)
 
-# Audit Log
-GET    /api/v1/config/audit-log          — List audit log (paginated, 50/page)
+Dịch vụ sử dụng Prisma ORM để quản trị cơ sở dữ liệu `config_db`. Dưới đây là đặc tả các model:
 
-# Health
-GET    /health                           — Liveness probe
-GET    /ready                            — Readiness probe
-GET    /metrics                          — Prometheus metrics
-
-# Categories: ai_kb | chat_routing | content_scheduler | crm_campaign | security_comments_notif
-```
-
-## gRPC Interface
-
-```protobuf
-syntax = "proto3";
-package tenantconfig;
-
-service TenantConfigService {
-  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
-  rpc GetAllConfig(GetAllConfigRequest) returns (GetAllConfigResponse);
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-message GetConfigRequest {
-  string tenant_id = 1;
-  string category = 2;  // ai_kb | chat_routing | content_scheduler | crm_campaign | security_comments_notif
+generator client {
+  provider = "prisma-client-js"
 }
 
-message GetConfigResponse {
-  string tenant_id = 1;
-  string category = 2;
-  string config_json = 3;  // JSON string of config object
-  string updated_at = 4;
+// Cấu hình nghiệp vụ của Tenant
+model TenantConfig {
+  tenantId       String   @id @map("tenant_id") @db.VarChar(50)
+  aiKbConfig     Json     @map("ai_kb_config")
+  routingConfig  Json     @map("routing_config")
+  contentConfig  Json     @map("content_config")
+  crmConfig      Json     @map("crm_config")
+  securityConfig Json     @map("security_config")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("tenant_configs")
 }
 
-message GetAllConfigRequest {
-  string tenant_id = 1;
+// Hạn mức tài nguyên mặc định của các gói cước hệ thống
+model SystemTierLimit {
+  tier                     String   @id @db.VarChar(50) // 'free', 'standard', 'enterprise'
+  apiRequestsPerMin        Int      @default(200) @map("api_requests_per_min")
+  aiWebSearchPerHour       Int      @default(50) @map("ai_web_search_per_hour")
+  aiGenerateContentPerHour Int      @default(20) @map("ai_generate_content_per_hour")
+  aiKbSearchPerHour        Int      @default(500) @map("ai_kb_search_per_hour")
+  channelSendPerHour       Int      @default(200) @map("channel_send_per_hour")
+  updatedAt                DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("system_tier_limits")
 }
 
-message GetAllConfigResponse {
-  string tenant_id = 1;
-  string ai_kb_config = 2;
-  string routing_config = 3;
-  string content_config = 4;
-  string crm_config = 5;
-  string security_config = 6;
-  string updated_at = 7;
+// Vai trò phân quyền (Hệ thống hoặc Tùy chỉnh của Tenant)
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.VarChar(50)
+  name        String           @db.VarChar(100) // e.g., "custom_agent", "support_lead"
+  isSystem    Boolean          @default(false) @map("is_system") // true đối với: admin, manager, agent, viewer
+  description String?          @db.VarChar(255)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  permissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@map("roles")
 }
-```
 
-## Data Models
-```sql
--- ============================================================
--- TENANT CONFIGS
--- ============================================================
-CREATE TABLE tenant_configs (
-    tenant_id VARCHAR(50) PRIMARY KEY,
-    ai_kb_config JSONB NOT NULL,
-    routing_config JSONB NOT NULL,
-    content_config JSONB NOT NULL,
-    crm_config JSONB NOT NULL,
-    security_config JSONB NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+// Ánh xạ Quyền hạn (Permissions) cho từng Vai trò
+model RolePermission {
+  id        String   @id @default(uuid()) @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  resource  String   @db.VarChar(100) // e.g., "campaign", "ai-core", "tenant-config"
+  action    String   @db.VarChar(50)  // e.g., "read", "write", "*"
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
--- ============================================================
--- SYSTEM TIER LIMITS (Cấu hình hạn mức gói cước động của hệ thống)
--- ============================================================
-CREATE TABLE system_tier_limits (
-    tier VARCHAR(50) PRIMARY KEY, -- 'free', 'standard', 'enterprise', 'custom_vip', etc.
-    api_requests_per_min INT NOT NULL DEFAULT 200,
-    ai_web_search_per_hour INT NOT NULL DEFAULT 50,
-    ai_generate_content_per_hour INT NOT NULL DEFAULT 20,
-    ai_kb_search_per_hour INT NOT NULL DEFAULT 500,
-    channel_send_per_hour INT NOT NULL DEFAULT 200,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+  @@unique([roleId, resource, action])
+  @@map("role_permissions")
+}
 
--- ============================================================
--- AUDIT LOGS
--- ============================================================
-CREATE TABLE config_audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(50) NOT NULL,
-    changed_by UUID NOT NULL,
-    category VARCHAR(50) NOT NULL,
-    field_name VARCHAR(100) NOT NULL,
-    old_value JSONB,
-    new_value JSONB,
-    changed_at TIMESTAMPTZ DEFAULT NOW()
-);
+// Nhật ký kiểm toán thay đổi cấu hình
+model ConfigAuditLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.VarChar(50)
+  changedBy String   @map("changed_by") @db.Uuid
+  category  String   @db.VarChar(50)
+  fieldName String   @map("field_name") @db.VarChar(100)
+  oldValue  Json?    @map("old_value")
+  newValue  Json?    @map("new_value")
+  changedAt DateTime @default(now()) @map("changed_at") @db.Timestamptz
 
-CREATE INDEX idx_audit_tenant ON config_audit_logs(tenant_id, changed_at DESC);
-CREATE INDEX idx_audit_category ON config_audit_logs(tenant_id, category, changed_at DESC);
-```
-
-## Config Schema — 5 Categories
-
-### Category: `ai_kb`
-```typescript
-interface AiKbConfig {
-  chatbot_enabled: boolean;                    // Default: true
-  chatbot_system_prompt_override?: string;     // Max 10,000 chars
-  confidence_threshold: number;                // [0.60, 0.95], Default: 0.70
-  auto_handoff_on_negative: boolean;           // Default: true
-  ai_vision_invoice_reading: boolean;          // Default: true
-  rag_relevance_threshold: number;             // [0.0, 1.0], Default: 0.50
-  kb_chunk_size: number;                       // [128, 1024], Default: 512
-  kb_chunk_overlap_percentage: number;         // [5, 30], Default: 10
-  llm_model_routing: Record<string, string>;   // {use_case: model_name}
-  ai_fallback_models: string[];                // Fallback model list
-  required_approvals: string[];                // Tools requiring human approval
-  api_keys?: Record<string, { api_key_encrypted: string; api_base?: string; is_active: boolean }>;
-  mcp_server_whitelist?: Array<{               // Whitelist of custom MCP servers
-    server_name: string;
-    sse_url: string;
-    status: 'active' | 'inactive';
-    description?: string;
-    custom_headers?: Record<string, string>;
-  }>;
+  @@index([tenantId, changedAt(sort: Desc)])
+  @@index([tenantId, category, changedAt(sort: Desc)])
+  @@map("config_audit_logs")
 }
 ```
 
-### Category: `chat_routing`
-```typescript
-interface ChatRoutingConfig {
-  working_hours: Record<string, { start: string; end: string }>;
-  // {0: {start: "08:00", end: "17:30"}, ..., 6: null} (0=Sun, 6=Sat)
-  offline_mode_behavior: 'lead_capture' | 'ai_warning' | 'offline_msg';
-  offline_message?: string;                    // Static message for offline_msg mode
-  handoff_routing_algorithm: 'round_robin' | 'least_busy' | 'queue_claim' | 'hybrid';
-  manual_to_auto_timeout_hours: number;        // [1, 24], Default: 2
-  auto_close_timeout_hours: number;            // [1, 48], Default: 24
-}
-```
+---
 
-### Category: `content_scheduler`
-```typescript
-interface ContentSchedulerConfig {
-  require_content_approval: boolean;           // Default: true
-  auto_approve_quality_threshold: number;      // [0.0, 1.0], Default: 0.85
-  max_post_retry_attempts: number;             // [1, 5], Default: 3
-  max_daily_posts_per_channel: number;         // [1, 50], Default: 10
-  campaign_fb_outside_24h_action: 'skip' | 'use_tag' | 'paid';
-  banned_keywords: string[];                   // Blocked words in posts
-}
-```
+## REST API Interface
 
-### Category: `crm_campaign`
-```typescript
-interface CrmCampaignConfig {
-  lead_scoring_rules: Record<string, number>;  // {factor: weight}
-  hot_lead_threshold: number;                  // [0, 100], Default: 80
-  contact_auto_merge_threshold: number;        // [0.0, 1.0], Default: 0.90
-  data_masking_enabled: boolean;               // Default: true
-  dms_max_storage_mb: number;                  // [100, 100000], Default: 5000
-  dms_max_file_versions: number;               // [1, 20], Default: 5
-}
-```
+### 1. Cấu hình Nghiệp vụ (Tenant Configs)
+- `GET /api/v1/config` — Lấy toàn bộ cấu hình (5 categories) của Tenant (dựa trên `X-Tenant-ID` header).
+- `GET /api/v1/config/:category` — Lấy cấu hình của một category xác định.
+- `PATCH /api/v1/config/:category` — Cập nhật một phần cấu hình của category (Chỉ Tenant Admin).
 
-### Category: `security_comments_notif`
-```typescript
-interface SecurityCommentsNotifConfig {
-  session_timeout_minutes: number;             // [5, 480], Default: 60
-  audit_log_retention_days: number;            // [30, 365], Default: 90
-  comment_auto_hide_spam: boolean;             // Default: true
-  comment_spam_threshold: number;              // [0.0, 1.0], Default: 0.80
-  notification_channels: string[];             // ['email', 'push', 'in_app']
-  gateway_rate_limit_minute: number;           // [10, 1000], Default: 200
-  gateway_rate_limit_hour: number;             // [100, 50000], Default: 5000
-  allowed_cors_origins: string[];              // Default: ['*']
-  auth_password_min_length: number;            // [6, 30], Default: 8
-  auth_max_login_attempts: number;             // [3, 20], Default: 5
-}
-```
+### 2. Quản lý vai trò & quyền hạn (Custom Roles)
+- `GET /api/v1/config/roles` — Lấy danh sách vai trò và quyền hạn chi tiết của Tenant.
+- `POST /api/v1/config/roles` — Tạo một vai trò tùy chỉnh mới (Realm Role) và gán danh sách permissions.
+  - **Validation:** Trường `name` bắt buộc không được trùng với danh sách các từ khóa bảo lưu của hệ thống: `['system', 'system_admin', 'super_admin', 'root']` (không phân biệt chữ hoa/chữ thường). Nếu trùng, trả về `400 Bad Request`.
+  - **Body:**
+    ```json
+    {
+      "name": "support_level_2",
+      "description": "Custom agent for VIP escalation support",
+      "permissions": [
+        { "resource": "chatbot", "action": "read" },
+        { "resource": "crm", "action": "*" }
+      ]
+    }
+    ```
+- `PUT /api/v1/config/roles/:role_name/permissions` — Cập nhật/ghi đè danh sách permissions của một vai trò tùy chỉnh.
+  - **Body:**
+    ```json
+    {
+      "permissions": [
+        { "resource": "chatbot", "action": "*" },
+        { "resource": "crm", "action": "read" }
+      ]
+    }
+    ```
+- `DELETE /api/v1/config/roles/:role_name` — Xóa một vai trò tùy chỉnh. Chặn xóa các vai trò mặc định (`admin`, `manager`, `agent`, `viewer`).
 
-## Hot Reload Flow
+### 3. Quản lý Hạn mức Hệ thống (System Admin Only)
+- `GET /api/v1/system/tiers` — Xem danh sách các gói cước và hạn mức tài nguyên đi kèm.
+- `POST /api/v1/system/tiers` — Khởi tạo hoặc cập nhật hạn mức của một gói cước.
+- `DELETE /api/v1/system/tiers/:tier` — Xóa gói cước (chỉ cho phép nếu không có tenant nào sử dụng).
+
+### 4. Zero-Trust Access Control
+- `GET /api/v1/permissions/manifest` — Trả về danh sách tài nguyên và hành động được hỗ trợ bởi dịch vụ để hỗ trợ giao diện quản trị chọn quyền.
+
+---
+
+## Custom Role Sync & Invalidation Flow
+
+Khi Tenant Admin cập nhật vai trò hoặc danh sách quyền hạn, hệ thống thực hiện đồng bộ song song tới Keycloak Realm và lưu trữ Redis Cache, đồng thời bắn tin hiệu hủy cache (invalidation) cho API Gateway.
 
 ```mermaid
 sequenceDiagram
-    participant Admin as Dashboard (Admin)
-    participant API as REST API
+    autonumber
+    participant Admin as Dashboard (Tenant Admin)
+    participant API as Tenant Config Service
     participant DB as PostgreSQL
-    participant Redis as Redis
-    participant Svc as All Services
+    participant Keycloak as Keycloak IDP
+    participant Redis as Redis Cache
+    participant GW as Kong API Gateway
 
-    Admin->>API: PATCH /config/ai_kb {confidence_threshold: 0.75}
-    API->>API: Validate schema
-    API->>DB: UPDATE tenant_configs SET ai_kb_config = ...
-    DB-->>API: OK
-    
-    par Write cache + Publish (atomic)
-        API->>Redis: SETEX {tenant_id}:config:ai_kb 3600 {json}
-        API->>Redis: PUBLISH config.updates {tenant_id, category, updated_fields, updated_at}
+    Admin->>API: POST /api/v1/config/roles { name: "custom_agent", permissions: [...] }
+    API->>API: Verify X-Tenant-ID & Permissions
+    API->>DB: Save Role & RolePermissions
+    DB-->>API: Saved OK
+
+    rect rgb(230, 245, 255)
+        note right of API: Đồng bộ hóa định danh sang IDP
+        API->>Keycloak: POST /admin/realms/{realm}/roles { roleName: "custom_agent" }
+        Keycloak-->>API: Created 201 Created
     end
+
+    rect rgb(240, 255, 240)
+        note right of API: Đồng bộ hóa phân quyền xuống Cache tầng thấp
+        API->>Redis: SET tenant:{tenant_id}:role:custom_agent:permissions "[permissions_csv]" (TTL: 30 days)
+        API->>Redis: PUBLISH config.updates { tenant_id, category: "roles", role_name: "custom_agent" }
+    end
+
+    Redis-->>GW: Broadcast event config.updates
+    GW->>GW: Invalidate local worker cache for custom_agent
     
-    Redis-->>Svc: SUBSCRIBE config.updates → receive event
-    Svc->>Svc: Update in-memory config within < 5s
-    
-    API->>DB: INSERT config_audit_logs (old_value, new_value)
-    API-->>Admin: 200 OK
+    API-->>Admin: 201 Created (Sync Success)
 ```
 
-## Validation Rules
+---
+
+## Config Validation Rules
+
+Mọi PATCH request cập nhật cấu hình nghiệp vụ đều được validate nghiêm ngặt thông qua NestJS `ValidationPipe` (class-validator) và schema định nghĩa trước:
 
 ```typescript
 const CONFIG_VALIDATION_SCHEMA = {
@@ -309,425 +265,146 @@ const CONFIG_VALIDATION_SCHEMA = {
   gateway_rate_limit_hour: { type: 'int', min: 100, max: 50000 },
   auth_password_min_length: { type: 'int', min: 6, max: 30 },
   auth_max_login_attempts: { type: 'int', min: 3, max: 20 },
+  allowed_cors_origins: { type: 'array', items: { type: 'string' } },
   mcp_server_whitelist: { 
     type: 'array', 
     items: { 
       type: 'object', 
       properties: { 
         server_name: { type: 'string' }, 
-        sse_url: { type: 'string', pattern: '^https?:\\/\\/[a-zA-Z0-9-._~:\\/]+
-```
-
-## Default Config (New Tenant)
-
-```typescript
-const DEFAULT_CONFIG = {
-  ai_kb_config: {
-    chatbot_enabled: true,
-    confidence_threshold: 0.70,
-    auto_handoff_on_negative: true,
-    ai_vision_invoice_reading: true,
-    rag_relevance_threshold: 0.50,
-    kb_chunk_size: 512,
-    kb_chunk_overlap_percentage: 10,
-    llm_model_routing: {},
-    ai_fallback_models: [],
-    required_approvals: [],
-    api_keys: {},
-    mcp_server_whitelist: [],
-  },
-  routing_config: {
-    working_hours: {
-      "1": { start: "08:00", end: "17:30" },
-      "2": { start: "08:00", end: "17:30" },
-      "3": { start: "08:00", end: "17:30" },
-      "4": { start: "08:00", end: "17:30" },
-      "5": { start: "08:00", end: "17:30" },
-      "6": { start: "08:00", end: "12:00" },
-    },
-    offline_mode_behavior: 'lead_capture',
-    handoff_routing_algorithm: 'hybrid',
-    manual_to_auto_timeout_hours: 2,
-    auto_close_timeout_hours: 24,
-  },
-  content_config: {
-    require_content_approval: true,
-    auto_approve_quality_threshold: 0.85,
-    max_post_retry_attempts: 3,
-    max_daily_posts_per_channel: 10,
-    campaign_fb_outside_24h_action: 'skip',
-    banned_keywords: [],
-  },
-  crm_config: {
-    lead_scoring_rules: {},
-    hot_lead_threshold: 80,
-    contact_auto_merge_threshold: 0.90,
-    data_masking_enabled: true,
-    dms_max_storage_mb: 5000,
-    dms_max_file_versions: 5,
-  },
-  security_config: {
-    session_timeout_minutes: 60,
-    audit_log_retention_days: 90,
-    comment_auto_hide_spam: true,
-    comment_spam_threshold: 0.80,
-    notification_channels: ['push', 'in_app'],
-    gateway_rate_limit_minute: 200,
-    gateway_rate_limit_hour: 5000,
-    allowed_cors_origins: ['*'],
-    auth_password_min_length: 8,
-    auth_max_login_attempts: 5,
-  },
-};
-```
-
-## Redis Key Format
-
-```
-Config cache:           {tenant_id}:config:{category}     TTL: 3600s (1 hour)
-Tenant subscription:    tenant:{tenant_id}:tier
-Dynamic Tier Limits:    tier:{tier_name}:limits           TTL: 86400s (24 hours)
-
-Pub/Sub channels: 
-- config.updates (được các service subscribe để reload cấu hình tenant)
-- system.limits.updates (được các service subscribe để reload hạn mức gói cước)
-
-Event payload (config.updates):
-{
-  "tenant_id": "solavie-001",
-  "category": "ai_kb",
-  "updated_fields": ["confidence_threshold", "chatbot_enabled"],
-  "updated_at": "2026-06-01T10:00:00Z"
-}
-
-Event payload (system.limits.updates):
-{
-  "tier": "standard",
-  "updated_fields": ["ai_web_search_per_hour"],
-  "updated_at": "2026-06-01T10:00:00Z"
-}
-```
-
-## Audit Log — Sensitive Field Masking
-
-```typescript
-const SENSITIVE_FIELDS = ['api_key', 'secret', 'password', 'token', 'webhook_secret'];
-
-function maskSensitiveValue(fieldName: string, value: any): any {
-  if (SENSITIVE_FIELDS.some(f => fieldName.toLowerCase().includes(f))) {
-    return '[REDACTED]';
-  }
-  return value;
-}
-```
-
-## Error Handling
-
-| Scenario | HTTP Status | Behavior |
-|----------|-------------|----------|
-| Invalid JWT | 401 | Reject |
-| Non-admin PATCH | 403 | Reject |
-| Validation failure | 422 | Return field-level errors |
-| DB save OK, Redis fail | 207 | Return Multi-Status, retry Redis 3x |
-| Redis Pub/Sub fail | 200 | Log error, services fallback via cache miss |
-| Tenant not found (gRPC) | - | Return default config |
-
-## Performance Targets
-
-| Metric | Target |
-|--------|--------|
-| gRPC GetConfig response | < 100ms |
-| REST GET /config response | < 50ms (Redis hit) |
-| Hot reload propagation | < 5s to all services |
-| Config cache TTL | 3600s (1 hour) |
-
-
-## Correctness Properties
-
-### Property 1: Tenant Isolation
-**Validates: Requirements 4.1**
-Moi query va operation phai filter theo tenant_id tu JWT claims. Khong co cross-tenant data leakage o bat ky tang nao (DB, Kafka, Redis, Qdrant, MinIO).
-
-### Property 2: Idempotency
-**Validates: Requirements 3.1**
-Moi write operation phai co idempotency key de tranh duplicate processing khi retry. Kafka consumer phai idempotent.
-
-### Property 3: At-least-once Delivery
-**Validates: Requirements 3.1**
-Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
-
-### Property 4: Circuit Breaker Correctness
-**Validates: Requirements 5.1**
-Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
-
-### Property 5: Data Consistency
-**Validates: Requirements 3.1**
-Distributed transactions dung Saga pattern voi compensating actions khi rollback. Moi destructive action ghi audit.events Kafka topic.
-## Error Handling
-
-| Scenario | Strategy |
-|----------|----------|
-| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
-| Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
-| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
-| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
-| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
-| Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
-
-## Testing Strategy
-
-| Layer | Tool | Coverage Target |
-|-------|------|----------------|
-| Unit Tests | Jest (Node.js) / pytest (Python) / JUnit 5 (Java) | > 80% business logic |
-| Integration Tests | Testcontainers (PostgreSQL, Redis, Kafka) | Happy path + error paths |
-| Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
-| Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
-| Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
-
-
-## Zero-Trust HMAC Guard & Permission Manifest
-
-### 1. Permission Manifest API
-`GET /api/v1/permissions/manifest`
-Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
-```json
-{
-    "service": "tenant-config",
-    "resources": [
-        {
-            "name": "configs",
-            "description": "Tenant configurations and routing",
-            "actions": [
-                "read",
-                "write"
-            ]
-        }
-    ]
-}
-```
-
-### 2. Zero-Trust HMAC Signature Verification
-Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request tại lớp Guard/Interceptor của Node.js / NestJS:
-1. Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` từ headers.
-2. Tính toán signature mong đợi:
-   `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
-3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
-4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `tenant-config:configs:read`).
-   - Hỗ trợ wildcard: `*` (Super Admin bypass), `tenant-config:*` (Service bypass), và `tenant-config:configs:*` (Resource bypass).
-
-## Security & Gateway Integration
-- Dịch vụ được triển khai stateless phía sau Kong API Gateway.
-- Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `tenant-config`, và inject header `X-Tenant-ID` vào request.
-- Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
- }, 
+        sse_url: { type: 'string', pattern: '^https?:\\/\\/[a-zA-Z0-9-._~:\\/]+' },
         status: { type: 'enum', values: ['active', 'inactive'] },
         description: { type: 'string', optional: true },
         custom_headers: { type: 'object', optional: true }
       } 
     },
     optional: true
-  },
-  // Boolean fields: strict true/false only, reject 0/1 or "true"/"false"
-};
-```
-
-## Default Config (New Tenant)
-
-```typescript
-const DEFAULT_CONFIG = {
-  ai_kb_config: {
-    chatbot_enabled: true,
-    confidence_threshold: 0.70,
-    auto_handoff_on_negative: true,
-    ai_vision_invoice_reading: true,
-    rag_relevance_threshold: 0.50,
-    kb_chunk_size: 512,
-    kb_chunk_overlap_percentage: 10,
-    llm_model_routing: {},
-    ai_fallback_models: [],
-    required_approvals: [],
-    api_keys: {},
-  },
-  routing_config: {
-    working_hours: {
-      "1": { start: "08:00", end: "17:30" },
-      "2": { start: "08:00", end: "17:30" },
-      "3": { start: "08:00", end: "17:30" },
-      "4": { start: "08:00", end: "17:30" },
-      "5": { start: "08:00", end: "17:30" },
-      "6": { start: "08:00", end: "12:00" },
-    },
-    offline_mode_behavior: 'lead_capture',
-    handoff_routing_algorithm: 'hybrid',
-    manual_to_auto_timeout_hours: 2,
-    auto_close_timeout_hours: 24,
-  },
-  content_config: {
-    require_content_approval: true,
-    auto_approve_quality_threshold: 0.85,
-    max_post_retry_attempts: 3,
-    max_daily_posts_per_channel: 10,
-    campaign_fb_outside_24h_action: 'skip',
-    banned_keywords: [],
-  },
-  crm_config: {
-    lead_scoring_rules: {},
-    hot_lead_threshold: 80,
-    contact_auto_merge_threshold: 0.90,
-    data_masking_enabled: true,
-    dms_max_storage_mb: 5000,
-    dms_max_file_versions: 5,
-  },
-  security_config: {
-    session_timeout_minutes: 60,
-    audit_log_retention_days: 90,
-    comment_auto_hide_spam: true,
-    comment_spam_threshold: 0.80,
-    notification_channels: ['push', 'in_app'],
-    gateway_rate_limit_minute: 200,
-    gateway_rate_limit_hour: 5000,
-    allowed_cors_origins: ['*'],
-    auth_password_min_length: 8,
-    auth_max_login_attempts: 5,
-  },
-};
-```
-
-## Redis Key Format
-
-```
-Config cache:           {tenant_id}:config:{category}     TTL: 3600s (1 hour)
-Tenant subscription:    tenant:{tenant_id}:tier
-Dynamic Tier Limits:    tier:{tier_name}:limits           TTL: 86400s (24 hours)
-
-Pub/Sub channels: 
-- config.updates (được các service subscribe để reload cấu hình tenant)
-- system.limits.updates (được các service subscribe để reload hạn mức gói cước)
-
-Event payload (config.updates):
-{
-  "tenant_id": "solavie-001",
-  "category": "ai_kb",
-  "updated_fields": ["confidence_threshold", "chatbot_enabled"],
-  "updated_at": "2026-06-01T10:00:00Z"
-}
-
-Event payload (system.limits.updates):
-{
-  "tier": "standard",
-  "updated_fields": ["ai_web_search_per_hour"],
-  "updated_at": "2026-06-01T10:00:00Z"
-}
-```
-
-## Audit Log — Sensitive Field Masking
-
-```typescript
-const SENSITIVE_FIELDS = ['api_key', 'secret', 'password', 'token', 'webhook_secret'];
-
-function maskSensitiveValue(fieldName: string, value: any): any {
-  if (SENSITIVE_FIELDS.some(f => fieldName.toLowerCase().includes(f))) {
-    return '[REDACTED]';
   }
-  return value;
+};
+```
+*Lưu ý:* Các trường kiểu boolean phải là giá trị Boolean thực tế (`true`/`false`), không chấp nhận chuỗi `"true"` hoặc số `1`/`0`.
+
+---
+
+## gRPC Interface
+
+Microservices nội bộ giao tiếp nhanh qua gRPC (port 50053) khi cache miss:
+
+```protobuf
+syntax = "proto3";
+package tenantconfig;
+
+service TenantConfigService {
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc GetAllConfig(GetAllConfigRequest) returns (GetAllConfigResponse);
+}
+
+message GetConfigRequest {
+  string tenant_id = 1;
+  string category = 2;  // ai_kb | chat_routing | content_scheduler | crm_campaign | security_comments_notif
+}
+
+message GetConfigResponse {
+  string tenant_id = 1;
+  string category = 2;
+  string config_json = 3;  // JSON string của cấu hình category
+  string updated_at = 4;
+}
+
+message GetAllConfigRequest {
+  string tenant_id = 1;
+}
+
+message GetAllConfigResponse {
+  string tenant_id = 1;
+  string ai_kb_config = 2;
+  string routing_config = 3;
+  string content_config = 4;
+  string crm_config = 5;
+  string security_config = 6;
+  string updated_at = 7;
 }
 ```
 
-## Error Handling
+---
 
-| Scenario | HTTP Status | Behavior |
-|----------|-------------|----------|
-| Invalid JWT | 401 | Reject |
-| Non-admin PATCH | 403 | Reject |
-| Validation failure | 422 | Return field-level errors |
-| DB save OK, Redis fail | 207 | Return Multi-Status, retry Redis 3x |
-| Redis Pub/Sub fail | 200 | Log error, services fallback via cache miss |
-| Tenant not found (gRPC) | - | Return default config |
+## Redis Key Map & Pub/Sub Channels
+
+| Key / Channel | Loại | Định dạng dữ liệu | TTL |
+|---|---|---|---|
+| `{tenant_id}:config:{category}` | String | JSON Object cấu hình | 3600 giây (1h) |
+| `tenant:{tenant_id}:tier` | String | Tên gói cước (`free`, `standard`, ...) | Không giới hạn |
+| `tier:{tier_name}:limits` | String | JSON Object hạn mức tài nguyên gói cước | 86400 giây (24h) |
+| `tenant:{tenant_id}:role:{role_name}:permissions` | String | CSV của các permission (sắp xếp tăng dần alphabet) | 30 ngày (Long TTL) |
+| `config.updates` | Channel | Payload thông báo thay đổi cấu hình/vai trò | N/A (Pub/Sub) |
+| `system.limits.updates` | Channel | Payload thông báo thay đổi hạn mức gói | N/A (Pub/Sub) |
+
+### Event Payloads:
+- **`config.updates` (cho Category Config):**
+  ```json
+  {
+    "tenant_id": "solavie-001",
+    "category": "ai_kb",
+    "updated_fields": ["confidence_threshold", "chatbot_enabled"],
+    "updated_at": "2026-06-07T01:44:23Z"
+  }
+  ```
+- **`config.updates` (cho Roles & Permissions):**
+  ```json
+  {
+    "tenant_id": "solavie-001",
+    "category": "roles",
+    "role_name": "custom_agent",
+    "updated_at": "2026-06-07T01:44:23Z"
+  }
+  ```
+
+---
+
+## Zero-Trust HMAC Guard & Request Verification
+
+Dịch vụ thực thi Zero-Trust bảo vệ tất cả REST API endpoints bằng việc kiểm tra signature từ API Gateway chuyển tiếp qua.
+
+### 1. Verification Flow:
+1. Trích xuất các headers từ HTTP Request:
+   - `X-Tenant-ID`: Mã định danh Tenant.
+   - `X-User-ID`: Mã định danh người dùng.
+   - `X-User-Permissions`: Danh sách quyền người dùng dạng CSV (ví dụ: `tenant-config:configs:read,tenant-config:configs:write`).
+   - `X-Permissions-Signature`: Chữ ký số HMAC do Gateway tạo.
+2. Kiểm tra chữ ký:
+   - Sử dụng thuật toán `HMAC-SHA256` với khóa bí mật `GATEWAY_SIGNING_SECRET`.
+   - Payload ký: `X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions`.
+   - Sử dụng `crypto.timingSafeEqual` (hoặc `compare_digest` tương đương trong Node) để so sánh chữ ký nhận được với chữ ký tính toán nhằm chống tấn công Timing Attacks.
+   - Nếu không khớp hoặc thiếu header, từ chối ngay lập tức với mã lỗi `403 Forbidden` (Signature Mismatch).
+
+### 2. Match Quyền In-Memory O(1):
+Sau khi verify chữ ký thành công, Guard chuyển đổi `X-User-Permissions` thành một Set trong memory để kiểm tra quyền hạn của user với endpoint yêu cầu:
+- **Wildcard Bypass:**
+  - Nếu Set chứa `*` (Super Admin), cho phép qua mọi endpoint.
+  - Nếu Set chứa `tenant-config:*`, cho phép truy cập toàn bộ API của service này.
+  - Nếu endpoint yêu cầu quyền `tenant-config:configs:read` và Set chứa `tenant-config:configs:*` hoặc chính xác `tenant-config:configs:read`, request được chấp thuận.
+  - Ngược lại, trả về `403 Forbidden` (Insufficient Permissions).
+
+---
+
+## Audit Log & Sensitive Data Redaction
+
+Mọi thao tác thay đổi cấu hình đều được ghi nhật ký kiểm toán.
+- **Che dữ liệu nhạy cảm (Redaction):** Hệ thống tự động quét qua các field thuộc blacklist: `['api_key', 'secret', 'password', 'token', 'webhook_secret']` và ghi đè giá trị trong audit log là `[REDACTED]` trước khi lưu DB.
+- **Retention Job:** Một background cron job chạy lúc 02:00 AM hàng ngày để quét và dọn dẹp các bản ghi `config_audit_logs` có thời gian khởi tạo lớn hơn số ngày quy định trong `audit_log_retention_days` (mặc định 90 ngày) của Tenant đó.
+
+---
 
 ## Performance Targets
 
-| Metric | Target |
-|--------|--------|
-| gRPC GetConfig response | < 100ms |
-| REST GET /config response | < 50ms (Redis hit) |
-| Hot reload propagation | < 5s to all services |
-| Config cache TTL | 3600s (1 hour) |
+- **gRPC GetConfig / GetAllConfig Latency:** < 100ms.
+- **REST GET /config (Cache Hit):** < 50ms.
+- **Đồng bộ hóa thay đổi (Hot Reload):** < 5 giây trên toàn hệ thống (Gateway invalidate local cache và downstream services load lại từ Redis).
 
-
-## Correctness Properties
-
-### Property 1: Tenant Isolation
-**Validates: Requirements 4.1**
-Moi query va operation phai filter theo tenant_id tu JWT claims. Khong co cross-tenant data leakage o bat ky tang nao (DB, Kafka, Redis, Qdrant, MinIO).
-
-### Property 2: Idempotency
-**Validates: Requirements 3.1**
-Moi write operation phai co idempotency key de tranh duplicate processing khi retry. Kafka consumer phai idempotent.
-
-### Property 3: At-least-once Delivery
-**Validates: Requirements 3.1**
-Kafka events phai duoc xu ly it nhat mot lan. Sau 3 retries voi exponential backoff (1s, 2s, 4s), event chuyen vao dead-letter queue.
-
-### Property 4: Circuit Breaker Correctness
-**Validates: Requirements 5.1**
-Sync calls toi external services phai qua circuit breaker. Open sau 5 failures trong 30s, Half-Open probe sau 60s.
-
-### Property 5: Data Consistency
-**Validates: Requirements 3.1**
-Distributed transactions dung Saga pattern voi compensating actions khi rollback. Moi destructive action ghi audit.events Kafka topic.
-## Error Handling
-
-| Scenario | Strategy |
-|----------|----------|
-| External API timeout | Retry t?i da 3 l?n v?i exponential backoff (1s, 2s, 4s); sau d� tr? v? l?i c� c?u tr�c |
-| Database connection error | Circuit breaker + fallback response; alert qua Alertmanager |
-| Kafka publish failure | Retry 3 l?n; n?u v?n th?t b?i ghi v�o dead-letter queue |
-| Invalid tenant_id | Reject ngay v?i HTTP 403 + ghi security warning v�o audit log |
-| Validation error | Tr? v? HTTP 422 v?i danh s�ch field errors chi ti?t |
-| Unhandled exception | Log structured JSON v?i trace_id; tr? v? HTTP 500 v?i error_id d? debug |
+---
 
 ## Testing Strategy
 
-| Layer | Tool | Coverage Target |
-|-------|------|----------------|
-| Unit Tests | Jest (Node.js) / pytest (Python) / JUnit 5 (Java) | > 80% business logic |
-| Integration Tests | Testcontainers (PostgreSQL, Redis, Kafka) | Happy path + error paths |
-| Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
-| Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
-| Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
-
-
-## Zero-Trust HMAC Guard & Permission Manifest
-
-### 1. Permission Manifest API
-`GET /api/v1/permissions/manifest`
-Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
-```json
-{
-    "service": "tenant-config",
-    "resources": [
-        {
-            "name": "configs",
-            "description": "Tenant configurations and routing",
-            "actions": [
-                "read",
-                "write"
-            ]
-        }
-    ]
-}
-```
-
-### 2. Zero-Trust HMAC Signature Verification
-Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request tại lớp Guard/Interceptor của Node.js / NestJS:
-1. Trích xuất `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` từ headers.
-2. Tính toán signature mong đợi:
-   `expected_sig = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
-3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
-4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `tenant-config:configs:read`).
-   - Hỗ trợ wildcard: `*` (Super Admin bypass), `tenant-config:*` (Service bypass), và `tenant-config:configs:*` (Resource bypass).
-
-## Security & Gateway Integration
-- Dịch vụ được triển khai stateless phía sau Kong API Gateway.
-- Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `tenant-config`, và inject header `X-Tenant-ID` vào request.
-- Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+- **Unit Tests (Jest):** Coverage tối thiểu 80% business logic của các validator, guard HMAC, sync logic.
+- **Integration Tests:** Sử dụng Testcontainers khởi chạy PostgreSQL và Redis để kiểm thử kết nối DB, ghi log audit, cơ chế Pub/Sub.
+- **Contract Tests (Pact):** Kiểm thử ràng buộc gRPC Interface giữa Tenant Config Service và các downstream service (AI Core, CRM, Chatbot).

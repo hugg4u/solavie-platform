@@ -174,17 +174,29 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 4. THE Tenant_Config SHALL cho phép Tenant Admin tự do cấu hình các tham số nội bộ (như API Keys riêng - BYOK, System Prompt riêng, confidence thresholds) thông qua REST API, các thông số này được mã hóa bảo mật và cách ly tuyệt đối giữa các tenant.
 
 ### Requirement 11: REST API Quản lý Gói cước và Hạn mức (System Admin Only)
+- **User Story:** Là một System Admin, tôi muốn cấu hình động các gói cước và hạn mức tài nguyên đi kèm từ hệ thống để thay đổi chính sách kinh doanh SaaS mà không cần thay đổi mã nguồn.
+- **Acceptance Criteria:**
+  1. THE Tenant_Config SHALL cung cấp các REST API cho System Admin để thực hiện CRUD các gói cước và hạn mức:
+     - `GET /api/v1/system/tiers`: Xem danh sách tất cả các gói cước và hạn mức tài nguyên đang được định nghĩa.
+     - `POST /api/v1/system/tiers`: Khởi tạo một hạng gói cước mới hoặc cập nhật hạn mức của gói cước hiện tại.
+     - `DELETE /api/v1/system/tiers/:tier`: Xóa một hạng gói cước (chỉ cho phép nếu không còn tenant nào sử dụng).
+  2. IF request không mang JWT token hợp lệ của System Admin (role `system_admin`), THEN THE Tenant_Config SHALL từ chối và trả về HTTP 403.
+  3. WHEN hạn mức gói cước (Tier Limits) được lưu thành công vào DB, THE Tenant_Config SHALL cập nhật Redis cache key `tier:{tier_name}:limits` và publish một thông điệp thông báo lên kênh Redis Pub/Sub `system.limits.updates`.
+  4. THE Tenant_Config SHALL đảm bảo các microservices liên quan tự động lắng nghe kênh `system.limits.updates` và tải lại hạn mức cước mới vào bộ nhớ trong vòng < 5 giây.
 
-**User Story:** Là một System Admin, tôi muốn cấu hình động các gói cước và hạn mức tài nguyên đi kèm từ hệ thống để thay đổi chính sách kinh doanh SaaS mà không cần thay đổi mã nguồn.
-
-#### Acceptance Criteria
-1. THE Tenant_Config SHALL cung cấp các REST API cho System Admin để thực hiện CRUD các gói cước và hạn mức:
-   - `GET /api/v1/system/tiers`: Xem danh sách tất cả các gói cước và hạn mức tài nguyên đang được định nghĩa.
-   - `POST /api/v1/system/tiers`: Khởi tạo một hạng gói cước mới hoặc cập nhật hạn mức của gói cước hiện tại.
-   - `DELETE /api/v1/system/tiers/:tier`: Xóa một hạng gói cước (chỉ cho phép nếu không còn tenant nào sử dụng).
-2. IF request không mang JWT token hợp lệ của System Admin (role `system_admin`), THEN THE Tenant_Config SHALL từ chối và trả về HTTP 403.
-3. WHEN hạn mức gói cước (Tier Limits) được lưu thành công vào DB, THE Tenant_Config SHALL cập nhật Redis cache key `tier:{tier_name}:limits` và publish một thông điệp thông báo lên kênh Redis Pub/Sub `system.limits.updates`.
-4. THE Tenant_Config SHALL đảm bảo các microservices liên quan tự động lắng nghe kênh `system.limits.updates` và tải lại hạn mức cước mới vào bộ nhớ trong vòng < 5 giây.
+### Requirement 12: Quản lý Vai trò & Quyền hạn Tùy chỉnh (Custom Roles & Permissions)
+- **User Story:** Là một Tenant Admin, tôi muốn tự do tạo các vai trò (roles) tùy chỉnh cho tổ chức của mình và gán các quyền hạn (permissions) chi tiết đi kèm nhằm thực thi phân quyền Zero-Trust.
+- **Acceptance Criteria:**
+  1. THE Tenant_Config SHALL cung cấp các REST API cho Tenant Admin để quản lý vai trò và quyền hạn:
+     - `GET /api/v1/config/roles`: Xem danh sách các vai trò hiện có của Tenant.
+     - `POST /api/v1/config/roles`: Tạo một vai trò tùy chỉnh mới và gán danh sách permissions đi kèm.
+     - `PUT /api/v1/config/roles/:role_name/permissions`: Cập nhật danh sách permissions cho vai trò được chỉ định.
+     - `DELETE /api/v1/config/roles/:role_name`: Xóa một vai trò tùy chỉnh (chỉ cho phép nếu vai trò không là vai trò hệ thống mặc định).
+  2. THE Tenant_Config SHALL tự động gọi API Keycloak Realm để đồng bộ hóa tạo/xóa vai trò (Realm Role) tương ứng khi có yêu cầu POST hoặc DELETE đối với vai trò từ Dashboard.
+  3. WHEN danh sách permissions của một vai trò được cập nhật thành công trong `config_db`, THE Tenant_Config SHALL lập tức cập nhật/ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 days).
+  4. THE Tenant_Config SHALL publish một thông điệp invalidation lên kênh Redis Pub/Sub `config.updates` ngay khi cập nhật permissions để báo cho API Gateway giải phóng local cache của vai trò đó trong vòng < 5 giây.
+  5. THE Tenant_Config SHALL chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định của hệ thống (`admin`, `manager`, `agent`, `viewer`) để tránh làm hỏng luồng hoạt động cơ bản của hệ thống. Đồng thời, THE Tenant_Config SHALL chặn các yêu cầu tạo mới hoặc đổi tên vai trò tùy chỉnh trùng với danh sách các từ khóa bảo lưu của hệ thống (`system`, `system_admin`, `super_admin`, `root`) nhằm ngăn ngừa nguy cơ Privilege Escalation.
+  6. THE Tenant_Config SHALL đảm bảo cách ly dữ liệu tuyệt đối giữa các tenant: Tenant Admin chỉ được phép CRUD các vai trò của tenant_id của mình (trích xuất từ JWT).
 
 
 ### Requirement: Zero-Trust Access Control & Permission Manifest

@@ -37,12 +37,14 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 **User Story:** Là admin, tôi muốn phân quyền chi tiết cho từng user.
 
 #### Acceptance Criteria
-1. THE Auth_Service SHALL hỗ trợ roles: Admin, Manager, Agent, Viewer
-2. Admin: full access tất cả features
-3. Manager: manage content, campaigns, analytics, approve posts
-4. Agent: inbox, reply messages, view contacts
-5. Viewer: read-only access to dashboards and reports
-6. THE Auth_Service SHALL include roles trong JWT token claims
+1. THE Auth_Service SHALL hỗ trợ các vai trò mặc định: Admin, Manager, Agent, Viewer.
+2. Admin: full access tất cả features.
+3. Manager: manage content, campaigns, analytics, approve posts.
+4. Agent: inbox, reply messages, view contacts.
+5. Viewer: read-only access to dashboards and reports.
+6. THE Auth_Service SHALL hỗ trợ việc tạo và quản lý các vai trò tùy chỉnh (Custom Realm/Client Roles) một cách động do Tenant Admin yêu cầu thông qua việc tích hợp các API quản trị của Keycloak (Keycloak Admin APIs).
+7. THE Auth_Service SHALL hỗ trợ gán hoặc thu hồi vai trò (cả vai trò mặc định và vai trò tùy chỉnh) cho từng người dùng một cách động thông qua yêu cầu từ User Service.
+8. THE Auth_Service SHALL include danh sách roles của người dùng trong JWT token claims.
 
 ### Requirement 4: User Management
 

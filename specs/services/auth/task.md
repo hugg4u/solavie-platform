@@ -49,6 +49,8 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 3.5: Viewer: read-only access to dashboards and reports
 - [x] AC 3.6: THE Auth_Service SHALL include roles trong JWT token claims
   - Mapper `roles-mapper` trong Keycloak client config tự động inject roles vào JWT
+- [ ] AC 3.7: THE Auth_Service (Keycloak) SHALL hỗ trợ tạo vai trò tùy chỉnh (Custom Roles) động thông qua các API quản trị của Keycloak (Keycloak Admin APIs)
+- [ ] AC 3.8: THE Auth_Service (Keycloak) SHALL hỗ trợ gán hoặc thu hồi vai trò tùy chỉnh cho người dùng qua các API quản trị của Keycloak
 
 ### Task 4: 4: User Management
 > *User Story: Là admin, tôi muốn quản lý users trong tổ chức.*
@@ -149,12 +151,54 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
 - [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
 
+---
+
+## Task Migration: Multi-Realm → Keycloak Organizations (Enterprise SaaS)
+
+> **Tài liệu chi tiết:** [migration.md](./migration.md)
+> **Trạng thái:** PLANNED — Thực hiện khi số tenant vượt 100
+
+### Giai đoạn 0 — Security Fix (NGAY LẬP TỨC)
+- [x] **[CRITICAL]** Cập nhật `handler.lua` dòng 213-219: Bổ sung Realm Master check cho role `system`/`system_admin` để chống Privilege Escalation
+- [x] Thêm `KONG_MASTER_REALM_TENANT_ID` vào `docker-compose.yml` và `.env.example`
+- [x] Viết test case kiểm tra block Privilege Escalation
+
+### Giai đoạn 1 — Foundation (Sprint 1-2)
+- [ ] Upgrade Keycloak v24 → v26+, enable `KC_FEATURES=organization`
+- [ ] Tạo realm `solavie` với shared clients (`dashboard`, `api-gateway`, `user-service-client`)
+- [ ] Cấu hình Token Claims Mapper inject `tenant_id` từ `organization.attributes.tenant_id`
+- [ ] Viết `provision_organization.py` thay thế `provision_realm.py`
+- [ ] Viết `migrate_realm_to_org.py` migration script
+
+### Giai đoạn 2 — Core Integration (Sprint 3-4)
+- [ ] Cập nhật Kong OIDC plugin issuer → `http://keycloak:8080/realms/solavie/...`
+- [ ] Cập nhật `handler.lua`: hỗ trợ extract `tenant_id` từ cả hai JWT format (backward compat)
+- [ ] Cập nhật `sync_worker.py`: Admin API calls từ realm-scoped → org-scoped
+- [ ] Cập nhật Dashboard OIDC config → realm `solavie` cố định
+
+### Giai đoạn 3 — Data Migration (Sprint 5-6)
+- [ ] Chạy `migrate_realm_to_org.py` cho từng tenant (batch migration)
+- [ ] Gửi email thông báo reset password tới tất cả users
+- [ ] Flip Kong OIDC issuer → realm `solavie` (cutover)
+- [ ] Monitor 7 ngày, decommission realm cũ
+
+### Giai đoạn 4 — Hardening (Sprint 7)
+- [ ] Migrate Redis standalone → Redis Cluster (3 master + 3 replica)
+- [ ] Đổi Kong L1 cache từ `local_cache` → `ngx.shared.DICT` (fix W2)
+- [ ] Triển khai Circuit Breaker cho API Fallback call tới Tenant Config Service (fix W6)
+- [ ] Load test: 1000 concurrent logins, p95 < 500ms
+
+---
+
 ## Done When
 
 - [x] All Acceptance Criteria for Requirements are implemented and verified.
 - [x] Unit test coverage is >80%.
 - [x] Logs are formatted as structured JSON and trace context is propagated.
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
+- [x] **[MIGRATION]** Security fix W1 deployed (`handler.lua` Realm Master check).
+- [ ] **[MIGRATION]** All tenants migrated sang Keycloak Organizations, realm cũ decommissioned.
+- [ ] **[MIGRATION]** NFR đạt: 10,000+ tenant, 1000 concurrent login p95 < 500ms.
 
 ---
-*Last updated: 2026-06-01 — All core tasks COMPLETED*
+*Last updated: 2026-06-08 — Migration plan added (see migration.md)*

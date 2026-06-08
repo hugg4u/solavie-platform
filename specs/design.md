@@ -261,7 +261,8 @@ Tất cả services PHẢI tuân theo các chuẩn chung định nghĩa trong `s
 9. **Tracing** — W3C trace context, OpenTelemetry
 10. **Global Permission Specification & Signed Headers**:
     - Tất cả các mã quyền hạn trong hệ thống phải tuân thủ convention: `{service_name}:{resource_type}:{action_name}`.
-    - Hỗ trợ ký tự đại diện `*` (wildcard) ở bất kỳ cấp độ nào.
+    - Hỗ trợ ký tự đại diện `*` (wildcard) ở bất kỳ cấp độ nào để bypass in-memory check tại microservice.
+    - Tự động phân giải wildcard `*` tại Gateway: vai trò `admin` của tenant được gán wildcard `*` (nhưng dữ liệu bị cô lập theo tenant_id ở DB); vai trò `system` hoặc `system_admin` chỉ được gán wildcard `*` và bypass khi và chỉ khi token được phát hành từ Realm Master (`solavie-system-master`). Gateway chặn và trả về `403 Forbidden` nếu các vai trò hệ thống này được gán ở realm tenant thông thường (Privilege Escalation Protection).
     - Mọi microservice (downstream service) khi nhận request nội bộ từ Gateway bắt buộc phải xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để chống giả mạo.
     - Mọi microservice bắt buộc phải cung cấp API manifest `GET /api/v1/permissions/manifest` liệt kê các tài nguyên và hành động mà nó hỗ trợ để Dashboard tổng hợp và render UI cấu hình động.
 

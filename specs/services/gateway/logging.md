@@ -66,7 +66,7 @@ GET :8001/metrics    → Prometheus metrics (admin API)
   "user_id": "user-uuid",
   "roles": ["admin", "user"],
   "permissions": ["analytics:metrics:read", "analytics:reports:read"],
-  "cache_status": "local_shm_hit",
+  "cache_status": "local_worker_hit", // local_worker_hit, redis_hit, fallback_api_hit
   "signature_generated": true
 }
 ```
@@ -74,7 +74,7 @@ GET :8001/metrics    → Prometheus metrics (admin API)
 ### Zero-Trust Security Metrics
 ```
 gateway_security_signature_generated_total: Counter [tenant_id, service]
-gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache_layer: shm, redis, fallback
+gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache_layer: local_worker, redis, fallback
 gateway_security_rbac_fetch_failures_total: Counter [tenant_id, source] // source: redis, fallback_tcs
 ```
 

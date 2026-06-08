@@ -353,25 +353,31 @@ kong:
 Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện phân giải quyền hạn động từ vai trò người dùng (User Roles) sang danh sách quyền hạn chi tiết (Permissions), sau đó ký số bằng HMAC-SHA256 để chống giả mạo khi chuyển tiếp request xuống downstream.
 
 ### Luồng Phân Giải Quyền Hạn (3-Step Lookup):
-1.  **Bước 1: Giải mã JWT**: Trích xuất `tenant_id`, `user_id` (`sub`) và `roles` (từ `realm_access.roles` hoặc `roles`).
+1.  **Bước 1: Giải mã JWT**: Trích xuất `tenant_id` (từ `claims.tenant_id`), `user_id` (`sub`) và `roles` (từ `realm_access.roles` hoặc `roles`).
 2.  **Bước 2: Tìm kiếm Quyền hạn**:
-    - **Tầng 1 (Redis Cache)**: Gửi lệnh `GET tenant:{tenant_id}:role:{role}:permissions` tới Redis cho từng vai trò.
-    - **Tầng 2 (Kong shm)**: Nếu Redis sập hoặc cache miss, truy xuất trong Kong Shared Memory Cache (`kong.shared.policy_cache`).
-    - **Tầng 3 (API Fallback)**: Nếu shm cache miss, gửi HTTP Request gọi trực tiếp tới Tenant Config Service:
-      `GET http://tenant-config:3006/api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role1,role2...`
-      Sau khi nhận phản hồi, ghi ngược lại vào Redis và Kong shm.
-    - **Fail-Secure**: Nếu cả 3 bước đều thất bại, trả về lỗi `503 Service Unavailable` hoặc `403 Forbidden` (không tự ý fallback sang quyền mặc định).
-3.  **Bước 3: Hợp nhất (Union Set) & Ánh xạ Wildcard**:
+    - **Tầng 1 (Local Worker Cache)**: Tra cứu bộ nhớ đệm trong memory của Kong worker (`local_cache[tenant_id .. ":" .. role]`). TTL là 5 phút.
+    - **Tầng 2 (Redis Cache)**: Gửi lệnh `GET tenant:{tenant_id}:role:{role}:permissions` tới Redis cho từng vai trò. Nếu thành công, ghi nhận lại vào Local Worker Cache.
+    - **Tầng 3 (API Fallback)**: Nếu Redis sập hoặc cache miss, gửi HTTP Request gọi trực tiếp tới Tenant Config Service:
+      `GET http://tenant-config:3006/api/v1/config/tenants/{tenant_id}/roles/permissions?roles=role`
+      Sau khi nhận phản hồi, ghi ngược lại vào Redis (TTL 1 hour) và Local Worker Cache (TTL 5 mins).
+    - **Fail-Secure**: Nếu cả 3 bước đều thất bại và người dùng có vai trò, trả về lỗi `503 Service Unavailable` (Authorization service offline).
+3.  **Bước 3: Hợp nhất (Union Set) & Deterministic Sorting & Ánh xạ Wildcard**:
     - Gộp tất cả các quyền của các roles lại.
-    - Nếu vai trò là `admin` hoặc `system`, tự động thu gọn thành `*` (wildcard).
+    - Ánh xạ Wildcard an toàn:
+      - Nếu người dùng có vai trò `admin` thuộc Realm của tenant, tự động gán quyền `*` (wildcard) và chuyển tiếp đi (quyền `*` này bị giới hạn dữ liệu bởi `X-Tenant-ID` ở downstream).
+      - Nếu người dùng có vai trò `system` hoặc `system_admin`, Gateway thực hiện kiểm tra: nếu `tenant_id` trùng khớp với Realm Master (`solavie-system-master`), tự động gán quyền `*` và cho phép bypass. Ngược lại, nếu vai trò hệ thống này được khai báo ở Realm của tenant thông thường, Gateway chặn request ngay lập tức và trả về `403 Forbidden` để ngăn chặn Privilege Escalation.
+    - Sắp xếp tăng dần theo bảng chữ cái danh sách permissions để đảm bảo tính nhất quán (deterministic) khi tạo chữ ký số.
 4.  **Bước 4: HMAC Signing**:
     - Payload ký: `tenant_id + ":" + user_id + ":" + user_permissions`
     - Signature: `hex(hmac_sha256(GATEWAY_SIGNING_SECRET, payload))`
 5.  **Bước 5: Inject Headers**:
-    - Inject `X-Tenant-ID`
-    - Inject `X-User-ID`
-    - Inject `X-User-Permissions` (chuỗi CSV)
-    - Inject `X-Permissions-Signature` (signature)
+    - Inject `X-Tenant-ID` (khớp với header ban đầu hoặc trích xuất từ JWT).
+    - Inject `X-User-ID` (user_id).
+    - Inject `X-User-Permissions` (chuỗi CSV các quyền đã sắp xếp).
+    - Inject `X-Permissions-Signature` (signature).
+6.  **Bước 6: Token & User Revocation Verification**:
+    - Check JTI Blacklist: Gửi lệnh `GET blacklist:jti:{jti}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (Token has been revoked).
+    - Check User Suspension: Gửi lệnh `GET blacklist:user:{user_id}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (User has been suspended).
 
 ## Data Models
 

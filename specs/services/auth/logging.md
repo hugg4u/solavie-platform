@@ -58,6 +58,17 @@ GET /health/live   → Keycloak liveness
 GET /metrics       → Prometheus metrics
 ```
 
+## Sync Worker Logs
+Auth Sync Worker chạy bằng Python xuất bản log stdout ở định dạng cấu trúc JSON:
+```json
+{
+  "timestamp": "2026-06-07 01:50:00,123",
+  "level": "INFO",
+  "category": "solavie.auth.sync_worker",
+  "message": "Updating realm 'tenant-test-uuid' with passwordPolicy length(12) and failureFactor(5)"
+}
+```
+
 ## Alert Rules
 | Alert | Condition | Severity |
 |-------|-----------|----------|
@@ -68,3 +79,4 @@ GET /metrics       → Prometheus metrics
 | SessionOverload | active_sessions > 10000 | warning |
 | TokenRefreshFailing | token errors > 10 in 5m | warning |
 | RealmCreationFail | admin API errors | critical |
+| SyncWorkerFailure | sum(rate(sync_worker_errors_total[5m])) > 1 | critical |

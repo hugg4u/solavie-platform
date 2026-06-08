@@ -145,11 +145,18 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 
 ### Task 7: Dynamic RBAC & HMAC Signing Plugin (MỚI)
 - [x] Triển khai Lua plugin `dynamic-policy` xử lý trích xuất Keycloak roles và phân giải permissions từ các nguồn cache.
-- [x] Triển khai cơ chế Fail-Secure: Trả về 503 hoặc 403 khi tất cả các nguồn dữ liệu đều offline.
-- [x] Triển khai hàm ký HMAC-SHA256 trên Kong Lua để tạo signature.
-- [x] Inject headers `X-User-Permissions` và `X-Permissions-Signature` vào downstream request.
+  - **Implemented:** 3-step lookup: Local memory cache (worker-level TTL 5 mins) -> Redis cache (`tenant:{tenant_id}:role:{role}:permissions`) -> API Fallback tới Tenant Config Service.
+- [x] Triển khai cơ chế Fail-Secure: Trả về 503 Service Unavailable hoặc 403 Forbidden khi tất cả các nguồn dữ liệu đều offline.
+- [x] Sắp xếp tăng dần theo bảng chữ cái (deterministic sorting) danh sách permissions để đảm bảo tính nhất quán của chữ ký số.
+- [x] Triển khai hàm ký HMAC-SHA256 trên Kong Lua để tạo signature từ payload: `tenant_id:user_id:user_permissions` bằng `GATEWAY_SIGNING_SECRET`.
+- [x] Tự động gán quyền wildcard `*` cho `admin` của tenant và check Realm Master của `system`/`system_admin` để tránh privilege escalation.
+- [x] Inject headers `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` vào downstream request.
 - [x] Bổ sung cấu hình CORS cho phép các header bảo mật mới đi qua.
 
+### Task 8: Revocation & Suspension Blacklists (MỚI)
+- [x] Triển khai kiểm tra JTI Blacklist lưu trữ trong Redis key `blacklist:jti:{jti}` trong plugin `dynamic-policy` để từ chối các token đã bị thu hồi tức thời.
+- [x] Triển khai kiểm tra User Blacklist trong Redis key `blacklist:user:{user_id}` để từ chối các người dùng đang bị đình chỉ (Suspended).
+
 ---
-*Last updated: 2026-06-06 — Core tasks and Dynamic RBAC tasks completed; MCP tasks added.*
+*Last updated: 2026-06-07 — Core tasks, Dynamic RBAC, HMAC signing, JTI/User blacklists, and MCP tasks completed.*
 

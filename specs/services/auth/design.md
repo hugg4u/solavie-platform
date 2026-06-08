@@ -101,12 +101,13 @@ Keycloak Instance
 │   │   ├── admin
 │   │   ├── manager
 │   │   ├── agent
-│   │   └── viewer
+│   │   ├── viewer
+│   │   └── (custom roles - dynamic creation)
 │   │
 │   ├── Users:
 │   │   ├── user-1 (roles: [admin])
 │   │   ├── user-2 (roles: [manager])
-│   │   └── user-3 (roles: [agent])
+│   │   └── user-3 (roles: [agent, custom_role])
 │   │
 │   ├── Token Settings:
 │   │   ├── Access Token Lifespan: 15 minutes
@@ -133,7 +134,7 @@ Keycloak Instance
   "iat": 1700000000,
   "azp": "dashboard",
   "realm_access": {
-    "roles": ["manager"]
+    "roles": ["manager", "sales_agent"]
   },
   "tenant_id": "tenant-abc-uuid",
   "email": "user@company.com",
@@ -186,6 +187,29 @@ sequenceDiagram
     Keycloak-->>User: Email invitation (set password)
     User->>Keycloak: Set password + login
     Keycloak-->>User: JWT token (tenant_id in claims)
+```
+
+## Custom Role Creation & Synchronization Flow
+
+```mermaid
+sequenceDiagram
+    participant Admin as Tenant Admin
+    participant Dashboard as Next.js Dashboard
+    participant TCS as Tenant Config Service
+    participant DB as PostgreSQL (config_db)
+    participant Redis as Redis Cache
+    participant KC as Keycloak Admin API
+
+    Admin->>Dashboard: Click "Create Custom Role"
+    Dashboard->>TCS: POST /api/v1/config/roles {name: sales_agent, permissions: [...]}
+    TCS->>DB: Save role definition & permissions mapping
+    TCS->>KC: POST /admin/realms/{tenant_id}/roles {name: sales_agent} (Provision Role)
+    KC-->>TCS: 201 Created
+    TCS->>Redis: SET tenant:{tenant_id}:role:sales_agent:permissions [permissions_list]
+    TCS->>Redis: PUBLISH config.updates {tenant_id, category: "role_permissions", role: "sales_agent"}
+    Redis-->>TCS: Ack
+    TCS-->>Dashboard: 201 Created (Success)
+    Dashboard-->>Admin: Show success toast
 ```
 
 ## Docker Compose
