@@ -80,6 +80,16 @@ CREATE POLICY tenant_pref_isolation_policy ON user_preferences
 * `PUT /api/v1/users/preferences`
   * Mô tả: Thay đổi cấu hình giao diện (theme, ngôn ngữ).
   * Body: `{"theme": "light", "language": "en"}`
+* `POST /api/v1/users/:id/roles` (Yêu cầu quyền Admin)
+  * Mô tả: Gán vai trò tùy chỉnh cho nhân viên.
+  * Body: `{"roleName": "custom_role"}`
+* `DELETE /api/v1/users/:id/roles/:name` (Yêu cầu quyền Admin)
+  * Mô tả: Thu hồi vai trò tùy chỉnh khỏi nhân viên.
+* `POST /api/v1/users/roles` (API nội bộ/Auth Proxy - Yêu cầu signature hệ thống)
+  * Mô tả: Tạo vai trò tùy chỉnh trên Keycloak.
+  * Body: `{"roleName": "custom_role"}`
+* `DELETE /api/v1/users/roles/:name` (API nội bộ/Auth Proxy - Yêu cầu signature hệ thống)
+  * Mô tả: Xóa vai trò tùy chỉnh trên Keycloak.
 
 ### 2. gRPC Interface (Dành cho giao tiếp nội bộ tốc độ cao)
 ```protobuf
@@ -201,19 +211,30 @@ sequenceDiagram
 Trả về JSON chứa danh sách các tài nguyên và hành động được định nghĩa cho service này:
 ```json
 {
-    "service": "user",
-    "resources": [
-        {
-            "name": "users",
-            "description": "Tenant workspace users",
-            "actions": [
-                "create",
-                "read",
-                "update",
-                "delete"
-            ]
-        }
-    ]
+  "service": "auth",
+  "resources": [
+    {
+      "name": "users",
+      "description": "Tenant workspace users",
+      "actions": [
+        "read",
+        "write",
+        "invite",
+        "suspend",
+        "unsuspend"
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Tenant workspace roles",
+      "actions": [
+        "create",
+        "delete",
+        "assign",
+        "revoke"
+      ]
+    }
+  ]
 }
 ```
 
@@ -243,11 +264,11 @@ Dịch vụ thực hiện kiểm tra và xác thực chữ ký signature trên m
 
 #### B. Phân giải Quyền hạn (Dynamic RBAC Check)
 * `PermissionsGuard` phân tách danh sách `x-user-permissions` dạng CSV thành một tập hợp (`Set`).
-* So khớp quyền với endpoint nghiệp vụ (ví dụ: cần quyền `user:users:read`):
+* So khớp quyền với endpoint nghiệp vụ (ví dụ: cần quyền `auth:users:read`):
   - Kiểm tra nếu chứa `*` (Wildcard toàn hệ thống) -> Cho phép.
-  - Kiểm tra nếu chứa `user:*` (Wildcard toàn service) -> Cho phép.
-  - Kiểm tra nếu chứa `user:users:*` (Wildcard toàn tài nguyên) -> Cho phép.
-  - Kiểm tra nếu chứa chính xác `user:users:read` -> Cho phép.
+  - Kiểm tra nếu chứa `auth:*` (Wildcard toàn service) -> Cho phép.
+  - Kiểm tra nếu chứa `auth:users:*` (Wildcard toàn tài nguyên) -> Cho phép.
+  - Kiểm tra nếu chứa chính xác `auth:users:read` -> Cho phép.
   - Ngược lại -> Ném ra lỗi `403 Forbidden`.
 
 #### C. Thiết lập Tenant Context cho RLS
