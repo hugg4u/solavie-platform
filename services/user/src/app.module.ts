@@ -8,12 +8,13 @@ import { KeycloakModule } from './keycloak/keycloak.module';
 import { UsersModule } from './users/users.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { HealthController } from './common/observability/health.controller';
+import { PermissionsController } from './common/observability/permissions.controller';
 import { MetricsService } from './common/observability/metrics.service';
 import { MetricsInterceptor } from './common/observability/metrics.interceptor';
 
 @Module({
   imports: [PrismaModule, RedisModule, KeycloakModule, UsersModule],
-  controllers: [AppController, HealthController],
+  controllers: [AppController, HealthController, PermissionsController],
   providers: [
     AppService,
     MetricsService,

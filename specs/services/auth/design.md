@@ -199,6 +199,7 @@ sequenceDiagram
     participant Admin as Tenant Admin
     participant Dashboard as Next.js Dashboard
     participant TCS as Tenant Config Service
+    participant US as User Service (Auth Proxy)
     participant DB as PostgreSQL (config_db)
     participant Redis as Redis Cache
     participant KC as Keycloak Admin API
@@ -206,8 +207,10 @@ sequenceDiagram
     Admin->>Dashboard: Click "Create Custom Role"
     Dashboard->>TCS: POST /api/v1/config/roles {name: sales_agent, permissions: [...]}
     TCS->>DB: Save role definition & permissions mapping
-    TCS->>KC: POST /admin/realms/{tenant_id}/roles {name: sales_agent} (Provision Role)
-    KC-->>TCS: 201 Created
+    TCS->>US: POST /api/v1/users/roles {roleName: sales_agent} (via system HMAC signature)
+    US->>KC: POST /admin/realms/solavie/roles {name: tenant_id:sales_agent} (Provision Role)
+    KC-->>US: 201 Created
+    US-->>TCS: 201 Created
     TCS->>Redis: SET tenant:{tenant_id}:role:sales_agent:permissions [permissions_list]
     TCS->>Redis: PUBLISH config.updates {tenant_id, category: "role_permissions", role: "sales_agent"}
     Redis-->>TCS: Ack

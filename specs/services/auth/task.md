@@ -49,8 +49,6 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 3.5: Viewer: read-only access to dashboards and reports
 - [x] AC 3.6: THE Auth_Service SHALL include roles trong JWT token claims
   - Mapper `roles-mapper` trong Keycloak client config tự động inject roles vào JWT
-- [ ] AC 3.7: THE Auth_Service (Keycloak) SHALL hỗ trợ tạo vai trò tùy chỉnh (Custom Roles) động thông qua các API quản trị của Keycloak (Keycloak Admin APIs)
-- [ ] AC 3.8: THE Auth_Service (Keycloak) SHALL hỗ trợ gán hoặc thu hồi vai trò tùy chỉnh cho người dùng qua các API quản trị của Keycloak
 
 ### Task 4: 4: User Management
 > *User Story: Là admin, tôi muốn quản lý users trong tổ chức.*
@@ -143,13 +141,6 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Deploy service to local Docker / Kubernetes cluster.
 - [x] Perform end-to-end tests using the Gateway (Kong) routing.
 
-### Task: Security Integration & Dynamic RBAC (MỚI)
-- [ ] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `auth`.
-- [ ] Kiểm tra tính cô lập dữ liệu multi-tenant thông qua header `X-Tenant-ID`.
-- [ ] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway.
-- [ ] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `auth:*`, `auth:{resource}:*`).
-- [ ] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của service.
-- [ ] Bổ sung các test cases kiểm tra Signature Verification và Access Control Denied.
 
 ---
 
@@ -182,8 +173,17 @@ This document tracks the implementation checklist for **AUTH Service** based on 
   - `services/auth/scripts/solavie-realm-template.json` (bản sao trùng lặp)
 - [x] **[TEST REFACTOR]** Tái cấu trúc `test_auth.py` và `test_ac47_ac48.py` để sử dụng duy nhất mô hình Organizations trong realm `solavie` (loại bỏ tạo realm động)
 
-### Giai đoạn 3 — Data Migration (Sprint 5-6)
-- [x] **[SKIPPED]** Bỏ qua giai đoạn di trú dữ liệu thực tế do hệ thống đang trong giai đoạn phát triển (Dev) và chưa release. Tiến hành chuyển đổi kiến trúc trực tiếp và sạch sẽ.
+### Giai đoạn 3 — Security Integration & Dynamic RBAC (Sprint 5-6)
+- [x] **Custom Roles động qua Keycloak Admin API (realm `solavie`):**
+  - [x] Triển khai API tạo Custom Role động với prefix `tenant_id:` trong realm `solavie` tại **User Service (Auth Proxy)**.
+  - [x] Triển khai API gán và thu hồi Custom Role cho người dùng trong Organization tại **User Service (Auth Proxy)**.
+- [x] **Security Integration & Gateway Verification:**
+  - [x] Xác minh các API endpoint được bảo vệ bởi Kong Gateway với required client scope là `auth` (được định tuyến tới User Service Auth Proxy).
+  - [x] Kiểm tra tính cô lập dữ liệu multi-tenant trong Auth Service thông qua header `X-Tenant-ID`.
+  - [x] Triển khai HMAC Signature Verification Guard/Interceptor sử dụng `GATEWAY_SIGNING_SECRET` để xác thực request từ Gateway trong **User Service (Auth Proxy)**.
+  - [x] Triển khai cơ chế so khớp quyền hạn Dynamic RBAC in-memory O(1) hỗ trợ wildcard (`*`, `auth:*`, `auth:{resource}:*`) tại **User Service (Auth Proxy)**.
+  - [x] Thực hiện tích hợp Endpoint `/api/v1/permissions/manifest` trả về danh sách tài nguyên và quyền hạn của dịch vụ tại **User Service (Auth Proxy)**.
+  - [x] Bổ sung các integration test cases kiểm tra Signature Verification và Access Control Denied.
 
 ### Giai đoạn 4 — Hardening, Logging & Load Testing (Sprint 7)
 - [ ] **Cập nhật tài liệu vận hành**:

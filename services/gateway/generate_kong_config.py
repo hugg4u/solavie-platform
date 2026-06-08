@@ -188,7 +188,13 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "name": "user-api",
                         "paths": ["/api/v1/users"],
                         "strip_path": False,
-                        "plugins": [jwt_plugin]
+                        "plugins": [jwt_plugin],
+                        "tags": ["scope:auth"]
+                    },
+                    {
+                        "name": "user-permissions-manifest",
+                        "paths": ["/api/v1/permissions/manifest"],
+                        "strip_path": False
                     }
                 ]
             },
