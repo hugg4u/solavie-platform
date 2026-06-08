@@ -169,17 +169,17 @@ graph TB
 | 2 | Nhấn "Tạo Role mới" | Hiển thị form: Tên Role, Mô tả |
 | 3 | Nhập tên Role (VD: "Trưởng nhóm KD miền Nam") | |
 | 4 | Hệ thống hiển thị ma trận Permissions | Admin tick chọn các permissions cần gán (VD: `inbox:read`, `inbox:chat`, `contacts:view`) |
-| 5 | Nhấn "Lưu" | Lưu Role + Permissions vào Keycloak Realm DB |
-| 6 | | Cập nhật Permission Cache trên Redis (key: `{tenant_id}:permissions:{role_id}`) |
+| 5 | Nhấn "Lưu" | Gọi Keycloak Admin API tạo Realm Role (chỉ lưu Role Name ở Keycloak) và lưu Role + Permissions vào PostgreSQL (config_db) của Tenant Config Service |
+| 6 | | Lưu permissions dạng CSV vào Redis (key: `tenant:{tenant_id}:role:{role_name}:permissions`) và gửi tín hiệu invalidation lên kênh Redis Pub/Sub `config.updates` để Gateway xóa local worker cache |
 | 7 | | Audit log ghi nhận hành động tạo Role |
 
 **Alternative Flows:**
 
 | ID | Điều kiện | Hành động |
 |----|----------|----------|
-| AF-02a | Admin chỉnh sửa Permissions của Role đã tồn tại | Cập nhật DB, invalidate Redis cache, tất cả user thuộc Role này sẽ có quyền mới ngay lập tức (hot reload) |
-| AF-02b | Admin gán Role cho User | Cập nhật mapping User-Role, invalidate cache user đó |
-| AF-02c | Admin xóa Role | Kiểm tra không còn User nào gán Role này → Xóa. Nếu còn User → Yêu cầu chuyển User sang Role khác trước |
+| AF-02a | Admin chỉnh sửa Permissions của Role đã tồn tại | Cập nhật database PostgreSQL của Tenant Config, ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` và publish event hủy cache qua Redis Pub/Sub `config.updates`. Gateway và downstream sẽ áp dụng quyền mới ngay lập tức |
+| AF-02b | Admin gán Role cho User | Keycloak Admin API map Role với User. JWT token mới của User sẽ chứa Role claim mới; Gateway tự động phân giải thành các permissions tương ứng |
+| AF-02c | Admin xóa Role | Kiểm tra không còn User nào gán Role này. Xóa Realm Role trên Keycloak, xóa Role & Permissions trong PostgreSQL, xóa cache Redis và publish event hủy cache. Chặn xóa các vai trò hệ thống mặc định |
 
 **Exception Flows:**
 

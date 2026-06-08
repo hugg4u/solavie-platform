@@ -128,12 +128,13 @@ graph TB
 | 18| **Media Processor**| Python  | FastAPI | 8008 | - | Chạy Celery worker nén ảnh, tạo thumbnail và transcode video chuẩn API mạng xã hội. |
 
 ### 2.3. Chiến lược Multi-tenancy & Cô lập dữ liệu (Data Isolation)
-*   **Identity & Access:** Tận dụng tính năng Multi-realm của Keycloak để cung cấp mỗi Tenant một không gian định danh cô lập hoàn toàn. Token phát hành chứa `tenant_id` claim. Đồng thời, hệ thống áp dụng cơ chế **Hybrid User Architecture**, tách rời **Xác thực danh tính (Keycloak)** và **Hồ sơ nghiệp vụ (User Service)** để tối ưu bảo mật và mở rộng nghiệp vụ linh hoạt.
+*   **Identity & Access:** Tận dụng tính năng Multi-realm của Keycloak để cung cấp mỗi Tenant một không gian định danh cô lập hoàn toàn. Token Access JWT chứa `tenant_id` và `roles` claims. API Gateway (Kong) tự động phân giải các vai trò này thành danh sách quyền hạn chi tiết (permissions dạng CSV, sắp xếp alphabet tăng dần) qua cơ chế cache 3 tầng (local shm cache -> Redis -> API Fallback). Để chặn đứng nguy cơ Header Spoofing nội bộ, Gateway thực hiện ký số payload `tenant_id:user_id:user_permissions` bằng thuật toán HMAC-SHA256 qua khóa bí mật `GATEWAY_SIGNING_SECRET` và gửi kèm chữ ký trên header `X-Permissions-Signature`. Tất cả downstream services bắt buộc verify chữ ký này bằng phương pháp timing-safe (`compare_digest` / `timingSafeEqual`).
 *   **Database Isolation:** Áp dụng mô hình **Shared Database, Shared Schema** nhưng bắt buộc áp dụng **PostgreSQL Row-Level Security (RLS)** trên cột `tenant_id` đối với tất cả các bảng. Mọi câu lệnh SQL từ backend bắt buộc phải filter theo `tenant_id` hiện tại lấy từ JWT.
 *   **Event-Driven Routing:** Message payload truyền qua Kafka bắt buộc chứa trường `tenant_id` trong Kafka Headers để các consumer thực hiện xử lý tách biệt.
 *   **Vector Database:** Qdrant cấu hình metadata filter `tenant_id` trên mọi Collection để ngăn chặn việc chatbot đọc chéo dữ liệu tri thức của Tenant khác.
 *   **Object Storage (MinIO/S3):** Tổ chức lưu trữ tệp theo tiền tố đường dẫn (Path Prefix): `{tenant_id}/uploads/...` và truy cập thông qua Presigned URLs ngắn hạn (TTL 15 phút).
-*   **In-Memory Cache & Task Queue Broker (Redis):** Mọi Cache Key bắt buộc cấu trúc theo dạng: `{tenant_id}:{service_name}:{key}`. Đồng thời, hệ thống thực hiện phân tầng database logic trong cụm Redis: Database logic `DB 0` dành riêng cho mục đích lưu trữ Caching (configuration, embeddings, search results) và `DB 1` dành riêng cho Broker chứa hàng đợi công việc Celery/ARQ, triệt tiêu nguy cơ tranh chấp tài nguyên và chống tràn bộ nhớ.
+*   **In-Memory Cache & Task Queue Broker (Redis):** Mọi Cache Key bắt buộc cấu trúc theo dạng: `{tenant_id}:{service_name}:{key}` hoặc cấu trúc phân hệ tùy chỉnh như `tenant:{tenant_id}:role:{role_name}:permissions` cho phân quyền. Đồng thời, hệ thống thực hiện phân tầng database logic trong cụm Redis: Database logic `DB 0` dành riêng cho mục đích lưu trữ Caching (configuration, embeddings, search results, permissions) và `DB 1` dành riêng cho Broker chứa hàng đợi công việc Celery/ARQ, triệt tiêu nguy cơ tranh chấp tài nguyên và chống tràn bộ nhớ.
+
 
 ### 2.4. Sơ đồ các thành phần trong Service (Component Diagram)
 
@@ -215,19 +216,28 @@ graph TD
 #### Gateway (Kong API Gateway)
 1.  **Định tuyến API:** Tự động chuyển hướng requests từ client dựa trên URL prefix (ví dụ: `/api/v1/channels` -> `Channel Connector`).
 2.  **Tích hợp OIDC:** Xác thực tự động các Request mang Authorization Header (Bearer JWT) thông qua kết nối với Keycloak. Trả về `401 Unauthorized` nếu token không hợp lệ hoặc hết hạn.
-3.  **Request Transformation:** Trích xuất các claims từ JWT đã được xác minh (gồm `tenant_id`, `sub` làm `user_id`, `roles`) để inject thành các Header nội bộ: `X-Tenant-ID`, `X-User-ID`, `X-User-Roles` trước khi forward tới downstream microservices.
+3.  **Request Transformation & Header Injection:** Trích xuất các claims từ JWT đã được xác minh (`tenant_id`, `sub` làm `user_id`, `roles`) để inject thành các Header nội bộ: `X-Tenant-ID`, `X-User-ID`, `X-User-Roles` trước khi forward tới downstream microservices.
 4.  **Rate Limiting:** Giới hạn tần suất gọi API ở tầng Gateway dựa trên giá trị của Header `X-Tenant-ID` và Redis lưu trữ trạng thái.
 5.  **JTI Blacklisting (Thu hồi Token):** Trích xuất claim `jti` từ Access Token sử dụng API giải mã base64 hiệu năng cao của OpenResty (`ngx.decode_base64`), thực hiện đối chiếu thời gian thực với Redis blacklist cache (`blacklist:jti:{jti}`) để chặn đứng và từ chối các token đã bị đăng xuất/thu hồi với HTTP code `401 Unauthorized` trong chưa đầy 1ms.
+6.  **Dynamic RBAC & Permissions Resolution (3-Tier Cache):** Phân giải danh sách roles trong JWT token của người dùng thành danh sách các quyền hạn chi tiết (permissions) dạng CSV theo quy chuẩn `{service}:{resource}:{action}`. Tra cứu qua 3 tầng: Kong local memory cache (shm cache) -> Redis cache `tenant:{tenant_id}:role:{role_name}:permissions` -> Tenant Config Service REST API (API Fallback).
+7.  **Deterministic CSV Sorting:** Quyền hạn phân giải xong được gộp và sắp xếp tăng dần theo bảng chữ cái trước khi truyền xuống để đảm bảo tính nhất quán (deterministic).
+8.  **HMAC-SHA256 Payload Signing:** Ký số chuỗi payload `tenant_id:user_id:user_permissions` bằng thuật toán HMAC-SHA256 sử dụng khóa bí mật chung `GATEWAY_SIGNING_SECRET`. Gửi chữ ký này trên HTTP Header `X-Permissions-Signature` cùng với `X-User-Permissions` để microservices downstream xác thực, triệt tiêu nguy cơ Header Spoofing nội bộ.
+9.  **Fail-Secure & Wildcard Admin Bypass:** 
+    - Nếu người dùng có vai trò nhưng không thể phân giải được quyền (do cache lỗi và API fallback sập), Gateway áp dụng cơ chế Fail-Secure, chặn request và trả về lỗi `503 Service Unavailable`.
+    - Vai trò `admin` nội bộ của tenant tự động được gán quyền wildcard `*` (giới hạn dữ liệu trong phạm vi tenant của họ bằng `X-Tenant-ID` ở downstream).
+    - Vai trò `system` hoặc `system_admin` chỉ tự động được gán quyền wildcard `*` và cho phép bypass khi `tenant_id` trích xuất từ JWT trùng khớp với ID của Realm Master (`solavie-system-master`). Nếu các vai trò này xuất hiện ở Realm của tenant thông thường, Gateway phải từ chối gán wildcard và trả về lỗi `403 Forbidden` ngay lập tức để ngăn chặn Privilege Escalation.
 
 #### Auth Service (Keycloak)
 1.  **Cấp phát Token:** Hỗ trợ luồng OAuth2 Authorization Code Flow đối với Dashboard và Client Credentials Flow đối với service-to-service.
 2.  **Role-Based Access Control (RBAC):** Định nghĩa và phân phát các Roles sau trong JWT claims:
-    *   `Admin`: Toàn quyền cấu hình Tenant, quản lý tích hợp, phân quyền user.
-    *   `Manager`: Quản lý chiến dịch, phê duyệt nội dung AI, cấu hình chatbot, xem báo cáo.
-    *   `Agent`: Truy cập hộp thư hợp nhất, tương tác chat, xử lý danh bạ khách hàng.
-    *   `Viewer`: Chỉ xem báo cáo analytics và lịch đăng bài, không có quyền tương tác hay cấu hình.
+    -   `admin`: Toàn quyền cấu hình Tenant, quản lý tích hợp, phân quyền user.
+    -   `manager`: Quản lý chiến dịch, phê duyệt nội dung AI, cấu hình chatbot, xem báo cáo.
+    -   `agent`: Truy cập hộp thư hợp nhất, tương tác chat, xử lý danh bạ khách hàng.
+    -   `viewer`: Chỉ xem báo cáo analytics và lịch đăng bài.
 3.  **Tenant Realm Management:** API cho phép tự động khởi tạo Realm mới độc lập cùng cấu hình bảo mật mặc định khi một Tenant mới onboard trên hệ thống.
 4.  **Bảo mật nâng cao (Advanced Hardening):** Ép buộc PKCE chuẩn `S256` cho public client (`dashboard`) để bảo vệ Authorization Code Flow, áp dụng cơ chế Refresh Token Rotation (RTR) vô hiệu hóa tức thì refresh token cũ ngay sau khi sử dụng, và cấu hình chính sách OTP (MFA) mặc định sử dụng TOTP.
+5.  **Custom Realm Role Synchronization:** Đồng bộ hóa tạo/xóa các Realm Roles tương ứng khi Tenant Admin CRUD các vai trò tùy chỉnh trên Dashboard của Tenant Config Service thông qua Keycloak Admin API `/admin/realms/{realm}/roles`.
+
 
 ### 3.2. Phân hệ Tương tác Khách hàng & Kênh
 

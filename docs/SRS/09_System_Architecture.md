@@ -226,8 +226,9 @@ graph TD
 ### 9.4.1. Phân cấp & Vai trò Quản lý Cấu hình:
 1.  **Cấu hình do System Admin quản lý (Gói cước):**
     *   **Phân hạng gói (Tiers):** Gán gói cước cho Tenant (`free`, `standard`, `enterprise`) được quản lý bởi System Admin và lưu tại Redis dưới key `tenant:{tenant_id}:tier`.
-2.  **Cấu hình do Tenant Admin quản lý (BYOK & Custom Routing):**
+2.  **Cấu hình do Tenant Admin quản lý (BYOK & Custom Roles & Routing):**
     *   Tenant tự cấu hình khóa API riêng (BYOK), custom prompts, confidence thresholds qua Dashboard của Tenant. Thông tin lưu tại bảng `tenant_configs` của `config_db` (Tenant Config Service) dưới dạng mã hóa AES-256.
+    *   Tenant tự định nghĩa các vai trò tùy chỉnh (Custom Roles) và gán danh sách quyền hạn (Permissions) tương ứng. Vai trò định danh được đồng bộ trực tiếp sang Keycloak Realm Roles, còn quyền hạn chi tiết được lưu trong PostgreSQL (`config_db`) và cache trên Redis dưới dạng CSV key `tenant:{tenant_id}:role:{role_name}:permissions`.
 
 ### 9.4.2. Xác thực khóa API (Strict Tenant API Key Verification - BYOK):
 Khi thực hiện gọi LLM, `AI Core Service` bắt buộc phải sử dụng khóa API riêng của Tenant (BYOK model) để thực hiện cuộc gọi:
@@ -235,13 +236,11 @@ Khi thực hiện gọi LLM, `AI Core Service` bắt buộc phải sử dụng k
 2.  **Từ chối và báo lỗi:** Nếu Tenant không thiết lập khóa API riêng (BYOK), hệ thống không sử dụng bất kỳ khóa dùng chung hay biến môi trường fallback nào mà lập tức trả về lỗi HTTP 400 yêu cầu bổ sung API Key cấu hình.
 
 ### 9.4.3. Quy trình Đồng bộ và Invalidate Cache:
-1. **Thay đổi cấu hình**: Tenant Admin sửa đổi cấu hình model routing hoặc API Keys trên Dashboard, gửi yêu cầu tới `Tenant Config Service` (NestJS) và lưu vào `config_db`.
-2. **Kích hoạt sự kiện**: `Tenant Config Service` ghi nhận, cập nhật Redis cache key `{tenant_id}:config:ai_kb` và publish một thông điệp lên kênh Redis Pub/Sub `config.updates`.
-3. **Nhận thông điệp**: `AI Core Service` (FastAPI) lắng nghe kênh `config.updates` thông qua một tiến trình con (Background Listener).
-4. **Đồng bộ cục bộ**:
-   * Khi phát hiện sự kiện thuộc category `ai_kb`, `AI Core Service` gọi REST API/gRPC sang `Tenant Config Service` để truy vấn cấu hình mới nhất của tenant đó (đính kèm `X-Tenant-ID` header).
-   * `AI Core Service` lưu cấu hình này vào cơ sở dữ liệu cục bộ `ai_core_db` (các bảng `llm_route_configs` và `api_key_configs`) để làm backup dự phòng.
-   * `AI Core Service` làm trống (invalidate) các cache keys cũ trong Redis gồm `{tenant_id}:config:llm_model_routing` và `{tenant_id}:config:api_keys` để buộc các cuộc gọi tiếp theo phải nạp lại cấu hình mới.
+1. **Thay đổi cấu hình nghiệp vụ**: Tenant Admin sửa đổi cấu hình model routing hoặc API Keys trên Dashboard. `Tenant Config Service` cập nhật PostgreSQL, ghi đè Redis cache key `{tenant_id}:config:{category}`, và publish event lên Redis channel `config.updates`. `AI Core Service` (FastAPI) lắng nghe, đồng bộ bản ghi backup cục bộ sang `ai_core_db`, và invalidate cache LLM routing cũ.
+2. **Thay đổi vai trò và phân quyền**: 
+   - **Tạo/Xóa Role**: Tenant Admin thao tác trên Dashboard. `Tenant Config Service` cập nhật PostgreSQL, gọi Keycloak Admin API để đồng bộ tạo/xóa Realm Role tương ứng trên Keycloak Realm.
+   - **Cập nhật Quyền (Permissions)**: Khi sửa quyền gán cho một vai trò, `Tenant Config Service` lưu bảng `role_permissions`, ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` (TTL: 30 days), và publish event lên Redis channel `config.updates` với payload: `{ "tenant_id", "category": "roles", "role_name" }`.
+   - **Hủy Cache**: API Gateway (Kong) lắng nghe kênh `config.updates`, lọc event category `roles` và giải phóng local worker cache (Kong shm) của vai trò đó trong vòng < 5 giây.
 
 ### 9.4.4. Tự động Khởi tạo Cấu hình Định tuyến mặc định (Auto-configuration on First Key):
 Để đơn giản hóa trải nghiệm Onboarding của Tenant, hệ thống tích hợp cơ chế tự động cấu hình định tuyến mô hình thông minh:
@@ -256,8 +255,15 @@ Khi thực hiện gọi LLM, `AI Core Service` bắt buộc phải sử dụng k
 
 Hệ thống được thiết kế theo mô hình **SaaS Multi-tenant** với mức độ cô lập dữ liệu cao nhằm đảm bảo tính bảo mật và tuân thủ dữ liệu doanh nghiệp:
 
-1. **Identity & Access Isolation:** Sử dụng tính năng Multi-realm của Keycloak. Mỗi Tenant khi đăng ký sẽ được khởi tạo một Realm riêng biệt chứa danh sách User, Roles và Client Credentials độc lập. Token JWT phát hành sẽ chứa thuộc tính `tenant_id` và `roles` trong payload claim. Đồng thời, hệ thống áp dụng cơ chế **Client Scopes** để phân tách quyền hạn truy cập của từng client (Dashboard, API Gateway) đối với các microservices nghiệp vụ (ví dụ: scope `campaign` cho Campaign Service, `crm` cho CRM Service) theo nguyên lý Least Privilege. API Gateway sẽ thực thi việc kiểm tra (Scope Validation) trước khi định tuyến API request.
+1. **Identity & Access Isolation (Zero-Trust HMAC Header):** Sử dụng tính năng Multi-realm của Keycloak. Mỗi Tenant khi đăng ký sẽ được khởi tạo một Realm riêng biệt chứa danh sách User, Roles và Client Credentials độc lập. Token JWT phát hành chứa claim `tenant_id` và danh sách `roles`.
+   * **Client Scopes:** Gateway (Kong) kiểm tra tính hợp lệ của token và claim scope tương ứng trước khi forward.
+   * **Gateway Permission Resolution (3-Tier Cache):** Gateway tự động phân giải danh sách `roles` của User từ JWT thành danh sách quyền hạn chi tiết (`X-User-Permissions` dạng CSV) qua 3 tầng: Kong local memory cache (shm) -> Redis cache `tenant:{tenant_id}:role:{role_name}:permissions` -> REST API gọi đến Tenant Config Service (API Fallback).
+   * **Deterministic Caching:** Quyền được sắp xếp theo thứ tự bảng chữ cái để tạo tính nhất quán. Vai trò `admin` nội bộ của tenant tự động được phân giải thành wildcard `*` (giới hạn bởi tenant_id). Vai trò `system` hoặc `system_admin` chỉ được phân giải thành wildcard `*` và cho phép bypass nếu `tenant_id` từ JWT trùng khớp với ID của Realm Master (`solavie-system-master`). Nếu vai trò này được khai báo ở Realm của tenant thông thường, Gateway chặn đứng và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
+   * **HMAC Signature Verification:** Để chống Header Spoofing trong mạng nội bộ, Gateway ký số payload bằng `HMAC-SHA256` với khóa bí mật `GATEWAY_SIGNING_SECRET`:
+     `X-Permissions-Signature = HMAC_SHA256(GATEWAY_SIGNING_SECRET, X-Tenant-ID + ":" + X-User-ID + ":" + X-User-Permissions)`
+   * **Downstream Verification:** Tất cả microservices nghiệp vụ nhận request bắt buộc phải tính toán lại signature này bằng `GATEWAY_SIGNING_SECRET` và so sánh bằng phương pháp an toàn timing (`timingSafeEqual` / `compare_digest`). Request lỗi signature sẽ bị từ chối bằng mã `403 Forbidden` ngay lập tức.
    * **Hybrid User Architecture:** Hệ thống tách rời hoàn toàn giữa **Xác thực danh tính (Identity) tại Keycloak** và **Hồ sơ nghiệp vụ (Business Profile) tại User Service (Backend)**. Keycloak chỉ quản lý tài khoản xác thực cơ bản, trong khi User Service lưu trữ thông tin nghiệp vụ phong phú của User (SĐT, avatar, phòng ban) trong database nghiệp vụ riêng biệt, liên kết 1:1 thông qua User UUID (`sub` claim của JWT Token).
+
 
 2. **Database Isolation:** Áp dụng mô hình **Shared Database, Shared Schema** để tối ưu hóa chi phí hạ tầng ở giai đoạn đầu. Tuy nhiên, tính bảo mật được đảm bảo bằng cách thiết lập chính sách **PostgreSQL Row-Level Security (RLS)** trên cột `tenant_id` của tất cả các bảng. Mọi kết nối database từ microservices bắt buộc phải set context `tenant_id` và hệ thống DB sẽ tự động filter dữ liệu.
 3. **Event-Driven Isolation:** Mọi tin nhắn truyền qua Apache Kafka bắt buộc chứa thuộc tính `tenant_id` trong Header của Kafka Message. Các Consumer Service khi nhận tin nhắn phải lọc và xử lý theo đúng phân vùng của tenant đó.

@@ -216,7 +216,7 @@ Hệ thống sử dụng mô hình Database-per-service (Mỗi dịch vụ một
 
 ### 8.2.4. Dịch vụ Cấu hình Tenant (config_db)
 
-#### Bảng `tenant_configs` (Lưu cấu hình hệ thống)
+#### 1. Bảng `tenant_configs` (Lưu cấu hình hệ thống)
 | Column Name | Data Type | Constraints | Description |
 |-------------|-----------|-------------|-------------|
 | `tenant_id` | VARCHAR(50) | PRIMARY KEY | Định danh duy nhất Tenant |
@@ -224,7 +224,56 @@ Hệ thống sử dụng mô hình Database-per-service (Mỗi dịch vụ một
 | `routing_config`| JSONB | NOT NULL | Cấu hình luồng Chat & Giờ hoạt động |
 | `content_config`| JSONB | NOT NULL | Cấu hình phê duyệt, từ cấm bài viết |
 | `crm_config` | JSONB | NOT NULL | Cấu hình lead score, gộp contact |
+| `security_config`| JSONB | NOT NULL | Cấu hình bảo mật, rate limit, CORS, password policy |
 | `updated_at` | TIMESTAMP | DEFAULT NOW() | Thời gian cập nhật cấu hình gần nhất |
+
+#### 2. Bảng `system_tier_limits` (Quản lý hạn mức tài nguyên của các gói cước hệ thống)
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| `tier` | VARCHAR(50) | PRIMARY KEY | Tên gói cước (`free`, `standard`, `enterprise`) |
+| `api_requests_per_min` | INTEGER | DEFAULT 200 | Hạn mức cuộc gọi API tối đa mỗi phút |
+| `ai_web_search_per_hour` | INTEGER | DEFAULT 50 | Hạn mức tìm kiếm web AI tối đa mỗi giờ |
+| `ai_generate_content_per_hour`| INTEGER | DEFAULT 20 | Hạn mức tạo nội dung AI tối đa mỗi giờ |
+| `ai_kb_search_per_hour` | INTEGER | DEFAULT 500 | Hạn mức tìm kiếm tri thức tối đa mỗi giờ |
+| `channel_send_per_hour` | INTEGER | DEFAULT 200 | Hạn mức gửi tin nhắn kênh tối đa mỗi giờ |
+| `updated_at` | TIMESTAMP | DEFAULT NOW() | Thời gian cập nhật gần nhất |
+
+#### 3. Bảng `roles` (Quản lý các vai trò người dùng trong hệ thống)
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| `id` | UUID | PRIMARY KEY | Định danh duy nhất vai trò |
+| `tenant_id` | VARCHAR(50) | NOT NULL, INDEX | Định danh Tenant (Dùng cho RLS) |
+| `name` | VARCHAR(100) | NOT NULL | Tên vai trò (ví dụ: `admin`, `custom_agent`) |
+| `is_system` | BOOLEAN | DEFAULT FALSE | Đánh dấu vai trò hệ thống mặc định, không cho phép xóa |
+| `description` | VARCHAR(255) | NULL | Mô tả chức năng vai trò |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | Thời điểm khởi tạo vai trò |
+| `updated_at` | TIMESTAMP | DEFAULT NOW() | Thời điểm cập nhật gần nhất |
+
+*Constraint:* UNIQUE(`tenant_id`, `name`) để tránh trùng vai trò trong cùng một Tenant.
+
+#### 4. Bảng `role_permissions` (Danh sách các quyền hạn được gán cho vai trò)
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| `id` | UUID | PRIMARY KEY | Định danh duy nhất bản ghi |
+| `role_id` | UUID | NOT NULL, FK | Liên kết tới bảng `roles(id)` (ON DELETE CASCADE) |
+| `resource` | VARCHAR(100) | NOT NULL | Tài nguyên (ví dụ: `chatbot`, `crm`, `campaign`) |
+| `action` | VARCHAR(50) | NOT NULL | Hành động cho phép (`read`, `write`, `*`) |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | Thời điểm gán quyền |
+
+*Constraint:* UNIQUE(`role_id`, `resource`, `action`) để tránh trùng lặp quyền gán.
+
+#### 5. Bảng `config_audit_logs` (Lịch sử kiểm toán thay đổi cấu hình)
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| `id` | UUID | PRIMARY KEY | Định danh duy nhất bản ghi log |
+| `tenant_id` | VARCHAR(50) | NOT NULL, INDEX | Định danh Tenant |
+| `changed_by` | UUID | NOT NULL | ID người thực hiện thay đổi |
+| `category` | VARCHAR(50) | NOT NULL | Nhóm cấu hình bị thay đổi |
+| `field_name` | VARCHAR(100) | NOT NULL | Tên thuộc tính bị thay đổi |
+| `old_value` | JSONB | NULL | Giá trị trước khi thay đổi (Đã ẩn nếu nhạy cảm) |
+| `new_value` | JSONB | NULL | Giá trị sau khi thay đổi (Đã ẩn nếu nhạy cảm) |
+| `changed_at` | TIMESTAMP | DEFAULT NOW() | Thời điểm thay đổi |
+
 
 ---
 

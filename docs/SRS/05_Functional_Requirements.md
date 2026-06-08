@@ -74,16 +74,18 @@
 
 
 ### FR-AUTH-005: Quản lý Vai trò và Quyền hạn động (Dynamic Role & Permission Management)
-- **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng. Danh sách quyền hạn có sẵn hiển thị trên Dashboard được tổng hợp tự động từ các Permission Manifest API (`GET /api/v1/permissions/manifest`) của các microservices đang chạy.
+- **Mô tả:** Hệ thống **PHẢI** cung cấp giao diện cho phép Tenant Admin thực hiện các tác vụ CRUD Vai trò (Role) mới và gán các quyền hạn (Permissions) hệ thống tương ứng. Danh sách quyền hạn có sẵn hiển thị trên Dashboard được tổng hợp tự động từ các Permission Manifest API (`GET /api/v1/permissions/manifest`) của các microservices đang chạy. Khi có thay đổi về vai trò hoặc quyền hạn, hệ thống **PHẢI** tự động đồng bộ hóa tạo/xóa vai trò trên Keycloak Realm tương ứng qua Keycloak Admin API, đồng thời cập nhật/ghi đè Redis cache key `tenant:{tenant_id}:role:{role}:permissions` (với TTL dài hạn) và phát event trên Redis Pub/Sub kênh `config.updates` để Kong Gateway invalidate local cache tức thời. Hệ thống **PHẢI** validate và chặn tất cả các yêu cầu tạo mới hoặc đổi tên vai trò trùng khớp với danh sách từ khóa bảo lưu của hệ thống: `['system', 'system_admin', 'super_admin', 'root']` (không phân biệt chữ hoa/chữ thường) để ngăn ngừa nguy cơ Privilege Escalation.
 - **Đầu vào:** Tên vai trò, danh sách permissions chọn từ danh mục động.
-- **Đầu ra:** Vai trò mới được ghi nhận trong cơ sở dữ liệu `keycloak_db` và `config_db`.
+- **Đầu ra:** Vai trò mới được ghi nhận trong cơ sở dữ liệu `keycloak_db` và `config_db`, Keycloak realm role được tạo/xóa, và cache Redis được đồng bộ hóa.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-02, US-003
 
 ### FR-AUTH-006: Phân giải quyền hạn động tại Gateway & Ký số (Gateway Permission Resolution & HMAC Signing)
-- **Mô tả:** API Gateway **PHẢI** tự động phân giải danh sách vai trò (roles) trong JWT token của người dùng thành danh sách các quyền hạn chi tiết (permissions) theo quy chuẩn `{service}:{resource}:{action}` bằng cách truy vấn Redis cache. Nếu Redis cache sập hoặc cache miss, Gateway **PHẢI** truy vấn Kong local memory cache (shm cache), và cuối cùng gửi request nội bộ gọi tới Tenant Config Service để lấy quyền trực tiếp từ database (API Fallback). Gateway **PHẢI** ký số danh sách quyền này bằng thuật toán HMAC-SHA256 sử dụng khóa bí mật chung trước khi forward request xuống các microservices nội bộ qua các header `X-User-Permissions` và `X-Permissions-Signature`.
+- **Mô tả:** API Gateway **PHẢI** tự động phân giải danh sách vai trò (roles) trong JWT token của người dùng thành danh sách các quyền hạn chi tiết (permissions) theo quy chuẩn `{service}:{resource}:{action}` bằng cách truy vấn Redis cache. Nếu Redis cache sập hoặc cache miss, Gateway **PHẢI** truy vấn Kong local memory cache (shm cache), và cuối cùng gửi request nội bộ gọi tới Tenant Config Service để lấy quyền trực tiếp từ database (API Fallback). Gateway **PHẢI** gộp và sắp xếp tăng dần theo bảng chữ cái danh sách permissions để đảm bảo tính nhất quán (deterministic), sau đó ký số danh sách quyền này bằng thuật toán HMAC-SHA256 trên chuỗi payload `tenant_id + ":" + user_id + ":" + user_permissions` sử dụng khóa bí mật chung `GATEWAY_SIGNING_SECRET` trước khi forward request xuống các microservices nội bộ. Hệ thống **PHẢI** áp dụng cơ chế Fail-Secure: nếu có vai trò nhưng không thể phân giải được bất kỳ quyền hạn nào, Gateway **PHẢI** chặn request và trả về lỗi `503 Service Unavailable`. Đối với phân giải Wildcard:
+  - Vai trò `admin` nội bộ của tenant **PHẢI** tự động được gán quyền wildcard `*` (giới hạn bởi tenant_id).
+  - Vai trò `system` hoặc `system_admin` **PHẢI** chỉ được gán quyền wildcard `*` và cho phép bypass khi `tenant_id` trích xuất từ JWT trùng khớp với ID của Realm Master (`solavie-system-master`); nếu các vai trò này xuất hiện ở Realm của tenant thông thường, Gateway **PHẢI** từ chối gán wildcard và trả về lỗi `403 Forbidden` ngay lập tức.
 - **Đầu vào:** JWT Token của request gửi qua Gateway.
-- **Đầu ra:** HTTP Request được inject 2 headers: `X-User-Permissions` (dạng CSV) và `X-Permissions-Signature` (HMAC chữ ký).
+- **Đầu ra:** HTTP Request được forward xuống downstream được inject các headers: `X-User-ID`, `X-User-Permissions` (dạng CSV đã sắp xếp) và `X-Permissions-Signature` (HMAC chữ ký).
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-02, US-004
 
