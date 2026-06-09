@@ -348,6 +348,38 @@ kong:
 ```
 
 
+## Service Discovery & Upstream Targets Sync (MỚI)
+
+Để hỗ trợ cập nhật IP động cho các microservice nghiệp vụ (`ai-core`, v.v.) mà không làm mất tính năng cân bằng tải, active/passive health checks và tự động thử lại của Kong Gateway, hệ thống áp dụng cơ chế đồng bộ targets chạy ngầm:
+
+1. **Upstream Configuration:** Các microservice nghiệp vụ được cấu hình trong `kong.yml` dưới dạng các Upstream ảo (ví dụ: `ai-core-upstream`). Dịch vụ Kong Service trỏ trực tiếp đến tên miền upstream ảo này.
+2. **Registry Sync Daemon:** 
+   * Một tiến trình chạy ngầm (`sync_registry.py`) sử dụng Python kết nối tới Redis Cluster để giám sát khóa Set `registry:service:ai-core`.
+   * Daemon liên tục đối chiếu danh sách IP trên Redis với danh sách Target IP hiện tại của Upstream được khai báo trên Kong Admin API (`GET /upstreams/ai-core-upstream/targets`).
+   * Nếu phát hiện sai lệch (IP mới được thêm hoặc IP cũ bị mất/hết hạn), daemon sẽ gọi Admin API nội bộ của Kong (`POST /upstreams/ai-core-upstream/targets` hoặc `DELETE /upstreams/ai-core-upstream/targets/{target}`) để cập nhật danh sách target trong memory của Kong.
+3. **Resilience & Healthchecking:** 
+   * Upstream của Kong được cấu hình Active/Passive Healthchecks để tự động phát hiện và ngắt định tuyến khỏi các target IP chết.
+   * Cấu hình `retries: 5` giúp Kong tự động định tuyến lại request bị lỗi sang các target IP còn sống khác mà không phản hồi lỗi 502 về cho người dùng.
+
+```mermaid
+graph LR
+    subgraph "Registry Sync Daemon"
+        Sync["sync_registry.py"]
+    end
+    subgraph "Data Stores"
+        Redis[("Redis Cluster\n(Set: registry:service:ai-core)")]
+    end
+    subgraph "Kong Gateway"
+        Admin["Kong Admin API\n(:8001)"]
+        Balancer["Kong Upstream Balancer\n(ai-core-upstream)"]
+    end
+    
+    Sync -->|Read Set| Redis
+    Sync -->|Get targets| Admin
+    Sync -->|POST/DELETE targets| Admin
+    Admin -->|Update targets in RAM| Balancer
+```
+
 ## Dynamic Permission Resolution (RBAC) & HMAC Signing
 
 Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện phân giải quyền hạn động từ vai trò người dùng (User Roles) sang danh sách quyền hạn chi tiết (Permissions), sau đó ký số bằng HMAC-SHA256 để chống giả mạo khi chuyển tiếp request xuống downstream.

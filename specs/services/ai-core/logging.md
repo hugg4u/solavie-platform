@@ -274,3 +274,23 @@ ai_security_permission_denied_total = Counter(
 )
 ```
 
+### Zero-Trust Service Registry Logs
+Dịch vụ phải ghi log có cấu trúc cho các sự kiện vòng đời đăng ký dịch vụ:
+
+```json
+{
+  "timestamp": "2026-06-09T17:40:00.123Z",
+  "level": "info",
+  "service": "ai-core",
+  "message": "Service node registration completed",
+  "action": "register", // register, heartbeat_success, heartbeat_failure, deregister
+  "node_ip": "172.20.0.10",
+  "node_port": 8000,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:ai-core"
+  }
+}
+```
+
+

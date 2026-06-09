@@ -159,4 +159,15 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 - **AC 14.5:** Citation Metadata Parsing - Dịch vụ SHALL tự động bóc tách và chuẩn hóa dữ liệu trích dẫn nguồn (`citations`) từ Cohere và Perplexity APIs để hiển thị trên UI.
 - **AC 14.6:** Mistral Tool Payload - Dịch vụ SHALL dọn sạch (filter out) các tham số `None` trong schema định nghĩa tools trước khi gọi Mistral API để tránh lỗi Bad Request (400).
 
+### Requirement 15: Self-Registration and Lifecycle Management (MỚI)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+#### Acceptance Criteria
+1. THE AI_Core Service SHALL tự động phát hiện IP nội bộ của container khi khởi chạy.
+2. THE AI_Core Service SHALL đăng ký IP:Port của mình vào Redis Set `registry:service:ai-core` khi startup.
+3. THE AI_Core Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:ai-core:node:{ip}:{port}` với TTL là 15 giây.
+4. THE AI_Core Service SHALL tích hợp cơ chế tự hủy đăng ký (deregister) khi nhận tín hiệu kết thúc từ hệ điều hành (`SIGTERM` hoặc `SIGINT`), tự động xóa IP của mình ra khỏi Redis Set để Gateway ngưng chuyển tiếp traffic.
+
+
 

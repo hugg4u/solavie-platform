@@ -450,6 +450,30 @@ class ContentGuardrail:
 
 ---
 
+## Service Self-Registration Client (MỚI)
+
+Để hỗ trợ phát hiện dịch vụ độc lập với hạ tầng, dịch vụ `ai-core` tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính:
+
+1. **Tự phát hiện IP nội bộ:** Khi khởi chạy, client sử dụng thư viện socket của Python để mở một kết nối UDP ảo tới DNS công cộng `8.8.8.8` (kết nối này không gửi gói tin thực tế và không yêu cầu internet bên ngoài) để lấy địa chỉ IP cục bộ được gắn trên card mạng hoạt động của container.
+2. **Đăng ký Lifecycle:**
+   * **Startup Event:** Khi tiến trình FastAPI khởi động (`@app.on_event("startup")` hoặc qua FastAPI Lifespan handler), client sẽ thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:ai-core`.
+   * **Heartbeat Thread:** Client khởi chạy một daemon thread ngầm định kỳ **mỗi 5 giây** thực hiện:
+     * Ghi đè khóa sự sống: `SETEX registry:service:ai-core:node:{ip}:{port} 15 "alive"`.
+     * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:ai-core {ip}:{port}`.
+   * **Shutdown Event:** Khi tiến trình nhận được tín hiệu tắt máy (`SIGTERM` hoặc `SIGINT`), Lifespan handler sẽ kích hoạt hàm hủy đăng ký:
+     * Xóa IP khỏi Set: `SREM registry:service:ai-core {ip}:{port}`.
+     * Xóa khóa sống: `DEL registry:service:ai-core:node:{ip}:{port}`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> STARTUP
+    STARTUP --> REGISTERING : Get IP & SADD to Redis
+    REGISTERING --> ACTIVE : SETEX node key 15s
+    ACTIVE --> ACTIVE : Heartbeat every 5s (SETEX 15s)
+    ACTIVE --> SHUTTING_DOWN : SIGTERM received
+    SHUTTING_DOWN --> [*] : SREM & DEL node key
+```
+
 ## Data Models
 
 ```sql

@@ -886,3 +886,29 @@ AI Core thực hiện cơ chế xác thực Zero-Trust và phân quyền động
   - Nếu Set chứa chính xác `{service}:{resource}:{action}`, cho phép truy cập.
   - Ngược lại, từ chối truy cập và trả về mã lỗi `403 Forbidden` kèm log lỗi chi tiết.
 
+
+## Vòng Đời Trạng Thái Của Dịch Vụ Đăng Ký (Service Node Lifespan) (MỚI)
+
+Mỗi Node dịch vụ `ai-core` khi hoạt động sẽ chuyển đổi qua các trạng thái logic sau để đảm bảo tính nhất quán của bản đồ dịch vụ (Service Map):
+
+1.  **STARTUP (Khởi tạo):**
+    *   Tiến trình FastAPI khởi chạy.
+    *   Tự động mở socket UDP ảo để dò tìm địa chỉ IP nội bộ của card mạng chính.
+2.  **REGISTERING (Đăng ký):**
+    *   Thực hiện kết nối tới Redis Cluster.
+    *   Chạy lệnh `SADD registry:service:ai-core "{ip}:{port}"`.
+    *   Nếu gặp lỗi kết nối Redis, tiến hành thử lại (Retry) tối đa 3 lần. Nếu vẫn lỗi, ghi log WARN và tiếp tục chạy dịch vụ ở chế độ cục bộ (không đăng ký).
+3.  **ACTIVE / HEARTBEATING (Hoạt động):**
+    *   Kích hoạt một luồng nền (heartbeat thread) chạy vô hạn.
+    *   Mỗi 5 giây, thực hiện:
+        *   `SETEX registry:service:ai-core:node:{ip}:{port} 15 "alive"`
+        *   `SADD registry:service:ai-core "{ip}:{port}"` (Để phòng trường hợp key chính trong Set bị xóa nhầm hoặc Redis bị restart).
+4.  **SHUTTING_DOWN (Dừng dịch vụ):**
+    *   Nhận tín hiệu kết thúc (`SIGTERM`/`SIGINT`) từ Docker Engine / OS.
+    *   Tạm dừng nhận requests mới.
+    *   Thực hiện dọn dẹp (Cleanup):
+        *   `SREM registry:service:ai-core "{ip}:{port}"`
+        *   `DEL registry:service:ai-core:node:{ip}:{port}"`
+    *   Đóng kết nối Redis và thoát tiến trình.
+
+

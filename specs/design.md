@@ -289,6 +289,28 @@ Xem chi tiết: `shared/standards.md`
 - Chatbot reply flow + Content publish flow dùng saga pattern (xem `shared/standards.md`)
 - Idempotency keys cho mọi cross-service action
 
+## Service Discovery & Dynamic Routing (MỚI)
+
+Để tránh downtime khi deploy phiên bản mới (thay đổi IP container) và giải quyết bài toán cân bằng tải gRPC, hệ thống áp dụng cơ chế đồng bộ IP động từ Redis qua một luồng chạy ngầm độc lập với hạ tầng (Infrastructure-Agnostic):
+
+1. **Service Registration:** Mỗi node của microservice (ví dụ `ai-core`) tự phát hiện IP nội bộ và ghi nhận vào Redis Set: `registry:service:{service_name}`. Node duy trì một heartbeat key trên Redis: `registry:service:{service_name}:node:{ip}:{port}` có TTL 15 giây, được cập nhật mỗi 5 giây.
+2. **Registry Sync Daemon:** Chạy ngầm trong cụm Gateway, đăng ký nhận sự kiện thay đổi từ Redis và đồng bộ danh sách Target IP vào Kong Upstream (`POST/DELETE /upstreams/{service}-upstream/targets`) thông qua Admin API cục bộ.
+3. **Gateway Load Balancing:** Kong định tuyến các request đến upstream ảo (`http://{service}-upstream`) sử dụng cơ chế cân bằng tải native, tự động gạt bỏ IP chết qua healthcheck và tự động thử lại request trên IP khác còn sống qua cấu hình `retries: 5`.
+
+```mermaid
+sequenceDiagram
+    participant Backend as Backend Service Node
+    participant Redis as Redis Cluster
+    participant SyncDaemon as Registry Sync Daemon
+    participant Kong as Kong Gateway
+    
+    Backend->>Redis: SADD registry:service:ai-core (172.20.0.10:8000)
+    Backend->>Redis: SETEX node:172.20.0.10:8000 15 "alive" (Heartbeat every 5s)
+    SyncDaemon->>Redis: Monitor & read active nodes
+    SyncDaemon->>Kong: POST /upstreams/ai-core-upstream/targets (172.20.0.10:8000)
+    Note over Kong: Active/Passive Healthchecks & Retries enabled
+```
+
 ## Multi-tenancy Strategy
 
 | Layer | Isolation Method |

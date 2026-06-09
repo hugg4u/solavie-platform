@@ -180,3 +180,17 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [ ] **Kiểm thử hiệu năng & Độ chịu lỗi**:
   - [ ] Chạy kiểm thử k6 kiểm chứng độ trễ xác thực token dưới 5ms.
   - [ ] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway.
+
+## Giai đoạn 5 — Infrastructure-Agnostic Service Discovery [PLANNED]
+### Task 9: Infrastructure-Agnostic Dynamic Upstream Target Sync
+- [ ] **Cấu hình Upstream**:
+  - [ ] Khai báo đối tượng `Upstream` ảo cho `ai-core-upstream` trong `kong.yml` và cấu hình health checks, `retries: 5`.
+  - [ ] Trỏ service `ai-core` tới `http://ai-core-upstream` thay vì hostname tĩnh.
+- [ ] **Triển khai Registry Sync Daemon**:
+  - [ ] Tạo file [sync_registry.py](file:///d:/workspace/project/solavie-system/services/gateway/sync_registry.py) sử dụng `redis-py` và `requests`.
+  - [ ] Triển khai cơ chế so khớp Set để tự động POST/DELETE targets trên Kong Admin API.
+  - [ ] Cập nhật [docker-compose.yml](file:///d:/workspace/project/solavie-system/docker-compose.yml) để khởi động script ngầm trong gateway.
+- [ ] **Kiểm thử nghiệm thu**:
+  - [ ] Viết testcase unit test cho logic đồng bộ target.
+  - [ ] Chạy scale test và giả lập container crash, xác nhận Kong tự động chuyển hướng request sang target còn sống mà không có downtime.
+

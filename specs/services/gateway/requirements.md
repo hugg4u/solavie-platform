@@ -20,6 +20,9 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 2. THE Gateway SHALL hỗ trợ cả REST (HTTP/JSON) và gRPC proxying
 3. THE Gateway SHALL strip path prefix trước khi forward đến upstream
 4. THE Gateway SHALL hỗ trợ WebSocket proxying cho Messaging Service
+5. THE Gateway SHALL định tuyến tới các service nghiệp vụ (`ai-core`, v.v.) qua các đối tượng Upstream ảo được định nghĩa trong `kong.yml` thay vì trỏ trực tiếp đến tên miền DNS tĩnh.
+6. THE Gateway SHALL chạy một luồng nền Registry Sync Daemon để đồng bộ realtime danh sách IP từ Redis vào Kong Upstream targets qua Admin API cục bộ.
+7. THE Gateway SHALL áp dụng active/passive health checks cùng cơ chế `retries` (tối thiểu 5 lần) trên Upstream để tự động loại bỏ target chết và tự động thử lại request trên target khác mà không gây ra lỗi cho client.
 
 ### Requirement 2: Authentication (OIDC) & Permission Resolution
 

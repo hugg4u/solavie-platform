@@ -268,3 +268,14 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Cập nhật `ToolExecutor.execute` định tuyến các remote tools (có tiền tố `{server_name}__`) qua `MCPClientManager.execute_mcp_tool`.
 - [x] Viết unit tests kiểm thử cơ chế whitelisting và tiêm `tenant_id` tại AI Core.
 
+
+### Task 20: Service Self-Registration and Lifecycle Heartbeat [PLANNED]
+> *User Story: Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 20.1: Triển khai lớp `ServiceRegistryClient` trong `ai-core` tự động lấy IP nội bộ của card mạng chính qua kết nối UDP socket ảo.
+- [ ] AC 20.2: Triển khai background thread gửi heartbeat (`SETEX` và `SADD` lên Redis) định kỳ mỗi 5 giây với TTL = 15 giây.
+- [ ] AC 20.3: Tích hợp `ServiceRegistryClient` vào FastAPI lifespan startup/shutdown event handlers.
+- [ ] AC 20.4: Viết unit tests kiểm thử với mock Redis kiểm chứng luồng hoạt động đăng ký/heartbeat/deregister của client.
+
+

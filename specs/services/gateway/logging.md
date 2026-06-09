@@ -108,5 +108,26 @@ gateway_circuit_breaker_state: Gauge [service] // value: 0 (CLOSED), 1 (OPEN), 2
 # Theo dõi số lần kích hoạt ngắt mạch
 gateway_circuit_breaker_trips_total: Counter [service]
 ```
+
+### 3. Log sự kiện cập nhật Upstream Targets (Sync Daemon)
+Khi Registry Sync Daemon thực hiện thêm hoặc bớt các Target IP của Upstream trên Kong, nó phải ghi nhận log có cấu trúc để phục vụ giám sát:
+
+```json
+{
+  "timestamp": "2026-06-09T17:45:00.123Z",
+  "level": "info",
+  "service": "kong-registry-sync",
+  "message": "Upstream target updated",
+  "upstream": "ai-core-upstream",
+  "action": "add_target", // add_target, remove_target, sync_complete
+  "target": "172.20.0.10:8000",
+  "status": "success",
+  "context": {
+    "redis_nodes_count": 2,
+    "kong_targets_count": 2
+  }
+}
+```
+
 ```
 
