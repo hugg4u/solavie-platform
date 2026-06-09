@@ -73,12 +73,29 @@ async def startup_event():
     except ImportError:
         logger.warning("gRPC server not started: grpc_server module or proto stubs missing.")
 
+    # 5. Register service node to Redis for Service Discovery
+    async def run_registration():
+        try:
+            from core.registry_client import registry_client
+            await registry_client.register()
+        except Exception as e:
+            logger.error(f"Failed to register service node in background: {e}")
+
+    asyncio.create_task(run_registration())
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application shutdown initiated.")
+
+    # 1. Deregister service node from Redis
+    try:
+        from core.registry_client import registry_client
+        await registry_client.deregister()
+    except Exception as e:
+        logger.error(f"Error deregistering service node on shutdown: {e}")
     
-    # Explicitly close Redis connection to avoid 'Event loop is closed' RuntimeError
+    # 2. Explicitly close Redis connection to avoid 'Event loop is closed' RuntimeError
     try:
         from core.redis_client import redis_client
         await redis_client.aclose()

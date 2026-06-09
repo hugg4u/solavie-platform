@@ -116,7 +116,7 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
             },
             {
                 "name": "ai-core",
-                "url": "http://ai-core:8000",
+                "url": "http://ai-core-upstream",
                 "routes": [
                     {
                         "name": "ai-jobs-api",
@@ -230,6 +230,36 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                             }
                         ],
                         "tags": ["scope:ai-core"]
+                    }
+                ]
+            }
+        ],
+        "upstreams": [
+            {
+                "name": "ai-core-upstream",
+                "algorithm": "round-robin",
+                "slots": 10000,
+                "healthchecks": {
+                    "active": {
+                        "type": "http",
+                        "http_path": "/health",
+                        "timeout": 1,
+                        "concurrency": 10,
+                        "healthy": {
+                            "interval": 5,
+                            "successes": 2
+                        },
+                        "unhealthy": {
+                            "interval": 2,
+                            "http_failures": 2,
+                            "timeouts": 2
+                        }
+                    }
+                },
+                "targets": [
+                    {
+                        "target": "127.0.0.1:8000",
+                        "weight": 0
                     }
                 ]
             }
