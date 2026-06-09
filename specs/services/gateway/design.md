@@ -404,8 +404,8 @@ Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện 
 3.  **Bước 3: Hợp nhất (Union Set) & Deterministic Sorting & Ánh xạ Wildcard**:
     - Gộp tất cả các quyền của các roles lại.
     - Ánh xạ Wildcard an toàn:
-      - Nếu người dùng có vai trò `admin` thuộc Realm của tenant, tự động gán quyền `*` (wildcard) và chuyển tiếp đi (quyền `*` này bị giới hạn dữ liệu bởi `X-Tenant-ID` ở downstream).
-      - Nếu người dùng có vai trò `system` hoặc `system_admin`, Gateway thực hiện kiểm tra: nếu `tenant_id` trùng khớp với Realm Master (`solavie-system-master`), tự động gán quyền `*` và cho phép bypass. Ngược lại, nếu vai trò hệ thống này được khai báo ở Realm của tenant thông thường, Gateway chặn request ngay lập tức và trả về `403 Forbidden` để ngăn chặn Privilege Escalation.
+      - Nếu người dùng có vai trò `admin` thuộc Organization của tenant, tự động gán quyền `*` (wildcard) và chuyển tiếp đi (quyền `*` này bị giới hạn dữ liệu bởi `X-Tenant-ID` ở downstream).
+      - Nếu người dùng có vai trò `system` hoặc `system_admin`, Gateway thực hiện kiểm tra: nếu `tenant_id` trùng khớp với Master Tenant ID (`solavie-system-master`), tự động gán quyền `*` và cho phép bypass. Ngược lại, nếu vai trò hệ thống này được khai báo ở Organization của tenant thông thường, Gateway chặn request ngay lập tức và trả về `403 Forbidden` để ngăn chặn Privilege Escalation.
     - Sắp xếp tăng dần theo bảng chữ cái danh sách permissions để đảm bảo tính nhất quán (deterministic) khi tạo chữ ký số.
 4.  **Bước 4: HMAC Signing**:
     - Payload ký: `tenant_id + ":" + user_id + ":" + user_permissions`

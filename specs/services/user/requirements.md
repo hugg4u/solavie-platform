@@ -29,14 +29,14 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 1. THE User_Service SHALL cung cấp API mời nhân viên (`/api/v1/users/invite`).
 2. Khi Tenant Admin gửi lời mời, User_Service SHALL:
    * Tạo bản ghi User mới trong bảng `users` với trạng thái `PENDING` và `tenant_id` của Admin.
-   * Gọi Keycloak Admin API để tạo một tài khoản "Shadow" (chưa kích hoạt) tương ứng trên Realm của Tenant.
+   * Gọi Keycloak Admin API để tạo một tài khoản "Shadow" (chưa kích hoạt) tương ứng và liên kết vào Organization của Tenant trong realm `solavie`.
    * Sinh mã Token kích hoạt dùng một lần (hết hạn sau 24 giờ).
 3. THE User_Service SHALL gửi email mời kèm link kích hoạt chứa mã token bảo mật thông qua dịch vụ Notification Service.
 4. Khi Tenant Admin thực hiện khóa hoặc mở khóa tài khoản nhân viên trên Dashboard, User_Service SHALL gọi Keycloak Admin API tương ứng để đặt giá trị `"enabled": false` (hoặc `true`) trên Keycloak, đồng thời gửi sự kiện `token.revoked` sang Redis để thu hồi session/token ngay lập tức (< 1ms).
 5. Khi nhân viên cập nhật thông tin cá nhân cơ bản (Email, Họ, Tên) trên Dashboard, User_Service SHALL gọi Keycloak Admin API tương ứng để đồng bộ thông tin lên Keycloak.
 6. Trước khi gửi yêu cầu đổi Email lên Keycloak, User_Service SHALL gọi API kiểm tra chéo tính duy nhất của Email mới để tránh lỗi `409 Conflict`.
-7. THE User_Service SHALL cung cấp các REST API gán và thu hồi vai trò tùy chỉnh cho người dùng (`POST /api/v1/users/:id/roles`, `DELETE /api/v1/users/:id/roles/:name`) để ánh xạ thành viên doanh nghiệp vào Realm Roles của Keycloak.
-8. THE User_Service SHALL cung cấp các REST API proxy tạo và xóa vai trò tùy chỉnh (`POST /api/v1/users/roles`, `DELETE /api/v1/users/roles/:name`) để làm đầu mối cổng trung gian an toàn (Auth Proxy) cho Tenant Config Service đồng bộ Realm Roles lên Keycloak Realm `solavie`.
+7. THE User_Service SHALL cung cấp các REST API gán và thu hồi vai trò tùy chỉnh cho người dùng (`POST /api/v1/users/:id/roles`, `DELETE /api/v1/users/:id/roles/:name`) để ánh xạ thành viên doanh nghiệp vào Organization-scoped Roles của Keycloak.
+8. THE User_Service SHALL cung cấp các REST API proxy tạo và xóa vai trò tùy chỉnh (`POST /api/v1/users/roles`, `DELETE /api/v1/users/roles/:name`) để làm đầu mối cổng trung gian an toàn (Auth Proxy) cho Tenant Config Service đồng bộ Organization-scoped Roles lên Keycloak Organization.
 
 ### Requirement 3: Cô lập đa khách thuê (Multi-tenant Isolation)
 
@@ -70,6 +70,6 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 2. THE USER_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
 3. THE USER_Service SHALL sử dụng phương pháp so sánh **Timing-Safe** (`crypto.timingSafeEqual`) khi kiểm tra chữ ký số HMAC-SHA256 để triệt tiêu nguy cơ side-channel attack. Bất kỳ request nào không khớp chữ ký SHALL bị chặn và trả về lỗi `403 Forbidden`.
 4. THE USER_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `auth:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `auth:*` (Toàn quyền trên service), và `auth:{resource}:*` (Toàn quyền trên tài nguyên).
-5. Đối với vai trò `system` hoặc `system_admin`, THE USER_Service SHALL chỉ cho phép tự động gán quyền wildcard `*` và bypass kiểm tra khi và chỉ khi `tenant_id` trích xuất trùng khớp với ID của Realm Master (`solavie-system-master`). Nếu vai trò `system`/`system_admin` xuất hiện ở Realm của tenant thông thường, USER_Service SHALL chặn và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
+5. Đối với vai trò `system` hoặc `system_admin`, THE USER_Service SHALL chỉ cho phép tự động gán quyền wildcard `*` và bypass kiểm tra khi và chỉ khi `tenant_id` trích xuất trùng khớp với Master Tenant ID (`solavie-system-master`). Nếu vai trò `system`/`system_admin` xuất hiện dưới vai trò thuộc Organization thông thường, USER_Service SHALL chặn và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
 6. THE USER_Service SHALL chặn và từ chối mọi yêu cầu tạo mới hoặc gán các vai trò thuộc danh sách từ khóa bảo lưu (`system`, `system_admin`, `super_admin`, `root`) cho người dùng thuộc tenant thông thường.
 

@@ -91,7 +91,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 **User Story:** Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình và các vai trò mặc định hợp lý để có thể sử dụng ngay mà không cần cấu hình thủ công.
 
 #### Acceptance Criteria
-1. WHEN Auth Service publish event tạo Tenant mới, THE Tenant_Config SHALL tự động tạo bản ghi cấu hình mặc định cho Tenant đó với các giá trị:
+1. WHEN Auth Service publish event tạo Tenant/Organization mới, THE Tenant_Config SHALL tự động tạo bản ghi cấu hình mặc định cho Tenant đó với các giá trị:
    - chatbot_enabled: true
    - confidence_threshold: 0.70
    - auto_handoff_on_negative: true
@@ -194,7 +194,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
      - `POST /api/v1/config/roles`: Tạo một vai trò tùy chỉnh mới và gán danh sách permissions đi kèm.
      - `PUT /api/v1/config/roles/:role_name/permissions`: Cập nhật danh sách permissions cho vai trò được chỉ định.
      - `DELETE /api/v1/config/roles/:role_name`: Xóa một vai trò tùy chỉnh (chỉ cho phép nếu vai trò không là vai trò hệ thống mặc định).
-  2. THE Tenant_Config SHALL tự động gọi REST API của **User Service** (đóng vai trò là Auth Proxy an toàn giữ client credentials của Keycloak) để đồng bộ hóa việc tạo/xóa vai trò (Realm Role) tương ứng trên Keycloak Realm `solavie` khi có yêu cầu POST hoặc DELETE đối với vai trò từ Dashboard. Yêu cầu gọi sang User Service SHALL được bảo vệ bằng chữ ký số HMAC-SHA256 sử dụng `GATEWAY_SIGNING_SECRET`.
+  2. THE Tenant_Config SHALL tự động gọi REST API của **User Service** (đóng vai trò là Auth Proxy an toàn giữ client credentials của Keycloak) để đồng bộ hóa việc tạo/xóa vai trò (Organization Role) tương ứng trên Keycloak Organization khi có yêu cầu POST hoặc DELETE đối với vai trò từ Dashboard. Yêu cầu gọi sang User Service SHALL được bảo vệ bằng chữ ký số HMAC-SHA256 sử dụng `GATEWAY_SIGNING_SECRET`.
   3. WHEN danh sách permissions của một vai trò được cập nhật thành công trong `config_db`, THE Tenant_Config SHALL lập tức cập nhật/ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 days). Danh sách permissions dạng CSV trước khi lưu vào Redis cache bắt buộc phải được sắp xếp tăng dần theo thứ tự bảng chữ cái (alphabetical order) để chuẩn hóa.
   4. THE Tenant_Config SHALL publish một thông điệp invalidation lên kênh Redis Pub/Sub `config.updates` ngay khi cập nhật permissions để báo cho API Gateway giải phóng local cache của vai trò đó trong vòng < 5 giây.
   5. THE Tenant_Config SHALL chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định của hệ thống (`admin`, `manager`, `agent`, `viewer`) để tránh làm hỏng luồng hoạt động cơ bản của hệ thống. Đồng thời, THE Tenant_Config SHALL chặn các yêu cầu tạo mới hoặc đổi tên vai trò tùy chỉnh trùng với danh sách các từ khóa bảo lưu của hệ thống (`system`, `system_admin`, `super_admin`, `root`) nhằm ngăn ngừa nguy cơ Privilege Escalation.

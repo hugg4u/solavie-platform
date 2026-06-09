@@ -56,7 +56,7 @@ Hệ thống được xây dựng trên kiến trúc **Microservices** với cá
 | **Mô hình dữ liệu** | Database-per-Service (mỗi service có database riêng) |
 | **Multi-tenancy** | Shared Database + Row-Level Security (RLS) trên `tenant_id` |
 | **API Gateway** | Kong API Gateway với OIDC plugin kết nối Keycloak |
-| **Xác thực** | OAuth2 / OpenID Connect thông qua Keycloak Multi-Realm kết hợp kiến trúc lai Hybrid User Architecture phân tách với User Service |
+| **Xác thực** | OAuth2 / OpenID Connect thông qua Keycloak Organizations trong shared Realm 'solavie' kết hợp kiến trúc lai Hybrid User Architecture phân tách với User Service |
 
 ### 2.1.3. Phụ thuộc hệ thống bên ngoài
 
@@ -70,7 +70,6 @@ Hệ thống được xây dựng trên kiến trúc **Microservices** với cá
 | **SMTP Server** | SMTP | Gửi email thông báo hệ thống | On-demand |
 
 ---
-tiếp tục đi /grill-me /schedule /goal
 ## 2.2. Chức năng chính của sản phẩm (Product Functions)
 
 ### 2.2.1. Sơ đồ phân hệ chức năng
@@ -80,7 +79,7 @@ mindmap
   root((MKT Platform))
     Identity & Access
       Đăng nhập / Đăng xuất
-      Quản lý Tenant & Realm
+      Quản lý Tenant & Organization
       Phân quyền động RBAC
       API Gateway & Rate Limiting
     Tương tác Khách hàng

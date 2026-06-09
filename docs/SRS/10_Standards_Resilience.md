@@ -146,6 +146,14 @@ Khi chạy 18 microservices độc lập trên cùng một cụm máy chủ và 
 - **Giới hạn tài nguyên Docker (Memory Limits)**: Thiết lập tham số `mem_limit` (ví dụ: giới hạn RAM từ 250MB - 350MB cho các container Node.js/Python thông thường) và giới hạn CPU trong file cấu hình triển khai để tránh tình trạng rò rỉ bộ nhớ (memory leak) làm sập hệ điều hành.
 - **GraalVM Native Image**: Đối với các service viết bằng Java (Spring Boot), khuyến nghị biên dịch sang Native Image ở giai đoạn phát hành thương mại để hạ dung lượng tiêu thụ RAM rảnh từ ~400MB xuống dưới 50MB mỗi container.
 
+### 10.6.6. Chủ động kiểm tra sức khỏe và cơ chế thử lại (Kong Upstream Active Healthchecks & Retries)
+
+Nhằm mục đích triệt tiêu lỗi `502 Bad Gateway` khi triển khai (deploy) bản phát hành mới hoặc khi một bản sao dịch vụ (instance) gặp sự cố nghẽn mạng/sập nguồn, Kong API Gateway kết hợp cơ chế phát hiện dịch vụ động của Solavie được cấu hình thêm khả năng chống chịu lỗi chủ động:
+
+- **Active Healthchecks (Kiểm tra sức khỏe chủ động):** Kong Gateway gửi định kỳ HTTP GET request đến endpoint `/health` của từng IP:Port đích (target) trong Upstream mỗi 5 giây. Nếu một target trả về mã lỗi không phải 2xx/3xx (hoặc không phản hồi) liên tiếp 2 lần, Kong sẽ tự động đánh dấu target đó là `unhealthy` và lập tức dừng định tuyến request mới tới node này.
+- **Upstream Retries (Thử lại ở tầng Gateway):** Khi xảy ra lỗi TCP Handshake hoặc node đích ngắt kết nối đột ngột (trước khi heartbeat 15 giây kịp hết hạn trên Redis), Kong được cấu hình `retries = 3`. Kong sẽ tự động chuyển tiếp request thất bại sang một target healthy khác trong danh sách Upstream mà khách hàng không hề nhận ra lỗi.
+- **Zero-Downtime Rolling Release:** Khi deploy release mới, các container cũ sẽ nhận tín hiệu SIGTERM và thực hiện dọn dẹp (Graceful Shutdown) bằng cách gỡ IP khỏi Redis Registry và chuyển `/health` sang trạng thái lỗi. Trong khi đó, các node mới khởi chạy thành công sẽ đăng ký IP và bắt đầu vượt qua kiểm tra sức khỏe của Kong trước khi nhận traffic. Điều này đảm bảo tính sẵn sàng 100% của hệ thống.
+
 ---
 
 ## 10.7. Chính sách lưu trữ và dọn dẹp dữ liệu (Data Retention & Archiving Policy)

@@ -6,7 +6,7 @@ Tài liệu này đặc tả chi tiết các quy tắc nghiệp vụ (Business R
 
 ## 1. Cơ Chế Khởi Tạo Mặc Định (Default Config & Roles Seeding Flow)
 
-Khi một Tenant mới được tạo lập thành công trên hệ thống (nhận sự kiện tạo Tenant từ Auth Service):
+Khi một Tenant mới được tạo lập thành công trên hệ thống (nhận sự kiện tạo Tenant/Organization từ Auth Service):
 *   **Tự động tạo cấu hình mặc định:** Tenant Config Service bắt buộc phải tự động khởi tạo bộ cấu hình mặc định cho Tenant đó trong cơ sở dữ liệu `config_db` trong vòng tối đa 5 giây.
 *   **Bộ giá trị mặc định:** Phải tuân thủ nghiêm ngặt các thông số ban đầu của hệ thống như: `chatbot_enabled: true`, `confidence_threshold: 0.70`, `session_timeout_minutes: 60`, `audit_log_retention_days: 90`, `dms_max_storage_mb: 5000`...
 *   **Gieo mầm vai trò và quyền mặc định (Roles Seeding):** Đồng thời trong luồng khởi tạo này, service tự động tạo 4 vai trò mặc định (`admin`, `manager`, `agent`, `viewer`) và lưu trữ danh sách permissions tương ứng của chúng vào cơ sở dữ liệu PostgreSQL.
@@ -66,7 +66,7 @@ Khi Tenant Admin thực hiện cấu hình vai trò (Custom Roles) và phân quy
 *   **Quy trình đồng bộ tạo/xóa vai trò:**
     1.  Tenant Config Service lưu định nghĩa vai trò và danh sách quyền hạn (Permissions) tương ứng vào PostgreSQL (`roles` và `role_permissions`).
     2.  Tenant Config Service tạo request gọi sang REST API của User Service (`POST /api/v1/users/roles` khi tạo hoặc `DELETE /api/v1/users/roles/:name` khi xóa) kèm chữ ký số HMAC-SHA256 ký bằng `GATEWAY_SIGNING_SECRET`.
-    3.  User Service verify chữ ký và thực hiện gọi Keycloak Admin API để đồng bộ Realm Role.
+    3.  User Service verify chữ ký và thực hiện gọi Keycloak Admin API để đồng bộ Organization Role.
 *   **Ghi đè cache phân quyền:** Khi danh sách quyền hạn của một vai trò (mặc định hay tùy chỉnh) được cập nhật thành công, Tenant Config Service cập nhật/ghi đè danh sách permissions dạng CSV (bắt buộc phải được sắp xếp theo bảng chữ cái alphabet tăng dần để chuẩn hóa) vào Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` với TTL dài hạn (30 ngày), đồng thời phát sự kiện invalidation lên kênh Redis Pub/Sub `config.updates` để API Gateway xóa bộ nhớ đệm trong vòng `< 5 giây`.
 *   **Ràng buộc bảo vệ vai trò hệ thống:**
     *   Chặn mọi yêu cầu sửa đổi hoặc xóa đối với các vai trò mặc định: `admin`, `manager`, `agent`, `viewer`.

@@ -141,7 +141,7 @@ sequenceDiagram
 
     Admin->>US: POST /api/v1/users/invite {"email", "role", "department"}
     Note over US: Tự động trích xuất tenant_id của Admin
-    US->>KC: POST /admin/realms/{realm}/users (Tạo user shadow, disabled)
+    US->>KC: POST /admin/realms/solavie/users (Tạo user shadow, disabled trong realm solavie)
     KC-->>US: Trả về Keycloak User UUID
     US->>US: Lưu UUID vào bảng users với status='PENDING'
     US->>US: Sinh mã kích hoạt dùng 1 lần (TTL 24h)
@@ -165,9 +165,9 @@ sequenceDiagram
     participant Redis as Redis (token.revoked)
 
     Admin->>US: POST /api/v1/users/{id}/suspend (hoặc /unsuspend)
-    US->>KC: 1. Đặt trạng thái: PUT /users/{id} {"enabled": false}
-    US->>KC: 2. Hủy Sessions: POST /users/{id}/logout
-    KC-->>US: Xác nhận thành công
+    US->>KC: 1. Đặt trạng thái: PUT /admin/realms/solavie/users/{id} {"enabled": false}
+    US->>KC: 2. Hủy Sessions: POST /admin/realms/solavie/users/{id}/logout
+    KC-->>US: Pt xác nhận thành công
     US->>Redis: 3. PUBLISH token.revoked {"jti": "...", "exp": ...}
     US->>US: 4. Cập nhật status='SUSPENDED' ở database Backend
     US-->>Admin: Trả về trạng thái đã cập nhật thành công
@@ -197,7 +197,7 @@ sequenceDiagram
     participant KC as Keycloak (Auth)
 
     User->>US: PUT /api/v1/users/profile {"email": "new@email.com", "first_name": "A", "last_name": "Nguyen"}
-    US->>KC: PUT /admin/realms/{realm}/users/{id} {"email": "new@email.com", "firstName": "A", "lastName": "Nguyen"}
+    US->>KC: PUT /admin/realms/solavie/users/{id} {"email": "new@email.com", "firstName": "A", "lastName": "Nguyen"}
     KC-->>US: 204 No Content
     US->>US: Cập nhật database local (nếu cần lưu cache)
     US-->>User: Trả về kết quả cập nhật thành công

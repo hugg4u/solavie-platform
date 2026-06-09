@@ -14,7 +14,7 @@
 | **FR-AUTH-004** | Kiểm tra quyền hạn Kong Gateway | UC-02 | US-003 | BRD §4 | TC-AUTH-004 | 🔴 Hoạt động |
 | **FR-AUTH-005** | Giao diện CRUD Vai trò & Quyền | UC-02 | US-003 | BRD §4 | TC-AUTH-005 | 🔴 Hoạt động |
 | **FR-AUTH-006** | Invalidate cache Redis tức thì | UC-02 | US-004 | BRD §4 | TC-AUTH-006 | 🔴 Hoạt động |
-| **FR-AUTH-007** | Khởi tạo Realm & Admin Tenant mới | UC-03 | US-005 | BRD §1 | TC-AUTH-007 | 🔴 Hoạt động |
+| **FR-AUTH-007** | Khởi tạo Organization & Admin Tenant mới | UC-03 | US-005 | BRD §1 | TC-AUTH-007 | 🔴 Hoạt động |
 | **FR-AUTH-008** | Gửi email kích hoạt tài khoản | UC-03 | US-005 | BRD §1 | TC-AUTH-008 | 🔴 Hoạt động |
 | **FR-AUTH-009** | Phân quyền mức Client (Scopes) | UC-01 | US-001 | BRD §4 | TC-AUTH-009 | 🟡 Đang dev |
 | **FR-AUTH-010** | Phân tách Danh tính & Hồ sơ User | UC-01 | US-001 | BRD §4 | TC-AUTH-010 | 🔴 Hoạt động |

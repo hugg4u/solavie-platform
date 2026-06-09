@@ -4,7 +4,7 @@
 This document tracks the implementation checklist for **AUTH Service** based on the system specifications.
 
 ### Technical Stack & Configuration
-- **Platform:** Keycloak 24+
+- **Platform:** Keycloak 26+ (Organizations enabled)
 - **Database:** PostgreSQL
 - **Mode:** Production mode
 - **Port:** 8080
@@ -25,24 +25,24 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] AC 1.1: THE Auth_Service SHALL cung cấp OAuth2 Authorization Code flow cho Dashboard
 - [x] AC 1.2: THE Auth_Service SHALL phát hành JWT access token (short-lived, 15 min)
 - [x] AC 1.3: THE Auth_Service SHALL phát hành refresh token (long-lived, 30 days)
-- [x] AC 1.4: THE Auth_Service SHALL expose OIDC discovery endpoint per realm
+- [x] AC 1.4: THE Auth_Service SHALL expose OIDC discovery endpoint for shared realm 'solavie'
 - [x] AC 1.5: JWT claims SHALL bao gồm: sub, tenant_id, roles, email, name
 
-### Task 2: 2: Multi-tenant Realms
-> *User Story: Là platform admin, tôi muốn mỗi tenant có realm riêng biệt.*
+### Task 2: Keycloak Organizations (shared realm 'solavie')
+> *User Story: Là platform admin, tôi muốn mỗi tenant được cô lập trong Organization của realm 'solavie'.*
 
 **Acceptance Criteria Implementation:**
-- [x] AC 2.1: THE Auth_Service SHALL tạo 1 Keycloak realm per tenant
-- [x] AC 2.2: THE Auth_Service SHALL cách ly users, roles, clients giữa các realms
-- [x] AC 2.3: THE Auth_Service SHALL hỗ trợ tạo realm mới khi onboard tenant
-- [x] AC 2.4: THE Auth_Service SHALL hỗ trợ custom branding per realm (login page)
+- [x] AC 2.1: THE Auth_Service SHALL tạo 1 Keycloak Organization per tenant trong shared realm 'solavie'
+- [x] AC 2.2: THE Auth_Service SHALL cách ly users, roles, clients giữa các Organizations
+- [x] AC 2.3: THE Auth_Service SHALL hỗ trợ tạo Organization mới khi onboard tenant
+- [x] AC 2.4: THE Auth_Service SHALL hỗ trợ custom branding per Organization (login page)
 
 ### Task 3: 3: Role-Based Access Control (RBAC)
 > *User Story: Là admin, tôi muốn phân quyền chi tiết cho từng user.*
 
 **Acceptance Criteria Implementation:**
 - [x] AC 3.1: THE Auth_Service SHALL hỗ trợ roles: Admin, Manager, Agent, Viewer
-  - Roles được tạo tự động trong `provision_realm.py` khi onboard tenant mới
+  - Roles được tạo tự động trong `provision_organization.py` khi onboard tenant mới
 - [x] AC 3.2: Admin: full access tất cả features
 - [x] AC 3.3: Manager: manage content, campaigns, analytics, approve posts
 - [x] AC 3.4: Agent: inbox, reply messages, view contacts
@@ -54,7 +54,7 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 > *User Story: Là admin, tôi muốn quản lý users trong tổ chức.*
 
 **Acceptance Criteria Implementation:**
-- [x] AC 4.1: THE Auth_Service SHALL hỗ trợ CRUD users per realm
+- [x] AC 4.1: THE Auth_Service SHALL hỗ trợ CRUD users per Organization
 - [x] AC 4.2: THE Auth_Service SHALL hỗ trợ invite user via email
 - [x] AC 4.3: THE Auth_Service SHALL hỗ trợ password reset flow
 - [x] AC 4.4: THE Auth_Service SHALL hỗ trợ disable/enable user accounts
@@ -62,10 +62,10 @@ This document tracks the implementation checklist for **AUTH Service** based on 
     - [x] AC 4.5.1: Xây dựng sync subscriber/worker lắng nghe event `config.updates` từ Tenant Config Service
 - [x] AC 4.6: Phân tách dữ liệu hồ sơ User nghiệp vụ (Hybrid User Profiles) sang User Service và liên kết qua User UUID (`sub` claim)
 - [x] AC 4.7: Triển khai cấu hình Client Credentials để cấp quyền cho User Service gọi đến Keycloak Admin API
-    - **Implemented:** Thêm `user-service-client` (confidential, `serviceAccountsEnabled: true`, `standardFlowEnabled: false`) vào `templates/tenant-realm-template.json`
-    - **Implemented:** Hàm `provision_user_service_client()` trong `provision_realm.py` tự động gán role `manage-users` từ `realm-management` cho service account — áp dụng nguyên tắc **Least Privilege**
-    - **Arg mới:** `--user-service-secret` cho `provision_realm.py` (auto-generate nếu bỏ trống)
-    - **Output:** `provision_realm.py` trả về `user-service-client` secret trong `PROVISION_OUTPUT_START` block
+    - **Implemented:** Thêm `user-service-client` (confidential, `serviceAccountsEnabled: true`, `standardFlowEnabled: false`) vào shared client của realm `solavie`
+    - **Implemented:** Hàm `provision_user_service_client()` trong `provision_organization.py` tự động gán role `manage-users` từ `realm-management` cho service account — áp dụng nguyên tắc **Least Privilege**
+    - **Arg mới:** `--user-service-secret` cho `provision_organization.py` (auto-generate nếu bỏ trống)
+    - **Output:** `provision_organization.py` trả về `user-service-client` secret trong `PROVISION_OUTPUT_START` block
 - [x] AC 4.8: Phát triển & Tích hợp Custom Event Listener SPI trên Keycloak để xuất bản sự kiện sang Redis/Kafka channel `auth.user.events`
       - **Implemented:** `services/auth/scripts/sync_worker.py` — subscribed thêm Redis channel `auth.user.events`
       - Hàm `forward_user_event_to_service()` map Keycloak event types → User Service event schema:
@@ -76,7 +76,7 @@ This document tracks the implementation checklist for **AUTH Service** based on 
       - Ký HMAC-SHA256 payload với `WEBHOOK_SECRET` trước khi gọi User Service webhook `POST /api/v1/users/events`
       - Header `X-Webhook-Signature` để User Service xác thực nguồn gốc event
     - [x] Call Keycloak Admin API để đồng bộ `passwordPolicy` (minLength, upperCase, digit, specialChars)
-      - **Implemented:** `update_realm_security()` trong sync_worker.py — PUT `/admin/realms/{realm}`
+      - **Implemented:** `update_realm_security()` trong sync_worker.py — PUT `/admin/realms/solavie`
     - [x] Viết integration test kiểm thử việc thay đổi password policy động áp dụng thành công
       - **Implemented:** `test_dynamic_password_policy_sync()` trong `test_auth.py`
       - Test set `length(12)` → xác minh user với password ngắn bị từ chối (400)
@@ -120,7 +120,7 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 > *User Story: Là platform security architect, tôi muốn giới hạn quyền hạn truy cập của từng client Dashboard và API Gateway đối với từng dịch vụ backend.*
 
 **Acceptance Criteria Implementation:**
-- [x] AC 7.1: Định nghĩa các Client Scopes chuyên biệt cho các services nghiệp vụ (18 scopes bao gồm `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`, `dms`, `link-shortener`, `scheduler`, `comment-manager`, `notification`, `channel-connector`, `media-processor`, `knowledge-base`, `observability`) khởi tạo động qua `provision_realm.py`
+- [x] AC 7.1: Định nghĩa các Client Scopes chuyên biệt cho các services nghiệp vụ (18 scopes bao gồm `campaign`, `crm`, `chatbot`, `content`, `messaging`, `analytics`, `ai-core`, `tenant-config`, `dms`, `link-shortener`, `scheduler`, `comment-manager`, `notification`, `channel-connector`, `media-processor`, `knowledge-base`, `observability`) khởi tạo động qua `provision_organization.py`
 - [x] AC 7.2: Cấu hình các Client Scopes này làm `optionalClientScopes` cho client `dashboard` và `api-gateway` tự động khi chạy provision
 - [x] AC 7.3: Xác minh Access Token phát hành cho client Dashboard chứa claim `scope` phản ánh đúng danh sách scopes được yêu cầu (Verified qua test suite của Gateway)
 
@@ -150,7 +150,7 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 > **Trạng thái:** PLANNED — Thực hiện khi số tenant vượt 100
 
 ### Giai đoạn 0 — Security Fix (NGAY LẬP TỨC)
-- [x] **[CRITICAL]** Cập nhật `handler.lua` dòng 213-219: Bổ sung Realm Master check cho role `system`/`system_admin` để chống Privilege Escalation
+- [x] **[CRITICAL]** Cập nhật `handler.lua` dòng 213-219: Bổ sung Master Tenant ID check cho role `system`/`system_admin` để chống Privilege Escalation
 - [x] Thêm `KONG_MASTER_REALM_TENANT_ID` vào `docker-compose.yml` và `.env.example`
 - [x] Viết test case kiểm tra block Privilege Escalation
 

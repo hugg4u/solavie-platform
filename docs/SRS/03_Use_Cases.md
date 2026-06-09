@@ -103,7 +103,7 @@ graph TB
 | **Actor chính** | Tenant Admin, Manager, Agent, Content Creator, Viewer |
 | **Actor phụ** | Keycloak Auth Service |
 | **Mô tả** | Người dùng đăng nhập vào Dashboard bằng email và mật khẩu để truy cập các chức năng được phân quyền |
-| **Preconditions** | 1. Tài khoản người dùng đã được Admin tạo trong hệ thống<br/>2. Realm của Tenant đã được khởi tạo trên Keycloak |
+| **Preconditions** | 1. Tài khoản người dùng đã được Admin tạo trong hệ thống<br/>2. Tenant Organization đã được khởi tạo trên Keycloak |
 | **Trigger** | Người dùng truy cập URL Dashboard |
 | **Frequency** | Nhiều lần/ngày |
 | **Priority** | 🔴 Must Have |
@@ -169,7 +169,7 @@ graph TB
 | 2 | Nhấn "Tạo Role mới" | Hiển thị form: Tên Role, Mô tả |
 | 3 | Nhập tên Role (VD: "Trưởng nhóm KD miền Nam") | |
 | 4 | Hệ thống hiển thị ma trận Permissions | Admin tick chọn các permissions cần gán (VD: `inbox:read`, `inbox:chat`, `contacts:view`) |
-| 5 | Nhấn "Lưu" | Gọi Keycloak Admin API tạo Realm Role (chỉ lưu Role Name ở Keycloak) và lưu Role + Permissions vào PostgreSQL (config_db) của Tenant Config Service |
+| 5 | Nhấn "Lưu" | Gọi Keycloak Admin API tạo Organization Role (chỉ lưu Role Name ở Keycloak) và lưu Role + Permissions vào PostgreSQL (config_db) của Tenant Config Service |
 | 6 | | Lưu permissions dạng CSV vào Redis (key: `tenant:{tenant_id}:role:{role_name}:permissions`) và gửi tín hiệu invalidation lên kênh Redis Pub/Sub `config.updates` để Gateway xóa local worker cache |
 | 7 | | Audit log ghi nhận hành động tạo Role |
 
@@ -179,7 +179,7 @@ graph TB
 |----|----------|----------|
 | AF-02a | Admin chỉnh sửa Permissions của Role đã tồn tại | Cập nhật database PostgreSQL của Tenant Config, ghi đè Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` và publish event hủy cache qua Redis Pub/Sub `config.updates`. Gateway và downstream sẽ áp dụng quyền mới ngay lập tức |
 | AF-02b | Admin gán Role cho User | Keycloak Admin API map Role với User. JWT token mới của User sẽ chứa Role claim mới; Gateway tự động phân giải thành các permissions tương ứng |
-| AF-02c | Admin xóa Role | Kiểm tra không còn User nào gán Role này. Xóa Realm Role trên Keycloak, xóa Role & Permissions trong PostgreSQL, xóa cache Redis và publish event hủy cache. Chặn xóa các vai trò hệ thống mặc định |
+| AF-02c | Admin xóa Role | Kiểm tra không còn User nào gán Role này. Xóa Organization Role trên Keycloak, xóa Role & Permissions trong PostgreSQL, xóa cache Redis và publish event hủy cache. Chặn xóa các vai trò hệ thống mặc định |
 
 **Exception Flows:**
 
@@ -204,7 +204,7 @@ graph TB
 | **Tên** | Onboard Tenant mới (Tenant Provisioning) |
 | **Actor chính** | Super Admin |
 | **Actor phụ** | Keycloak, PostgreSQL, Redis |
-| **Mô tả** | Khởi tạo không gian hoạt động cho Tenant mới: tạo Realm, Admin account, database schema, default config |
+| **Mô tả** | Khởi tạo không gian hoạt động cho Tenant mới: tạo Organization, Admin account, database schema, default config |
 | **Preconditions** | Super Admin đã đăng nhập |
 | **Priority** | 🔴 Must Have |
 
@@ -215,7 +215,7 @@ graph TB
 | 1 | Super Admin vào "Quản lý Tenants" | Hiển thị danh sách Tenants hiện có |
 | 2 | Nhấn "Tạo Tenant mới" | Form: Tên công ty, Email admin, Gói dịch vụ (Free/Standard/Enterprise) |
 | 3 | Điền thông tin, nhấn "Tạo" | |
-| 4 | | Tạo Realm mới trên Keycloak với cấu hình bảo mật mặc định |
+| 4 | | Tạo Organization mới trên Keycloak với cấu hình bảo mật mặc định |
 | 5 | | Tạo tài khoản Admin đầu tiên cho Tenant, gán quyền Admin |
 | 6 | | Khởi tạo RLS policies cho tenant_id mới trên tất cả database services |
 | 7 | | Tạo default config trong Tenant Config Service (chatbot_enabled=true, confidence_threshold=0.70...) |
@@ -227,10 +227,10 @@ graph TB
 | ID | Điều kiện | Hành động |
 |----|----------|----------|
 | EF-03a | Email admin đã tồn tại trong hệ thống | Hiển thị lỗi "Email đã được sử dụng" |
-| EF-03b | Tạo Realm thất bại (Keycloak lỗi) | Rollback toàn bộ, hiển thị lỗi "Không thể khởi tạo Tenant" |
+| EF-03b | Tạo Organization thất bại (Keycloak lỗi) | Rollback toàn bộ, hiển thị lỗi "Không thể khởi tạo Tenant" |
 
 **Postconditions:**
-- Tenant mới có Realm, Admin account, default config sẵn sàng
+- Tenant mới có Organization, Admin account, default config sẵn sàng
 - Admin Tenant có thể đăng nhập và bắt đầu cấu hình
 
 **Liên kết:** FR-AUTH-007, FR-AUTH-008, US-005

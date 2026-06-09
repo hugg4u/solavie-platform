@@ -68,7 +68,7 @@
 **So that** Tenant có thể bắt đầu sử dụng hệ thống ngay sau khi nhận email chào mừng.
 
 **Acceptance Criteria:**
-- **Given** Super Admin nhập tên công ty + email admin + gói dịch vụ, **When** nhấn "Tạo", **Then** hệ thống tạo Realm Keycloak, Admin account, default config, và gửi email activation.
+- **Given** Super Admin nhập tên công ty + email admin + gói dịch vụ, **When** nhấn "Tạo", **Then** hệ thống tạo Keycloak Organization trong Realm 'solavie', Admin account, default config, và gửi email activation.
 - **Given** email admin đã tồn tại, **When** tạo Tenant, **Then** hiển thị lỗi "Email đã được sử dụng".
 
 **Priority:** 🔴 Must Have | **Story Points:** 13

@@ -80,5 +80,5 @@ Auth Sync Worker chạy bằng Python xuất bản log stdout ở định dạng
 | KeycloakDown | health/ready fail > 30s | critical |
 | SessionOverload | active_sessions > 10000 | warning |
 | TokenRefreshFailing | token errors > 10 in 5m | warning |
-| RealmCreationFail | admin API errors | critical |
+| OrganizationCreationFail | admin API errors | critical |
 | SyncWorkerFailure | sum(rate(sync_worker_errors_total[5m])) > 1 | critical |

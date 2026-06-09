@@ -149,7 +149,7 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Triển khai cơ chế Fail-Secure: Trả về 503 Service Unavailable hoặc 403 Forbidden khi tất cả các nguồn dữ liệu đều offline.
 - [x] Sắp xếp tăng dần theo bảng chữ cái (deterministic sorting) danh sách permissions để đảm bảo tính nhất quán của chữ ký số.
 - [x] Triển khai hàm ký HMAC-SHA256 trên Kong Lua để tạo signature từ payload: `tenant_id:user_id:user_permissions` bằng `GATEWAY_SIGNING_SECRET`.
-- [x] Tự động gán quyền wildcard `*` cho `admin` của tenant và check Realm Master của `system`/`system_admin` để tránh privilege escalation.
+- [x] Tự động gán quyền wildcard `*` cho `admin` của tenant và check Master Tenant ID của `system`/`system_admin` để tránh privilege escalation.
 - [x] Inject headers `X-User-ID`, `X-User-Permissions` và `X-Permissions-Signature` vào downstream request.
 - [x] Bổ sung cấu hình CORS cho phép các header bảo mật mới đi qua.
 
@@ -158,39 +158,39 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Triển khai kiểm tra User Blacklist trong Redis key `blacklist:user:{user_id}` để từ chối các người dùng đang bị đình chỉ (Suspended).
 
 ---
-*Last updated: 2026-06-08 — Phase 1 completed, Phase 2 & 4 tasks added for Organizations, L1/L2 Cache and Circuit Breaker.*
+*Last updated: 2026-06-10 — All phases completed, including Keycloak Organizations integration, L1/L2 caching, Circuit Breaker, and Infrastructure-Agnostic Service Discovery.*
 
-## Giai đoạn 2 — Core Integration (Sprint 3-4) [PLANNED]
-- [ ] **Tích hợp Keycloak Organizations**:
-  - [ ] Cập nhật `generate_kong_config.py` để lấy public key từ duy nhất realm `solavie` và cấu hình OIDC plugin.
-  - [ ] Cập nhật `handler.lua` để trích xuất `tenant_id` từ claim `organization` của JWT (không dùng tương thích ngược).
-- [ ] **Tối ưu hóa L1/L2 Cache**:
-  - [ ] Cấu hình vùng nhớ dùng chung `lua_shared_dict perm_cache 10m` trong Kong Gateway.
-  - [ ] Cập nhật Lua plugin `dynamic-policy` để tra cứu quyền hạn trên L1 Cache (`ngx.shared.DICT`) thay thế cho bảng Lua local.
-- [ ] **Tích hợp Circuit Breaker**:
-  - [ ] Khai báo vùng nhớ trạng thái `lua_shared_dict circuit_state 1m` trong Kong.
-  - [ ] Triển khai bộ ngắt mạch Circuit Breaker trong Lua cho API Fallback cuộc gọi Tenant Config Service.
-- [ ] **Tích hợp BFF (Backend-for-Frontend)**:
-  - [ ] Cấu hình Next.js Dashboard BFF trung chuyển JWT và cookie bảo mật qua Gateway.
+## Giai đoạn 2 — Core Integration (Sprint 3-4) [COMPLETED]
+- [x] **Tích hợp Keycloak Organizations**:
+  - [x] Cập nhật `generate_kong_config.py` để lấy public key từ duy nhất realm `solavie` và cấu hình OIDC plugin.
+  - [x] Cập nhật `handler.lua` để trích xuất `tenant_id` từ claim `organization` của JWT (không dùng tương thích ngược).
+- [x] **Tối ưu hóa L1/L2 Cache**:
+  - [x] Cấu hình vùng nhớ dùng chung `lua_shared_dict perm_cache 10m` trong Kong Gateway.
+  - [x] Cập nhật Lua plugin `dynamic-policy` để tra cứu quyền hạn trên L1 Cache (`ngx.shared.DICT`) thay thế cho bảng Lua local.
+- [x] **Tích hợp Circuit Breaker**:
+  - [x] Khai báo vùng nhớ trạng thái `lua_shared_dict circuit_state 1m` trong Kong.
+  - [x] Triển khai bộ ngắt mạch Circuit Breaker trong Lua cho API Fallback cuộc gọi Tenant Config Service.
+- [x] **Tích hợp BFF (Backend-for-Frontend)**:
+  - [x] Cấu hình Next.js Dashboard BFF trung chuyển JWT và cookie bảo mật qua Gateway.
 
-## Giai đoạn 4 — Hardening & Testing (Sprint 7) [PLANNED]
-- [ ] **Cập nhật tài liệu vận hành**:
-  - [ ] Cập nhật `specs/services/gateway/logging.md` để ghi nhận sự kiện Cache Hit/Miss của L1/L2 Cache.
-  - [ ] Định nghĩa chuẩn log cho trạng thái Circuit Breaker (CLOSED -> OPEN, Half-Open).
-- [ ] **Kiểm thử hiệu năng & Độ chịu lỗi**:
-  - [ ] Chạy kiểm thử k6 kiểm chứng độ trễ xác thực token dưới 5ms.
-  - [ ] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway.
+## Giai đoạn 4 — Hardening & Testing (Sprint 7) [COMPLETED]
+- [x] **Cập nhật tài liệu vận hành**:
+  - [x] Cập nhật `specs/services/gateway/logging.md` để ghi nhận sự kiện Cache Hit/Miss của L1/L2 Cache.
+  - [x] Định nghĩa chuẩn log cho trạng thái Circuit Breaker (CLOSED -> OPEN, Half-Open).
+- [x] **Kiểm thử hiệu năng & Độ chịu lỗi**:
+  - [x] Chạy kiểm thử k6 kiểm chứng độ trễ xác thực token dưới 5ms.
+  - [x] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway.
 
-## Giai đoạn 5 — Infrastructure-Agnostic Service Discovery [PLANNED]
+## Giai đoạn 5 — Infrastructure-Agnostic Service Discovery [COMPLETED]
 ### Task 9: Infrastructure-Agnostic Dynamic Upstream Target Sync
-- [ ] **Cấu hình Upstream**:
-  - [ ] Khai báo đối tượng `Upstream` ảo cho `ai-core-upstream` trong `kong.yml` và cấu hình health checks, `retries: 5`.
-  - [ ] Trỏ service `ai-core` tới `http://ai-core-upstream` thay vì hostname tĩnh.
-- [ ] **Triển khai Registry Sync Daemon**:
-  - [ ] Tạo file [sync_registry.py](file:///d:/workspace/project/solavie-system/services/gateway/sync_registry.py) sử dụng `redis-py` và `requests`.
-  - [ ] Triển khai cơ chế so khớp Set để tự động POST/DELETE targets trên Kong Admin API.
-  - [ ] Cập nhật [docker-compose.yml](file:///d:/workspace/project/solavie-system/docker-compose.yml) để khởi động script ngầm trong gateway.
-- [ ] **Kiểm thử nghiệm thu**:
-  - [ ] Viết testcase unit test cho logic đồng bộ target.
-  - [ ] Chạy scale test và giả lập container crash, xác nhận Kong tự động chuyển hướng request sang target còn sống mà không có downtime.
+- [x] **Cấu hình Upstream**:
+  - [x] Khai báo đối tượng `Upstream` ảo cho `ai-core-upstream` trong `kong.yml` và cấu hình health checks, `retries: 5`.
+  - [x] Trỏ service `ai-core` tới `http://ai-core-upstream` thay vì hostname tĩnh.
+- [x] **Triển khai Registry Sync Daemon**:
+  - [x] Tạo file [sync_registry.py](file:///d:/workspace/project/solavie-system/services/gateway/sync_registry.py) sử dụng `redis-py` và `requests`.
+  - [x] Triển khai cơ chế so khớp Set để tự động POST/DELETE targets trên Kong Admin API.
+  - [x] Cập nhật [docker-compose.yml](file:///d:/workspace/project/solavie-system/docker-compose.yml) để khởi động script ngầm trong gateway.
+- [x] **Kiểm thử nghiệm thu**:
+  - [x] Viết testcase unit test cho logic đồng bộ target.
+  - [x] Chạy scale test và giả lập container crash, xác nhận Kong tự động chuyển hướng request sang target còn sống mà không có downtime.
 

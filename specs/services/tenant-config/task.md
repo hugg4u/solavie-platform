@@ -89,9 +89,9 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 
 ### Task 12: Quản lý Vai trò & Quyền hạn (Default & Custom Roles)
 - [ ] AC 12.1: Xây dựng REST API `GET /api/v1/config/roles` để lấy danh sách vai trò hiện tại của Tenant (bao gồm cả vai trò mặc định hệ thống và tùy chỉnh).
-- [ ] AC 12.2: Xây dựng REST API `POST /api/v1/config/roles` để khởi tạo một Custom Realm Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC, đồng thời lưu trữ thông tin phân quyền tương ứng vào PostgreSQL.
+- [ ] AC 12.2: Xây dựng REST API `POST /api/v1/config/roles` để khởi tạo một Custom Organization Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC, đồng thời lưu trữ thông tin phân quyền tương ứng vào PostgreSQL.
 - [ ] AC 12.3: Xây dựng REST API `PUT /api/v1/config/roles/:role_name/permissions` để cập nhật danh sách quyền cho vai trò, sắp xếp tăng dần alphabet, ghi đè trực tiếp Redis key `tenant:{tenant_id}:role:{role_name}:permissions` (Long TTL: 30 ngày) và bắn tín hiệu Pub/Sub hủy cache Gateway.
-- [ ] AC 12.4: Xây dựng REST API `DELETE /api/v1/config/roles/:role_name` để xóa Custom Realm Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC và xóa dữ liệu liên quan ở PostgreSQL.
+- [ ] AC 12.4: Xây dựng REST API `DELETE /api/v1/config/roles/:role_name` để xóa Custom Organization Role trên Keycloak bằng cách gọi REST API của **User Service** (Auth Proxy) kèm chữ ký HMAC và xóa dữ liệu liên quan ở PostgreSQL.
 - [ ] AC 12.5: Triển khai cơ chế bảo vệ chặn các yêu cầu chỉnh sửa hoặc xóa đối với các vai trò mặc định (`admin`, `manager`, `agent`, `viewer`), đồng thời cấm tạo mới hoặc đổi tên vai trò trùng với blacklist bảo lưu (`system`, `system_admin`, `super_admin`, `root`).
 
 ### Task 13: Zero-Trust HMAC Guard & Permission Manifest

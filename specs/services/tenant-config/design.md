@@ -165,7 +165,7 @@ model ConfigAuditLog {
 
 ### 2. Quản lý vai trò & quyền hạn (Custom Roles)
 - `GET /api/v1/config/roles` — Lấy danh sách vai trò và quyền hạn chi tiết của Tenant.
-- `POST /api/v1/config/roles` — Tạo một vai trò tùy chỉnh mới (Realm Role) và gán danh sách permissions.
+- `POST /api/v1/config/roles` — Tạo một vai trò tùy chỉnh mới (Organization Role) và gán danh sách permissions.
   - **Validation:** Trường `name` bắt buộc không được trùng với danh sách các từ khóa bảo lưu của hệ thống: `['system', 'system_admin', 'super_admin', 'root']` (không phân biệt chữ hoa/chữ thường). Nếu trùng, trả về `400 Bad Request`.
   - **Body:**
     ```json
@@ -245,7 +245,7 @@ sequenceDiagram
 
 ## Custom Role Sync & Invalidation Flow
 
-Khi Tenant Admin cập nhật vai trò hoặc danh sách quyền hạn tùy chỉnh, hệ thống thực hiện đồng bộ song song tới Keycloak Realm (qua Auth Proxy) và lưu trữ Redis Cache, đồng thời bắn tín hiệu hủy cache (invalidation) cho API Gateway.
+Khi Tenant Admin cập nhật vai trò hoặc danh sách quyền hạn tùy chỉnh, hệ thống thực hiện đồng bộ song song tới Keycloak Organization (qua Auth Proxy) và lưu trữ Redis Cache, đồng thời bắn tín hiệu hủy cache (invalidation) cho API Gateway.
 
 ```mermaid
 sequenceDiagram
