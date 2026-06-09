@@ -209,13 +209,36 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                         "plugins": [request_termination_plugin]
                     }
                 ]
+            },
+            {
+                "name": "mock-api",
+                "url": "http://127.0.0.1:80",
+                "routes": [
+                    {
+                        "name": "mock-completions",
+                        "paths": ["/api/v1/mock-completions"],
+                        "strip_path": False,
+                        "plugins": [
+                            jwt_plugin,
+                            {
+                                "name": "request-termination",
+                                "config": {
+                                    "status_code": 200,
+                                    "body": "{\"message\": \"mock success\"}",
+                                    "content_type": "application/json"
+                                }
+                            }
+                        ],
+                        "tags": ["scope:ai-core"]
+                    }
+                ]
             }
         ],
         "plugins": [
             {
                 "name": "dynamic-policy",
                 "config": {
-                    "redis_host": "redis",
+                    "redis_host": "redis-master-1",
                     "redis_port": 6379
                 }
             },
@@ -238,6 +261,24 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                 "consumer": "keycloak_issuer",
                 "algorithm": "RS256",
                 "key": KONG_ISSUER_URL,
+                "rsa_public_key": public_key_pem
+            },
+            {
+                "consumer": "keycloak_issuer",
+                "algorithm": "RS256",
+                "key": "http://solavie-keycloak:8080/realms/solavie",
+                "rsa_public_key": public_key_pem
+            },
+            {
+                "consumer": "keycloak_issuer",
+                "algorithm": "RS256",
+                "key": "http://keycloak:8080/realms/solavie",
+                "rsa_public_key": public_key_pem
+            },
+            {
+                "consumer": "keycloak_issuer",
+                "algorithm": "RS256",
+                "key": "http://localhost:8080/realms/solavie",
                 "rsa_public_key": public_key_pem
             }
         ]

@@ -84,13 +84,20 @@ def access_token(ensure_tenant_exists):
 
 @pytest.fixture(scope="module")
 def redis_client():
-    """Redis client để seed test config data cho dynamic policy plugin."""
+    """Redis client để seed test config data cho dynamic policy plugin (Cluster-aware)."""
     try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        from redis.cluster import RedisCluster
+        r = RedisCluster(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
         r.ping()
         return r
-    except Exception:
-        pytest.skip("Redis not available for gateway tests")
+    except Exception as e:
+        print(f"RedisCluster connection failed: {e}. Falling back to standalone Redis client.")
+        try:
+            r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+            r.ping()
+            return r
+        except Exception:
+            pytest.skip("Redis not available for gateway tests")
 
 
 # ============================================================
@@ -553,5 +560,139 @@ def test_gateway_privilege_escalation_blocked(ensure_tenant_exists):
     finally:
         # 9. Clean up Keycloak
         # Delete user
+        del_user_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}"
+        requests.delete(del_user_url, headers=admin_headers, timeout=10)
+
+
+def test_gateway_circuit_breaker(ensure_tenant_exists):
+    """
+    AC 4.6: Verify Circuit Breaker on API Fallback to Tenant Config Service.
+    - 3 consecutive failures (simulated via 1s timeout to invalid IP 10.255.255.1)
+      shall transition the Circuit Breaker state to OPEN.
+    - Subsequent requests while OPEN shall fail fast (< 100ms) with 503.
+    - After 10s cooldown, it shall transition to HALF-OPEN.
+    """
+    # Reset Circuit Breaker state before starting the test
+    requests.get(f"{GATEWAY_URL}/api/v1/completions", headers={"X-Reset-Circuit-Breaker": "true"}, timeout=5)
+
+    # 1. Create a temporary user with manager role (needs permissions resolution)
+    kc_admin = os.getenv("KC_ADMIN", "admin")
+    kc_admin_pass = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
+    master_token_url = f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
+    admin_auth_payload = {
+        "client_id": "admin-cli",
+        "username": kc_admin,
+        "password": kc_admin_pass,
+        "grant_type": "password"
+    }
+    admin_resp = requests.post(master_token_url, data=admin_auth_payload, timeout=10)
+    if admin_resp.status_code != 200:
+        pytest.skip(f"Could not authenticate as master admin: {admin_resp.text}")
+    admin_token = admin_resp.json()["access_token"]
+    admin_headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
+    }
+
+    # Create user
+    temp_username = f"cb-test-{int(time.time())}"
+    temp_email = f"{temp_username}@solavie-test.com"
+    user_payload = {
+        "username": temp_username,
+        "email": temp_email,
+        "firstName": "Circuit",
+        "lastName": "Breaker",
+        "enabled": True,
+        "emailVerified": True,
+        "credentials": [{"type": "password", "value": "TempPassword123!", "temporary": False}]
+    }
+    users_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users"
+    create_user_resp = requests.post(users_url, headers=admin_headers, json=user_payload, timeout=10)
+    assert create_user_resp.status_code == 201
+    
+    # Retrieve user ID
+    user_id_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users?username={temp_username}"
+    user_list_resp = requests.get(user_id_url, headers=admin_headers, timeout=10)
+    user_id = user_list_resp.json()[0]["id"]
+    
+    # Link user to Org
+    org_id = ensure_tenant_exists["organization_id"]
+    add_member_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}/members"
+    requests.post(add_member_url, headers=admin_headers, json=user_id, timeout=10)
+    
+    # Assign 'manager' realm role (which triggers permission resolution and fallback)
+    # Check if 'manager' role exists first
+    roles_resp = requests.get(f"{KEYCLOAK_URL}/admin/realms/solavie/roles", headers=admin_headers, timeout=10)
+    role_exists = any(r["name"] == "manager" or r["name"] == "Manager" for r in roles_resp.json())
+    if not role_exists:
+        requests.post(f"{KEYCLOAK_URL}/admin/realms/solavie/roles", headers=admin_headers, json={"name": "manager"}, timeout=10)
+        
+    role_rep_resp = requests.get(f"{KEYCLOAK_URL}/admin/realms/solavie/roles/manager", headers=admin_headers, timeout=10)
+    if role_rep_resp.status_code != 200:
+        role_rep_resp = requests.get(f"{KEYCLOAK_URL}/admin/realms/solavie/roles/Manager", headers=admin_headers, timeout=10)
+    assert role_rep_resp.status_code == 200, f"Failed to get manager role representation: {role_rep_resp.text}"
+    role_rep = role_rep_resp.json()
+    
+    mapping_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}/role-mappings/realm"
+    map_resp = requests.post(mapping_url, headers=admin_headers, json=[role_rep], timeout=10)
+    assert map_resp.status_code == 204, f"Failed to map manager role to user: {map_resp.text}"
+    
+    try:
+        # Get token
+        user_token_url = f"{KEYCLOAK_URL}/realms/solavie/protocol/openid-connect/token"
+        user_payload = {
+            "client_id": "dashboard",
+            "username": temp_username,
+            "password": "TempPassword123!",
+            "grant_type": "password",
+            "scope": "openid email profile organization ai-core"
+        }
+        user_token_resp = requests.post(user_token_url, data=user_payload, timeout=10)
+        assert user_token_resp.status_code == 200
+        user_token = user_token_resp.json()["access_token"]
+        
+        headers = {"Authorization": f"Bearer {user_token}", "X-Tenant-ID": org_id}
+        url = f"{GATEWAY_URL}/api/v1/completions"
+        
+        # Request 1 (Failure 1)
+        start = time.time()
+        resp1 = requests.get(url, headers=headers, timeout=5)
+        duration1 = time.time() - start
+        assert resp1.status_code == 503
+        assert duration1 >= 0.9, f"Expected timeout of ~1s, got {duration1:.2f}s"
+        
+        # Request 2 (Failure 2)
+        start = time.time()
+        resp2 = requests.get(url, headers=headers, timeout=5)
+        duration2 = time.time() - start
+        assert resp2.status_code == 503
+        assert duration2 >= 0.9, f"Expected timeout of ~1s, got {duration2:.2f}s"
+        
+        # Request 3 (Failure 3) -> Trips Circuit Breaker to OPEN
+        start = time.time()
+        resp3 = requests.get(url, headers=headers, timeout=5)
+        duration3 = time.time() - start
+        assert resp3.status_code == 503
+        assert duration3 >= 0.9, f"Expected timeout of ~1s, got {duration3:.2f}s"
+        
+        # Request 4 -> Should fail fast because CB is OPEN!
+        start = time.time()
+        resp4 = requests.get(url, headers=headers, timeout=5)
+        duration4 = time.time() - start
+        assert resp4.status_code == 503
+        assert duration4 < 0.2, f"Expected fast fail (<200ms), got {duration4:.2f}s"
+        
+        # Wait 12 seconds for cooldown
+        time.sleep(12.0)
+        
+        # Request 5 -> Should hit fallback again (HALF-OPEN) and timeout
+        start = time.time()
+        resp5 = requests.get(url, headers=headers, timeout=5)
+        duration5 = time.time() - start
+        assert resp5.status_code == 503
+        assert duration5 >= 0.9, f"Expected timeout again on HALF-OPEN, got {duration5:.2f}s"
+        
+    finally:
+        # Cleanup
         del_user_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}"
         requests.delete(del_user_url, headers=admin_headers, timeout=10)

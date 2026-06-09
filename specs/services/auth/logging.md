@@ -25,8 +25,7 @@ Keycloak logs qua stdout (JSON format khi cấu hình `--log-format=json`):
 | Event | Khi nào | Severity |
 |-------|---------|----------|
 | LOGIN | User login thành công | INFO |
-| LOGIN_ERROR | Login thất bại (wrong password, locked) | WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
-| WARN |
+| LOGIN_ERROR | Login thất bại (wrong password, locked) | WARN |
 | LOGOUT | User logout | INFO |
 | REGISTER | User mới đăng ký | INFO |
 | UPDATE_PASSWORD | Đổi mật khẩu | INFO |
@@ -34,6 +33,8 @@ Keycloak logs qua stdout (JSON format khi cấu hình `--log-format=json`):
 | TOKEN_EXCHANGE | Token refresh | DEBUG |
 | CLIENT_LOGIN | Service account login | DEBUG |
 | PERMISSION_TOKEN | Permission check | DEBUG |
+| ORG_MEMBER_ADDED | Thành viên được thêm vào Organization | INFO |
+| ORG_MEMBER_REMOVED | Thành viên bị xóa khỏi Organization | INFO |
 
 ## Keycloak Metrics (built-in khi KC_METRICS_ENABLED=true)
 ```

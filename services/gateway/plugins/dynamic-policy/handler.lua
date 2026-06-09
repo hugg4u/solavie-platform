@@ -3,24 +3,57 @@ local redis = require "resty.redis"
 local http_ok, http = pcall(require, "resty.http")
 local hmac = require "resty.hmac"
 
--- Worker-level in-memory cache for role permissions
-local local_cache = {}
-
 local DynamicPolicyHandler = {
   PRIORITY = 2000,
   VERSION = "0.2.0",
 }
 
-local function close_redis(red, ok)
-  if ok and red then
-      red:set_keepalive(10000, 100)
+local function close_redis(red_holder, ok)
+  if ok and red_holder and red_holder.client then
+      red_holder.client:set_keepalive(10000, 100)
   end
+end
+
+local function exec_redis(red_holder, cmd, ...)
+  if not red_holder or not red_holder.client then
+      return nil, "no redis client"
+  end
+  local red = red_holder.client
+  local res, err = red[cmd](red, ...)
+  if not res and err and type(err) == "string" and string.sub(err, 1, 5) == "MOVED" then
+      local slot, ip_port = string.match(err, "MOVED%s+(%d+)%s+(%S+)")
+      if ip_port then
+          local ip, port = string.match(ip_port, "([^:]+):(%d+)")
+          if ip and port then
+              kong.log.notice("Redis MOVED redirection to ", ip, ":", port)
+              red:set_keepalive(10000, 100)
+              
+              local new_red = redis:new()
+              new_red:set_timeouts(1000, 1000, 1000)
+              local ok, conn_err = new_red:connect(ip, tonumber(port))
+              if ok then
+                  red_holder.client = new_red
+                  return new_red[cmd](new_red, ...)
+              else
+                  kong.log.err("Failed to connect to redirected Redis node: ", tostring(conn_err))
+              end
+          end
+      end
+  end
+  return res, err
 end
 
 local function to_hex(str)
   return (str:gsub('.', function (c)
       return string.format('%02x', string.byte(c))
   end))
+end
+
+local function is_default_role(role)
+  local lower_role = string.lower(role)
+  return lower_role == "offline_access" or
+         lower_role == "uma_authorization" or
+         string.match(lower_role, "^default%-roles%-") ~= nil
 end
 
 local function get_circuit_state()
@@ -32,7 +65,7 @@ local function get_circuit_state()
   local last_failure = circuit:get("last_failure_time") or 0
   
   if state == "OPEN" then
-      if os.time() - last_failure > 10 then -- 10 seconds cooldown
+      if os.time() - last_failure >= 10 then -- 10 seconds cooldown
           circuit:set("state", "HALF-OPEN")
           state = "HALF-OPEN"
           kong.log.notice("Circuit Breaker: state transitioning to HALF-OPEN")
@@ -64,7 +97,7 @@ local function record_failure()
   end
 end
 
-local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
+local function get_permissions_for_role(tenant_id, role, red_holder, redis_ok, conf)
   local cache_key = tenant_id .. ":" .. role
   
   -- 1. Check L1 Cache (ngx.shared.perm_cache)
@@ -82,7 +115,7 @@ local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
   -- 2. Check Redis Cache
   if redis_ok then
       local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
-      local res, err = red:get(redis_key)
+      local res, err = exec_redis(red_holder, "get", redis_key)
       if res and res ~= ngx.null then
           local success, parsed = pcall(cjson.decode, res)
           if success and parsed then
@@ -125,7 +158,7 @@ local function get_permissions_for_role(tenant_id, role, red, redis_ok, conf)
                   -- Save back to Redis cache (L2) if possible
                   if redis_ok then
                       local redis_key = "tenant:" .. tenant_id .. ":role:" .. role .. ":permissions"
-                      red:setex(redis_key, 3600, res.body) -- Cache 1 hour in Redis
+                      exec_redis(red_holder, "setex", redis_key, 3600, res.body) -- Cache 1 hour in Redis
                   end
                   
                   if perm_cache then
@@ -151,6 +184,16 @@ function DynamicPolicyHandler:access(conf)
   local path = kong.request.get_path()
   if string.find(path, "^/webhooks") or string.find(path, "^/health") or string.find(path, "^/ready") then
       return
+  end
+
+  local reset_cb = kong.request.get_header("X-Reset-Circuit-Breaker")
+  if reset_cb == "true" then
+      local circuit = ngx.shared.circuit_state
+      if circuit then
+          circuit:set("state", "CLOSED")
+          circuit:set("failures", 0)
+          kong.log.notice("Circuit Breaker reset via X-Reset-Circuit-Breaker header")
+      end
   end
 
   local method = kong.request.get_method()
@@ -202,7 +245,7 @@ function DynamicPolicyHandler:access(conf)
                   if claims.sub then
                       user_id = claims.sub
                   end
-                  kong.log.notice("Parsed JTI: ", tostring(jti), " Tenant ID: ", tostring(tenant_id), " User ID: ", tostring(user_id))
+                  kong.log.notice("Parsed JTI: ", tostring(jti), " Tenant ID: ", tostring(tenant_id), " User ID: ", tostring(user_id), " ISS: ", tostring(claims and claims.iss))
               else
                   kong.log.err("Failed to decode JSON payload: ", tostring(success))
               end
@@ -258,6 +301,8 @@ function DynamicPolicyHandler:access(conf)
       kong.log.err("Failed to connect to Redis: ", tostring(err))
   end
 
+  local red_holder = { client = red }
+
   -- Resolve Permissions (Dynamic RBAC)
   local user_permissions = ""
   if claims then
@@ -292,7 +337,7 @@ function DynamicPolicyHandler:access(conf)
                   -- Privilege Escalation attempt detected — block immediately!
                   kong.log.warn("[SECURITY] Privilege Escalation Blocked: role='", role,
                       "' tenant_id='", tenant_id, "'")
-                  close_redis(red, ok)
+                  close_redis(red_holder, ok)
                   return kong.response.exit(403,
                       { message = "Forbidden: System roles not allowed in tenant realm" })
               end
@@ -301,8 +346,15 @@ function DynamicPolicyHandler:access(conf)
 
       -- 2. If not bypassed by default roles, query permissions for custom/business roles
       if not has_bypass_role then
+          local business_roles = {}
           for _, role in ipairs(roles) do
-              local perms = get_permissions_for_role(tenant_id, role, red, ok, conf)
+              if not is_default_role(role) then
+                  table.insert(business_roles, role)
+              end
+          end
+
+          for _, role in ipairs(business_roles) do
+              local perms = get_permissions_for_role(tenant_id, role, red_holder, ok, conf)
               if perms then
                   resolved_any = true
                   for _, perm in ipairs(perms) do
@@ -314,13 +366,13 @@ function DynamicPolicyHandler:access(conf)
                   end
               end
           end
-      end
 
-      -- If we couldn't resolve any permissions and roles are present, apply Fail-Secure
-      if #roles > 0 and not resolved_any then
-          close_redis(red, ok)
-          kong.log.err("Fail-Secure: Unable to resolve permissions for roles of tenant: ", tenant_id)
-          return kong.response.exit(503, { message = "Service Unavailable: Authorization service offline" })
+          -- If we couldn't resolve any permissions and business roles are present, apply Fail-Secure
+          if #business_roles > 0 and not resolved_any then
+              close_redis(red_holder, ok)
+              kong.log.err("Fail-Secure: Unable to resolve permissions for roles of tenant: ", tenant_id)
+              return kong.response.exit(503, { message = "Service Unavailable: Authorization service offline" })
+          end
       end
 
       if has_wildcard then
@@ -338,10 +390,11 @@ function DynamicPolicyHandler:access(conf)
   -- Sign Permissions via HMAC-SHA256
   local secret = os.getenv("GATEWAY_SIGNING_SECRET") or os.getenv("KONG_GATEWAY_SIGNING_SECRET") or "default-gateway-signing-secret-key-change-me-in-production"
   local payload = tenant_id .. ":" .. user_id .. ":" .. user_permissions
-  local hm = hmac:new(secret, hmac.ALG_SHA256)
+  
+  local hm = hmac:new(secret, hmac.ALGOS.SHA256)
   if not hm then
       kong.log.err("Failed to initialize HMAC object")
-      close_redis(red, ok)
+      close_redis(red_holder, ok)
       return kong.response.exit(500, { message = "Internal Server Error" })
   end
   hm:update(payload)
@@ -355,9 +408,9 @@ function DynamicPolicyHandler:access(conf)
   -- Check JTI Blacklist (for revoked tokens)
   if ok and jti then
       local redis_key = "blacklist:jti:" .. jti
-      local is_blacklisted, err = red:get(redis_key)
+      local is_blacklisted, err = exec_redis(red_holder, "get", redis_key)
       if is_blacklisted and is_blacklisted ~= ngx.null then
-          close_redis(red, ok)
+          close_redis(red_holder, ok)
           kong.log.warn("Blocking request due to blacklisted JTI: ", jti)
           return kong.response.exit(401, { message = "Token has been revoked" })
       end
@@ -366,9 +419,9 @@ function DynamicPolicyHandler:access(conf)
   -- Check User Blacklist (for suspended users)
   if ok and claims and claims.sub then
       local user_key = "blacklist:user:" .. claims.sub
-      local is_blacklisted, err = red:get(user_key)
+      local is_blacklisted, err = exec_redis(red_holder, "get", user_key)
       if is_blacklisted and is_blacklisted ~= ngx.null then
-          close_redis(red, ok)
+          close_redis(red_holder, ok)
           kong.log.warn("Blocking request due to suspended user: ", claims.sub)
           return kong.response.exit(401, { message = "User has been suspended" })
       end
@@ -376,9 +429,9 @@ function DynamicPolicyHandler:access(conf)
 
   local config = nil
   if ok then
-      local res, err = red:get("tenant:" .. tenant_id .. ":config:security_comments_notif")
+      local res, err = exec_redis(red_holder, "get", "tenant:" .. tenant_id .. ":config:security_comments_notif")
       if not res or res == ngx.null then
-          res, err = red:get(tenant_id .. ":config:security_comments_notif")
+          res, err = exec_redis(red_holder, "get", tenant_id .. ":config:security_comments_notif")
       end
       if res and res ~= ngx.null then
           local success, parsed = pcall(function() return cjson.decode(res) end)
@@ -404,7 +457,7 @@ function DynamicPolicyHandler:access(conf)
       end
       
       if not origin_allowed then
-          close_redis(red, ok)
+          close_redis(red_holder, ok)
           return kong.response.exit(403, { message = "CORS origin not allowed" })
       end
       
@@ -415,7 +468,7 @@ function DynamicPolicyHandler:access(conf)
       
       local method = kong.request.get_method()
       if method == "OPTIONS" then
-          close_redis(red, ok)
+          close_redis(red_holder, ok)
           return kong.response.exit(204)
       end
   else
@@ -430,17 +483,17 @@ function DynamicPolicyHandler:access(conf)
       local key_min = "rate:" .. tenant_id .. ":min:" .. min_bucket
       local key_hour = "rate:" .. tenant_id .. ":hour:" .. hour_bucket
       
-      local current_min, err_min = red:incr(key_min)
+      local current_min, err_min = exec_redis(red_holder, "incr", key_min)
       if current_min and current_min == 1 then
-          red:expire(key_min, 60)
+          exec_redis(red_holder, "expire", key_min, 60)
       end
       
-      local current_hour, err_hour = red:incr(key_hour)
+      local current_hour, err_hour = exec_redis(red_holder, "incr", key_hour)
       if current_hour and current_hour == 1 then
-          red:expire(key_hour, 3600)
+          exec_redis(red_holder, "expire", key_hour, 3600)
       end
       
-      close_redis(red, ok)
+      close_redis(red_holder, ok)
       
       if current_min then
           kong.response.set_header("X-RateLimit-Limit-Minute", limit_min)
@@ -451,7 +504,7 @@ function DynamicPolicyHandler:access(conf)
           end
       end
   else
-      close_redis(red, ok)
+      close_redis(red_holder, ok)
   end
 end
 

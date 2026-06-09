@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy import select
 
 from core.config import settings
-from core.redis_client import redis_client
+from core.redis_client import redis_client, redis_pubsub_client
 from db.database import SessionLocal
 from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig, TenantMCPServer
 from core.providers import PROVIDER_PRIORITY, get_provider_by_model
@@ -285,7 +285,7 @@ async def sync_listener_loop() -> None:
       - config.updates          — Tenant-level AI/KB config changes
       - system.limits.updates   — System-level tier limit changes (from System Admin)
     """
-    pubsub = redis_client.pubsub()
+    pubsub = redis_pubsub_client.pubsub()
     channels = ["config.updates", "system.limits.updates"]
     await pubsub.subscribe(*channels)
     logger.info(f"Sync listener subscribed to Redis channels: {channels}")

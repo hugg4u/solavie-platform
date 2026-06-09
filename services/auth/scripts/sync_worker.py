@@ -218,8 +218,15 @@ def main():
         # Wait for Keycloak
         wait_for_keycloak(KEYCLOAK_URL)
         
-        # Connect to Redis
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        # Connect to Redis (Cluster-aware)
+        try:
+            from redis.cluster import RedisCluster
+            r = RedisCluster(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+            r.ping()
+            logger.info("Connected to Redis Cluster successfully.")
+        except Exception as e:
+            logger.warning(f"RedisCluster connection failed: {e}. Falling back to standalone Redis client.")
+            r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
         
         # Perform initial sync for existing realms
         initial_sync(r)

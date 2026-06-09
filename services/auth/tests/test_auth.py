@@ -20,6 +20,21 @@ TEST_ADMIN_PASSWORD = "SolavieSecurePass123!"
 # --- Helper roles for RBAC tests ---
 ROLES_TO_TEST = ["Admin", "Manager", "Agent", "Viewer"]
 
+def get_redis_client():
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = int(os.getenv("REDIS_PORT", 6379))
+    try:
+        from redis.cluster import RedisCluster
+        r = RedisCluster(host=host, port=port, decode_responses=True)
+        r.ping()
+        return r
+    except Exception as e:
+        print(f"RedisCluster connection failed: {e}. Falling back to standalone Redis client.")
+        import redis
+        r = redis.Redis(host=host, port=port, decode_responses=True)
+        r.ping()
+        return r
+
 def decode_jwt_payload(token):
     parts = token.split('.')
     if len(parts) != 3:
@@ -330,8 +345,7 @@ def test_dynamic_password_policy_sync(provision_tenant):
     headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
 
     # Connect to Redis to trigger sync
-    import redis
-    r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, decode_responses=True)
+    r = get_redis_client()
     
     # Update config in Redis
     config_key = f"tenant:{TEST_TENANT_ID}:config:security_comments_notif"
@@ -371,8 +385,7 @@ def test_brute_force_protection_sync(provision_tenant):
     org_url = f"{KEYCLOAK_URL}/admin/realms/solavie/organizations/{org_id}"
     headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
 
-    import redis
-    r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, decode_responses=True)
+    r = get_redis_client()
     
     # Update config in Redis
     config_key = f"tenant:{TEST_TENANT_ID}:config:security_comments_notif"

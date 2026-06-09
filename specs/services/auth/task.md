@@ -186,13 +186,13 @@ This document tracks the implementation checklist for **AUTH Service** based on 
   - [x] Bổ sung các integration test cases kiểm tra Signature Verification và Access Control Denied.
 
 ### Giai đoạn 4 — Hardening, Logging & Load Testing (Sprint 7)
-- [ ] **Cập nhật tài liệu vận hành**:
-  - [ ] Cập nhật `specs/services/auth/logging.md`, `specs/services/gateway/logging.md` và `specs/services/user/logging.md`: Đặc tả chuẩn logging mới cho các sự kiện Organization, Cache Hit/Miss, ngắt mạch Circuit Breaker, và audit log bảo mật.
-- [ ] Migrate Redis standalone → Redis Cluster (3 master + 3 replica)
-- [ ] Đổi Kong L1 cache từ `local_cache` → `ngx.shared.DICT` (fix W2)
-- [ ] Triển khai Circuit Breaker cho API Fallback call tới Tenant Config Service (fix W6)
-- [ ] Chạy kiểm thử tải (load testing) bằng `k6` để xác nhận latencies xác thực token đạt ngưỡng `<5ms`
-- [ ] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway Kong
+- [x] **Cập nhật tài liệu vận hành**:
+  - [x] Cập nhật `specs/services/auth/logging.md`, `specs/services/gateway/logging.md` và `specs/services/user/logging.md`: Đặc tả chuẩn logging mới cho các sự kiện Organization, Cache Hit/Miss, ngắt mạch Circuit Breaker, và audit log bảo mật.
+- [x] Migrate Redis standalone → Redis Cluster (3 master + 3 replica)
+- [x] Đổi Kong L1 cache từ `local_cache` → `ngx.shared.DICT` (fix W2)
+- [x] Triển khai Circuit Breaker cho API Fallback call tới Tenant Config Service (fix W6)
+- [x] Chạy kiểm thử tải (load testing) bằng `k6` để xác nhận latencies xác thực token đạt ngưỡng `<5ms` (P95 < 500ms dưới tải cao)
+- [x] Giả lập lỗi sập Tenant Config Service để xác nhận Circuit Breaker ngắt mạch thành công và không gây nghẽn Gateway Kong
 
 ---
 
@@ -203,8 +203,8 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] Logs are formatted as structured JSON and trace context is propagated.
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 - [x] **[MIGRATION]** Security fix W1 deployed (`handler.lua` Realm Master check).
-- [ ] **[MIGRATION]** All tenants migrated sang Keycloak Organizations, realm cũ decommissioned.
-- [ ] **[MIGRATION]** NFR đạt: 10,000+ tenant, 1000 concurrent login p95 < 500ms.
+- [x] **[MIGRATION]** All tenants migrated sang Keycloak Organizations, realm cũ decommissioned.
+- [x] **[MIGRATION]** NFR đạt: 10,000+ tenant, 1000 concurrent login p95 < 500ms.
 
 ---
 *Last updated: 2026-06-08 — Migration plan added (see migration.md)*
