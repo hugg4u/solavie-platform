@@ -83,7 +83,11 @@ graph TB
 
     Dashboard -->|HTTPS/WSS| Kong
     Kong -->|OIDC Plugin| Keycloak
-    Kong --> CC & MSG & CRM & NOTIF & COMMENT & CONTENT & SCHED & ANALYTICS & CAMPAIGN & CONF & DMS & SHORT
+    Kong -->|Dynamic Upstream Target Routing| CC_UP["channel-connector-upstream"] & MSG_UP["messaging-upstream"] & CRM_UP["crm-upstream"] & NOTIF_UP["notification-upstream"] & COMMENT_UP["comment-manager-upstream"] & CONTENT_UP["content-upstream"] & SCHED_UP["scheduler-upstream"] & ANALYTICS_UP["analytics-upstream"] & CAMPAIGN_UP["campaign-upstream"] & CONF_UP["tenant-config-upstream"] & DMS_UP["dms-upstream"] & SHORT_UP["link-shortener-upstream"]
+    
+    CC & MSG & CRM & NOTIF & COMMENT & CONTENT & SCHED & ANALYTICS & CAMPAIGN & CONF & DMS & SHORT -->|Register IP & Heartbeat| Redis
+    SyncDaemon["Registry Sync Daemon (Sidecar)"] -->|Read Targets| Redis
+    SyncDaemon -->|POST /config reload| Kong
     
     MSG -->|gRPC| CB
     CB -->|gRPC| AI
@@ -207,6 +211,14 @@ graph TD
 5. **Tự động Khởi tạo Cấu hình Định tuyến mặc định (Auto-configuration on First Key):** Khi Tenant thêm hoặc đồng bộ khóa API đầu tiên của họ, hệ thống tự động kiểm tra số lượng khóa API hiện hoạt trong DB. Nếu là khóa hoạt động đầu tiên, hệ thống sẽ tự động truy vấn bảng mặc định hệ thống `system_default_route_configs` để lấy các cấu hình mặc định (cheapest models) của nhà cung cấp khóa tương ứng, tự động tạo và lưu trữ 5 bản ghi định tuyến (`LLMRouteConfig`) cho cả 5 usecases của Tenant, đồng thời xóa cache Redis để sẵn sàng sử dụng định tuyến ngay lập tức.
 
 ---
+
+### 2.6. Cơ chế Phát hiện Dịch vụ Động (Dynamic Service Discovery & Routing)
+
+Để đạt tính độc lập tuyệt đối với hạ tầng triển khai (Infrastructure-Agnostic) và tránh các lỗi trễ/phụ thuộc vào DNS Caching khi triển khai bản phát hành mới, hệ thống Solavie sử dụng cơ chế định tuyến động tự xây dựng dựa trên Redis Registry và custom Lua plugin của Kong Gateway:
+
+1. **Service Registration:** Khi một microservice khởi chạy, nó tự phát hiện IP nội bộ và đăng ký vào Redis Set `registry:service:{service_name}` dưới dạng `ip:port`, đồng thời gửi heartbeat mỗi 5 giây gán khóa tạm thời với TTL 15 giây.
+2. **Registry Sync Daemon:** Chạy ngầm tại Gateway để lắng nghe Redis và tự động cập nhật cấu hình targets của Upstream ảo tương ứng trong file `kong.yml` và reload Kong.
+3. **Dynamic Routing:** Plugin Lua `dynamic-policy` trên Kong API Gateway can thiệp vào pha `access` để định tuyến trực tiếp vào IP:Port động thông qua L1 cache (shm cache TTL 2 giây).
 
 
 ## 3. YÊU CẦU CHỨC NĂNG CHI TIẾT (FUNCTIONAL REQUIREMENTS)
