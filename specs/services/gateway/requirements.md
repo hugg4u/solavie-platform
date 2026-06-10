@@ -80,3 +80,22 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 2. THE Gateway SHALL log tất cả requests (method, path, status, latency)
 3. THE Gateway SHALL propagate trace headers (OpenTelemetry)
 4. THE Gateway SHALL cung cấp health check endpoint
+
+### Requirement 6: MCP Route Redirection (Server-Sent Events)
+
+**User Story:** Là hệ thống AI, tôi muốn Gateway định tuyến các kết nối Model Context Protocol (MCP) truyền trực tiếp (Server-Sent Events) tới các microservices nghiệp vụ ổn định, không bị ngắt kết nối giữa chừng.
+
+#### Acceptance Criteria
+1. THE Gateway SHALL định tuyến các đường dẫn MCP SSE bao gồm `/api/v1/mcp` tới dịch vụ `crm`, `/api/v1/kb/mcp` tới dịch vụ `knowledge-base`, `/api/v1/messaging/mcp` tới dịch vụ `messaging`, và các đường dẫn tương ứng khác cho cả 7 dịch vụ nghiệp vụ hỗ trợ MCP.
+2. THE Gateway SHALL duy trì kết nối persistent cho các requests này, tự động thiết lập thời gian chờ của luồng gửi/nhận (read/write/send timeout) ở mức tối thiểu `60000ms` (60 giây) để tránh tự động ngắt kết nối.
+3. THE Gateway SHALL tắt tính năng buffering dữ liệu (bằng cách thiết lập header `X-Accel-Buffering: no` hoặc thông qua cấu hình proxy buffer) để đảm bảo dữ liệu sự kiện (events) được truyền trực tiếp đến client theo thời gian thực (realtime streaming).
+4. THE Gateway SHALL kiểm tra đầy đủ token OIDC, rate limiting và inject các security headers (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) cho các kết nối MCP trước khi chuyển tiếp.
+
+---
+
+## Upstream Dynamic Routing & Gateway Service Discovery Requirements
+
+### Requirement 8: Shared Service Discovery
+1. THE Gateway SHALL định tuyến tất cả các request tới các microservices nghiệp vụ nội bộ thông qua các đối tượng Upstream ảo thay vì hostname/port tĩnh.
+2. THE Gateway Sync Daemon SHALL quét định kỳ danh sách IP:Port từ các Redis Sets của từng dịch vụ hoạt động để cập nhật danh sách targets của Upstream tương ứng trong cấu hình Kong.
+3. THE Gateway Sync Daemon SHALL tự động thực hiện reload cấu hình qua API `/config` của Kong nếu phát hiện sự thay đổi targets.
