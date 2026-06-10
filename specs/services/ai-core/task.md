@@ -267,6 +267,7 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Bắt buộc tự động tiêm/ghi đè tham số `tenant_id` từ JWT token xác thực vào tham số (arguments) của tool trước khi gửi sang MCP Server.
 - [x] Cập nhật `ToolExecutor.execute` định tuyến các remote tools (có tiền tố `{server_name}__`) qua `MCPClientManager.execute_mcp_tool`.
 - [x] Viết unit tests kiểm thử cơ chế whitelisting và tiêm `tenant_id` tại AI Core.
+- [ ] Triển khai chuyển tiếp các HTTP headers bảo mật (X-Tenant-ID, X-User-ID, X-User-Permissions, X-Permissions-Signature) vào `sse_client` session.
 
 
 ### Task 20: Service Self-Registration and Lifecycle Heartbeat [PLANNED]
