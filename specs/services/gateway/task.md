@@ -132,7 +132,7 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 
 ### Task 6: MCP Route Configuration (MỚI)
-- [ ] Cập nhật `generate_kong_config.py` để định tuyến các đường dẫn MCP SSE tới đối tượng Upstream ảo của từng service (thay vì DNS tĩnh):
+- [x] Cập nhật `generate_kong_config.py` để định tuyến các đường dẫn MCP SSE tới đối tượng Upstream ảo của từng service (thay vì DNS tĩnh):
   - `/api/v1/mcp` về `crm-upstream`
   - `/api/v1/kb/mcp` về `knowledge-base-upstream`
   - `/api/v1/messaging/mcp` về `messaging-upstream`
@@ -141,10 +141,10 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
   - `/api/v1/content/mcp` về `content-upstream`
   - `/api/v1/scheduler/mcp` về `scheduler-upstream`
   - `/api/v1/analytics/mcp` về `analytics-upstream`
-- [ ] Định cấu hình tham số `connect_timeout = 60000`, `read_timeout = 60000`, `write_timeout = 60000` ms cho các Service đại diện cho các route này trong `generate_kong_config.py`.
-- [ ] Định cấu hình gán nhãn Route scope động (`scope:<service_name>`) cho từng route tương ứng.
-- [ ] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
-- [ ] Đảm bảo HTTP Header `X-Accel-Buffering: no` được chuyển tiếp chuẩn xác từ downstream để bypass Nginx proxy buffering.
+- [x] Định cấu hình tham số `connect_timeout = 60000`, `read_timeout = 60000`, `write_timeout = 60000` ms cho các Service đại diện cho các route này trong `generate_kong_config.py`.
+- [x] Định cấu hình gán nhãn Route scope động (`scope:<service_name>`) cho từng route tương ứng.
+- [x] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
+- [x] Đảm bảo HTTP Header `X-Accel-Buffering: no` được chuyển tiếp chuẩn xác từ downstream để bypass Nginx proxy buffering.
 
 ### Task 7: Dynamic RBAC & HMAC Signing Plugin (MỚI)
 - [x] Triển khai Lua plugin `dynamic-policy` xử lý trích xuất Keycloak roles và phân giải permissions từ các nguồn cache.
@@ -202,13 +202,13 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 ## Shared Service Discovery Implementation Tasks (MỚI)
 
 ### Task 10: Generalize Registry Sync Daemon & Upstreams Configuration
-- [ ] AC 10.1: Cấu hình đối tượng upstreams ảo cho tất cả các backend services trong `generate_kong_config.py`.
-- [ ] AC 10.2: Cập nhật `sync_registry.py` để duyệt qua bản đồ `SERVICES_MAP` và đồng bộ target cho đa dịch vụ.
-- [ ] AC 10.3: Kiểm tra tính hoạt động của Sync Daemon khi scale up/down một service bất kỳ (ví dụ: `user-service`).
+- [x] AC 10.1: Cấu hình đối tượng upstreams ảo cho tất cả các backend services trong `generate_kong_config.py`.
+- [x] AC 10.2: Cập nhật `sync_registry.py` để duyệt qua bản đồ `SERVICES_MAP` và đồng bộ target cho đa dịch vụ.
+- [x] AC 10.3: Kiểm tra tính hoạt động của Sync Daemon khi scale up/down một service bất kỳ (ví dụ: `user-service`).
 
 ### Task 11: MCP SSE Automated Verification (MỚI)
-- [ ] AC 11.1: Thiết lập mock SSE server trong test suite để mô phỏng phản hồi từ một MCP Upstream Service.
-- [ ] AC 11.2: Viết integration tests trong `test_gateway.py` xác minh kết nối SSE được định tuyến thành công và duy trì lâu dài.
-- [ ] AC 11.3: Kiểm tra tính đúng đắn của việc tự động tiêm (inject) các headers bảo mật (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) và kiểm duyệt chữ ký HMAC trên luồng SSE.
-- [ ] AC 11.4: Xác minh header `X-Accel-Buffering: no` được bảo toàn nguyên vẹn khi đi qua Gateway.
-- [ ] AC 11.5: Xác minh Gateway từ chối kết nối MCP SSE với HTTP 401/403 nếu thiếu token hoặc token không hợp lệ.
+- [x] AC 11.1: Thiết lập mock SSE server trong test suite để mô phỏng phản hồi từ một MCP Upstream Service.
+- [x] AC 11.2: Viết integration tests trong `test_gateway.py` xác minh kết nối SSE được định tuyến thành công và duy trì lâu dài.
+- [x] AC 11.3: Kiểm tra tính đúng đắn của việc tự động tiêm (inject) các headers bảo mật (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) và kiểm duyệt chữ ký HMAC trên luồng SSE.
+- [x] AC 11.4: Xác minh header `X-Accel-Buffering: no` được bảo toàn nguyên vẹn khi đi qua Gateway.
+- [x] AC 11.5: Xác minh Gateway từ chối kết nối MCP SSE với HTTP 401/403 nếu thiếu token hoặc token không hợp lệ.

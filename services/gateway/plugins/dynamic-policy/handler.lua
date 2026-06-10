@@ -5,8 +5,70 @@ local hmac = require "resty.hmac"
 
 local DynamicPolicyHandler = {
   PRIORITY = 2000,
-  VERSION = "0.2.0",
+  VERSION = "0.3.0",
 }
+
+-- Observability Metrics Helpers
+local function increment_metric(cache_layer, status)
+  local perm_cache = ngx.shared.perm_cache
+  if perm_cache then
+      local key = "metric:cache:" .. cache_layer .. ":" .. status
+      perm_cache:incr(key, 1, 0)
+  end
+end
+
+local function increment_cb_trip(service_name)
+  local circuit = ngx.shared.circuit_state
+  if circuit then
+      local key = "metric:cb:trips:" .. service_name
+      circuit:incr(key, 1, 0)
+  end
+end
+
+local function set_cb_state_metric(service_name, state)
+  local circuit = ngx.shared.circuit_state
+  if circuit then
+      local key = "metric:cb:state:" .. service_name
+      local val = 0
+      if state == "OPEN" then
+          val = 1
+      elseif state == "HALF-OPEN" then
+          val = 2
+      end
+      circuit:set(key, val)
+  end
+end
+
+-- Structured Logging Helpers
+local function log_cb_transition(service_name, prev_state, new_state, failures, reason)
+  local log_data = {
+      timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
+      level = "warn",
+      category = "gateway.circuit_breaker",
+      message = "Circuit Breaker state changed",
+      service = service_name,
+      previous_state = prev_state,
+      new_state = new_state,
+      failure_count = failures,
+      reason = reason
+  }
+  kong.log.warn(cjson.encode(log_data))
+end
+
+local function log_rbac_resolution(tenant_id, user_id, roles, permissions, cache_status)
+  local log_data = {
+      timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
+      level = "info",
+      message = "Dynamic policy resolution completed",
+      tenant_id = tenant_id,
+      user_id = user_id,
+      roles = roles,
+      permissions = permissions,
+      cache_status = cache_status,
+      signature_generated = true
+  }
+  kong.log.notice(cjson.encode(log_data))
+end
 
 local function close_redis(red_holder, ok)
   if ok and red_holder and red_holder.client then
@@ -56,43 +118,54 @@ local function is_default_role(role)
          string.match(lower_role, "^default%-roles%-") ~= nil
 end
 
-local function get_circuit_state()
+-- Circuit Breaker Functions prefixed with service_name
+local function get_circuit_state(service_name)
   local circuit = ngx.shared.circuit_state
   if not circuit then
       return "CLOSED"
   end
-  local state = circuit:get("state") or "CLOSED"
-  local last_failure = circuit:get("last_failure_time") or 0
+  local state = circuit:get(service_name .. ":state") or "CLOSED"
+  local last_failure = circuit:get(service_name .. ":last_failure_time") or 0
   
   if state == "OPEN" then
-      if os.time() - last_failure >= 10 then -- 10 seconds cooldown
-          circuit:set("state", "HALF-OPEN")
+      if os.time() - last_failure >= 10 then -- 10 seconds cooldown to match integration test suite
+          circuit:set(service_name .. ":state", "HALF-OPEN")
           state = "HALF-OPEN"
-          kong.log.notice("Circuit Breaker: state transitioning to HALF-OPEN")
+          set_cb_state_metric(service_name, "HALF-OPEN")
+          log_cb_transition(service_name, "OPEN", "HALF-OPEN", 0, "Cooldown expired")
       end
   end
   return state
 end
 
-local function record_success()
+local function record_success(service_name)
   local circuit = ngx.shared.circuit_state
   if circuit then
-      circuit:set("state", "CLOSED")
-      circuit:set("failures", 0)
-      kong.log.notice("Circuit Breaker: request succeeded, state reset to CLOSED")
+      local prev_state = circuit:get(service_name .. ":state") or "CLOSED"
+      circuit:set(service_name .. ":state", "CLOSED")
+      circuit:set(service_name .. ":failures", 0)
+      set_cb_state_metric(service_name, "CLOSED")
+      if prev_state ~= "CLOSED" then
+          log_cb_transition(service_name, prev_state, "CLOSED", 0, "Request succeeded")
+      end
   end
 end
 
-local function record_failure()
+local function record_failure(service_name)
   local circuit = ngx.shared.circuit_state
   if circuit then
-      local failures = (circuit:get("failures") or 0) + 1
-      circuit:set("failures", failures)
-      circuit:set("last_failure_time", os.time())
-      kong.log.warn("Circuit Breaker: failure recorded, failures=", failures)
-      if failures >= 3 then
-          circuit:set("state", "OPEN")
-          kong.log.alert("Circuit Breaker: failure threshold reached, state set to OPEN")
+      local failures = (circuit:get(service_name .. ":failures") or 0) + 1
+      circuit:set(service_name .. ":failures", failures)
+      circuit:set(service_name .. ":last_failure_time", os.time())
+      
+      if failures >= 3 then -- 3 consecutive failures to match integration test suite
+          local prev_state = circuit:get(service_name .. ":state") or "CLOSED"
+          if prev_state ~= "OPEN" then
+              circuit:set(service_name .. ":state", "OPEN")
+              set_cb_state_metric(service_name, "OPEN")
+              increment_cb_trip(service_name)
+              log_cb_transition(service_name, prev_state, "OPEN", failures, "Consecutive timeouts/errors calling backend")
+          end
       end
   end
 end
@@ -107,9 +180,11 @@ local function get_permissions_for_role(tenant_id, role, red_holder, redis_ok, c
       if cached_val then
           local success, parsed = pcall(cjson.decode, cached_val)
           if success and parsed then
-              return parsed
+              increment_metric("l1_dict", "hit")
+              return parsed, "local_worker_hit"
           end
       end
+      increment_metric("l1_dict", "miss")
   end
 
   -- 2. Check Redis Cache
@@ -119,29 +194,44 @@ local function get_permissions_for_role(tenant_id, role, red_holder, redis_ok, c
       if res and res ~= ngx.null then
           local success, parsed = pcall(cjson.decode, res)
           if success and parsed then
+              increment_metric("l2_redis", "hit")
               if perm_cache then
                   local success_enc, encoded = pcall(cjson.encode, parsed)
                   if success_enc and encoded then
                       perm_cache:set(cache_key, encoded, 300) -- Cache 5 mins in L1
                   end
               end
-              return parsed
+              return parsed, "redis_hit"
           end
       end
+      increment_metric("l2_redis", "miss")
   end
 
   -- 3. API Fallback to Tenant Config Service with Circuit Breaker
-  local state = get_circuit_state()
+  local state = get_circuit_state("tenant-config")
   if state == "OPEN" then
       kong.log.warn("Circuit Breaker: state is OPEN, skipping API fallback call to Tenant Config Service")
-      return nil
+      return nil, "fail_secure_cb_open"
   end
 
   if http_ok then
       local httpc = http.new()
       httpc:set_timeout(1000) -- 1s timeout
       
-      local res, err = httpc:request_uri("http://tenant-config:3006/api/v1/config/tenants/" .. tenant_id .. "/roles/permissions", {
+      local tenant_config_url = conf.tenant_config_internal_url or "http://tenant-config:3006"
+      local fallback_url = tenant_config_url .. "/api/v1/config/tenants/" .. tenant_id .. "/roles/permissions"
+      if redis_ok then
+          local targets, err = exec_redis(red_holder, "smembers", "registry:service:tenant-config")
+          if targets and type(targets) == "table" and #targets > 0 then
+              local target = targets[1]
+              if target and target ~= ngx.null then
+                  fallback_url = "http://" .. target .. "/api/v1/config/tenants/" .. tenant_id .. "/roles/permissions"
+                  kong.log.notice("Resolved tenant-config target dynamically from Redis: ", target)
+              end
+          end
+      end
+
+      local res, err = httpc:request_uri(fallback_url, {
           method = "GET",
           query = { roles = role },
           headers = {
@@ -152,7 +242,7 @@ local function get_permissions_for_role(tenant_id, role, red_holder, redis_ok, c
       
       if res then
           if res.status == 200 then
-              record_success()
+              record_success("tenant-config")
               local success, parsed = pcall(cjson.decode, res.body)
               if success and parsed then
                   -- Save back to Redis cache (L2) if possible
@@ -167,17 +257,17 @@ local function get_permissions_for_role(tenant_id, role, red_holder, redis_ok, c
                           perm_cache:set(cache_key, encoded, 300) -- Cache 5 mins in L1
                       end
                   end
-                  return parsed
+                  return parsed, "fallback_api_hit"
               end
           else
-              record_failure()
+              record_failure("tenant-config")
           end
       else
-          record_failure()
+          record_failure("tenant-config")
       end
   end
 
-  return nil
+  return nil, "fallback_failed"
 end
 
 function DynamicPolicyHandler:access(conf)
@@ -190,8 +280,9 @@ function DynamicPolicyHandler:access(conf)
   if reset_cb == "true" then
       local circuit = ngx.shared.circuit_state
       if circuit then
-          circuit:set("state", "CLOSED")
-          circuit:set("failures", 0)
+          circuit:set("tenant-config:state", "CLOSED")
+          circuit:set("tenant-config:failures", 0)
+          set_cb_state_metric("tenant-config", "CLOSED")
           kong.log.notice("Circuit Breaker reset via X-Reset-Circuit-Breaker header")
       end
   end
@@ -260,7 +351,7 @@ function DynamicPolicyHandler:access(conf)
   end
 
   if not tenant_id then
-      tenant_id = "tenant-test-uuid"
+      tenant_id = conf.default_tenant_id or "tenant-test-uuid"
   end
 
   kong.service.request.set_header("X-Tenant-ID", tenant_id)
@@ -278,8 +369,12 @@ function DynamicPolicyHandler:access(conf)
   end
 
   if required_scope then
+      if not claims then
+          kong.log.warn("Missing bearer token or invalid JWT for path: ", path)
+          return kong.response.exit(401, { message = "Unauthorized: missing bearer token" })
+      end
       local has_scope = false
-      if claims and claims.scope then
+      if claims.scope then
           for s in string.gmatch(claims.scope, "%S+") do
               if s == required_scope then
                   has_scope = true
@@ -303,6 +398,39 @@ function DynamicPolicyHandler:access(conf)
 
   local red_holder = { client = red }
 
+  -- Zero-Trust Blacklist checks: Enforce Fail-Secure when Redis is offline
+  if claims then
+      if jti then
+          if not ok then
+              close_redis(red_holder, ok)
+              kong.log.err("Fail-Secure: Redis offline, cannot verify JTI blacklist status")
+              return kong.response.exit(503, { message = "Service Unavailable: Security check failed" })
+          end
+          local redis_key = "blacklist:jti:" .. jti
+          local is_blacklisted, err = exec_redis(red_holder, "get", redis_key)
+          if is_blacklisted and is_blacklisted ~= ngx.null then
+              close_redis(red_holder, ok)
+              kong.log.warn("Blocking request due to blacklisted JTI: ", jti)
+              return kong.response.exit(401, { message = "Token has been revoked" })
+          end
+      end
+
+      if claims.sub then
+          if not ok then
+              close_redis(red_holder, ok)
+              kong.log.err("Fail-Secure: Redis offline, cannot verify User blacklist status")
+              return kong.response.exit(503, { message = "Service Unavailable: Security check failed" })
+          end
+          local user_key = "blacklist:user:" .. claims.sub
+          local is_blacklisted, err = exec_redis(red_holder, "get", user_key)
+          if is_blacklisted and is_blacklisted ~= ngx.null then
+              close_redis(red_holder, ok)
+              kong.log.warn("Blocking request due to suspended user: ", claims.sub)
+              return kong.response.exit(401, { message = "User has been suspended" })
+          end
+      end
+  end
+
   -- Resolve Permissions (Dynamic RBAC)
   local user_permissions = ""
   if claims then
@@ -316,10 +444,11 @@ function DynamicPolicyHandler:access(conf)
       local permissions_set = {}
       local has_wildcard = false
       local resolved_any = false
+      local has_bypass_role = false
+      local resolved_cache_status = "bypass"
 
       -- 1. Check default admin/system roles first (Wildcard bypass / Privilege Escalation protection)
       local MASTER_REALM_TENANT_ID = os.getenv("KONG_MASTER_REALM_TENANT_ID") or "solavie-system-master"
-      local has_bypass_role = false
 
       for _, role in ipairs(roles) do
           local lower_role = string.lower(role)
@@ -327,12 +456,14 @@ function DynamicPolicyHandler:access(conf)
               has_wildcard = true
               resolved_any = true
               has_bypass_role = true
+              resolved_cache_status = "local_bypass"
           elseif lower_role == "system" or lower_role == "system_admin" then
               -- CRITICAL: Chỉ cấp system wildcard nếu token từ Master Realm
               if tenant_id == MASTER_REALM_TENANT_ID then
                   has_wildcard = true
                   resolved_any = true
                   has_bypass_role = true
+                  resolved_cache_status = "local_bypass"
               else
                   -- Privilege Escalation attempt detected — block immediately!
                   kong.log.warn("[SECURITY] Privilege Escalation Blocked: role='", role,
@@ -354,9 +485,10 @@ function DynamicPolicyHandler:access(conf)
           end
 
           for _, role in ipairs(business_roles) do
-              local perms = get_permissions_for_role(tenant_id, role, red_holder, ok, conf)
+              local perms, status = get_permissions_for_role(tenant_id, role, red_holder, ok, conf)
               if perms then
                   resolved_any = true
+                  resolved_cache_status = status
                   for _, perm in ipairs(perms) do
                       if perm == "*" then
                           has_wildcard = true
@@ -385,10 +517,27 @@ function DynamicPolicyHandler:access(conf)
           table.sort(keys) -- Ensure deterministic sorting for consistent signature
           user_permissions = table.concat(keys, ",")
       end
+
+      -- Log structured JSON resolution log
+      local permissions_list = {}
+      if has_wildcard then
+          permissions_list = {"*"}
+      else
+          for k, _ in pairs(permissions_set) do
+              table.insert(permissions_list, k)
+          end
+          table.sort(permissions_list)
+      end
+      log_rbac_resolution(tenant_id, user_id, roles, permissions_list, resolved_cache_status)
   end
 
   -- Sign Permissions via HMAC-SHA256
-  local secret = os.getenv("GATEWAY_SIGNING_SECRET") or os.getenv("KONG_GATEWAY_SIGNING_SECRET") or "default-gateway-signing-secret-key-change-me-in-production"
+  local secret = conf.gateway_signing_secret
+  if not secret or secret == "" then
+      kong.log.err("[SECURITY] Fail-Secure: GATEWAY_SIGNING_SECRET (gateway_signing_secret) is not configured or empty!")
+      close_redis(red_holder, ok)
+      return kong.response.exit(500, { message = "Internal Server Error: Security Configuration Error" })
+  end
   local payload = tenant_id .. ":" .. user_id .. ":" .. user_permissions
   
   local hm = hmac:new(secret, hmac.ALGOS.SHA256)
@@ -405,28 +554,6 @@ function DynamicPolicyHandler:access(conf)
   kong.service.request.set_header("X-User-Permissions", user_permissions)
   kong.service.request.set_header("X-Permissions-Signature", signature)
 
-  -- Check JTI Blacklist (for revoked tokens)
-  if ok and jti then
-      local redis_key = "blacklist:jti:" .. jti
-      local is_blacklisted, err = exec_redis(red_holder, "get", redis_key)
-      if is_blacklisted and is_blacklisted ~= ngx.null then
-          close_redis(red_holder, ok)
-          kong.log.warn("Blocking request due to blacklisted JTI: ", jti)
-          return kong.response.exit(401, { message = "Token has been revoked" })
-      end
-  end
-
-  -- Check User Blacklist (for suspended users)
-  if ok and claims and claims.sub then
-      local user_key = "blacklist:user:" .. claims.sub
-      local is_blacklisted, err = exec_redis(red_holder, "get", user_key)
-      if is_blacklisted and is_blacklisted ~= ngx.null then
-          close_redis(red_holder, ok)
-          kong.log.warn("Blocking request due to suspended user: ", claims.sub)
-          return kong.response.exit(401, { message = "User has been suspended" })
-      end
-  end
-
   local config = nil
   if ok then
       local res, err = exec_redis(red_holder, "get", "tenant:" .. tenant_id .. ":config:security_comments_notif")
@@ -441,8 +568,10 @@ function DynamicPolicyHandler:access(conf)
       end
   end
 
-  local limit_min = config and config.gateway_rate_limit_minute or 200
-  local limit_hour = config and config.gateway_rate_limit_hour or 5000
+  local default_limit_min = conf.default_rate_limit_minute or 200
+  local default_limit_hour = conf.default_rate_limit_hour or 5000
+  local limit_min = config and config.gateway_rate_limit_minute or default_limit_min
+  local limit_hour = config and config.gateway_rate_limit_hour or default_limit_hour
   local allowed_origins = config and config.allowed_cors_origins or {"*"}
 
   local origin = kong.request.get_header("Origin")
@@ -505,6 +634,13 @@ function DynamicPolicyHandler:access(conf)
       end
   else
       close_redis(red_holder, ok)
+  end
+end
+
+function DynamicPolicyHandler:header_filter(conf)
+  local path = kong.request.get_path()
+  if path and (string.match(path, "/mcp$") or string.match(path, "/mcp/")) then
+      kong.response.set_header("X-Accel-Buffering", "no")
   end
 end
 

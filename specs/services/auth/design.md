@@ -226,7 +226,7 @@ keycloak:
   command: start --optimized
   environment:
     KC_DB: postgres
-    KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak_db
+    KC_DB_URL: jdbc:postgresql://postgres-db:5432/keycloak_db
     KC_DB_USERNAME: keycloak
     KC_DB_PASSWORD: ${KC_DB_PASSWORD}
     KC_HOSTNAME: auth.yourdomain.com
@@ -238,9 +238,9 @@ keycloak:
   ports:
     - "8080:8080"
   depends_on:
-    - postgres-keycloak
+    - postgres-db
 
-postgres-keycloak:
+postgres-db:
   image: postgres:16
   environment:
     POSTGRES_DB: keycloak_db

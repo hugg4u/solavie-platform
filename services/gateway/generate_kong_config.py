@@ -30,6 +30,18 @@ KONG_ISSUER_URL: str = os.environ.get(
 )
 KONG_CONFIG_PATH: str = os.environ.get("KONG_CONFIG_PATH", "/etc/kong/kong.yml")
 
+# Redis Configuration (Dynamic via env)
+REDIS_HOST: str = os.environ.get("REDIS_HOST", "redis-master-1")
+REDIS_PORT: int = int(os.environ.get("REDIS_PORT", 6379))
+
+# Downstream Webhook/Connector Configuration (Dynamic via env)
+CHANNEL_CONNECTOR_URL: str = os.environ.get("CHANNEL_CONNECTOR_URL", "http://127.0.0.1:3001")
+
+# Additional Decoupled Configuration
+MOCK_API_INTERNAL_URL: str = os.environ.get("MOCK_API_INTERNAL_URL", "http://127.0.0.1:80")
+GATEWAY_FALLBACK_TARGET: str = os.environ.get("GATEWAY_FALLBACK_TARGET", "127.0.0.1:8000")
+KEYCLOAK_BACKUP_ISSUER_URL: str = os.environ.get("KEYCLOAK_BACKUP_ISSUER_URL", "http://localhost:8080/realms/solavie")
+
 
 class KeycloakConnectionError(Exception):
     """Exception raised when connection to Keycloak fails after retries."""
@@ -80,6 +92,38 @@ def format_public_key(key_string: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_upstream_config(name: str) -> Dict[str, Any]:
+    """Helper to build standard upstream configuration block with healthchecks."""
+    return {
+        "name": name,
+        "algorithm": "round-robin",
+        "slots": 10000,
+        "healthchecks": {
+            "active": {
+                "type": "http",
+                "http_path": "/health",
+                "timeout": 1,
+                "concurrency": 10,
+                "healthy": {
+                    "interval": 5,
+                    "successes": 2
+                },
+                "unhealthy": {
+                    "interval": 2,
+                    "http_failures": 2,
+                    "timeouts": 2
+                }
+            }
+        },
+        "targets": [
+            {
+                "target": GATEWAY_FALLBACK_TARGET,
+                "weight": 0
+            }
+        ]
+    }
+
+
 def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
     """Builds the declarative Kong configuration dictionary."""
     jwt_plugin = {
@@ -98,178 +142,451 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
         }
     }
     
+    services = [
+        {
+            "name": "auth-service",
+            "url": KEYCLOAK_URL,
+            "routes": [
+                {
+                    "name": "auth-route",
+                    "paths": ["/api/v1/auth"],
+                    "strip_path": True,
+                    "plugins": [jwt_plugin]
+                }
+            ]
+        },
+        {
+            "name": "ai-core",
+            "url": "http://ai-core-upstream",
+            "routes": [
+                {
+                    "name": "ai-jobs-api",
+                    "paths": ["/api/v1/completions/jobs"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:media-processor"]
+                },
+                {
+                    "name": "ai-api",
+                    "paths": [
+                        "/api/v1/completions",
+                        "/api/v1/embeddings",
+                        "/api/v1/models",
+                        "/api/v1/configs",
+                        "/api/v1/analytics",
+                        "/api/v1/prompts"
+                    ],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:ai-core"]
+                }
+            ]
+        },
+        {
+            "name": "tenant-config",
+            "url": "http://tenant-config-upstream",
+            "routes": [
+                {
+                    "name": "tenant-config-api",
+                    "paths": ["/api/v1/config"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:tenant-config"]
+                }
+            ]
+        },
+        {
+            "name": "knowledge-base",
+            "url": "http://knowledge-base-upstream",
+            "routes": [
+                {
+                    "name": "kb-api",
+                    "paths": ["/api/v1/documents", "/api/v1/search"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:knowledge-base"]
+                }
+            ]
+        },
+        {
+            "name": "chatbot",
+            "url": "http://chatbot-upstream",
+            "routes": [
+                {
+                    "name": "chatbot-api",
+                    "paths": ["/api/v1/chatbot"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:chatbot"]
+                }
+            ]
+        },
+        {
+            "name": "user-service",
+            "url": "http://user-service-upstream",
+            "routes": [
+                {
+                    "name": "user-api",
+                    "paths": ["/api/v1/users"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:auth"]
+                },
+                {
+                    "name": "user-permissions-manifest",
+                    "paths": ["/api/v1/permissions/manifest"],
+                    "strip_path": False
+                }
+            ]
+        },
+        {
+            "name": "channel-connector-webhooks",
+            "url": CHANNEL_CONNECTOR_URL,
+            "routes": [
+                {
+                    "name": "webhooks",
+                    "paths": ["/webhooks"],
+                    "strip_path": False,
+                    "plugins": [request_termination_plugin]
+                }
+            ]
+        },
+        {
+            "name": "mock-api",
+            "url": MOCK_API_INTERNAL_URL,
+            "routes": [
+                {
+                    "name": "mock-completions",
+                    "paths": ["/api/v1/mock-completions"],
+                    "strip_path": False,
+                    "plugins": [
+                        jwt_plugin,
+                        {
+                            "name": "request-termination",
+                            "config": {
+                                "status_code": 200,
+                                "body": "{\"message\": \"mock success\"}",
+                                "content_type": "application/json"
+                            }
+                        }
+                    ],
+                    "tags": ["scope:ai-core"]
+                }
+            ]
+        },
+        # === REST Services dynamically managed by Discovery ===
+        {
+            "name": "campaign",
+            "url": "http://campaign-upstream",
+            "routes": [
+                {
+                    "name": "campaign-api",
+                    "paths": ["/api/v1/campaigns"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:campaign"]
+                }
+            ]
+        },
+        {
+            "name": "crm",
+            "url": "http://crm-upstream",
+            "routes": [
+                {
+                    "name": "crm-api",
+                    "paths": ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:crm"]
+                }
+            ]
+        },
+        {
+            "name": "analytics",
+            "url": "http://analytics-upstream",
+            "routes": [
+                {
+                    "name": "analytics-api",
+                    "paths": ["/api/v1/metrics", "/api/v1/reports", "/api/v1/insights"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:analytics"]
+                }
+            ]
+        },
+        {
+            "name": "comment-manager",
+            "url": "http://comment-manager-upstream",
+            "routes": [
+                {
+                    "name": "comment-api",
+                    "paths": ["/api/v1/comments"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:comment-manager"]
+                }
+            ]
+        },
+        {
+            "name": "dms",
+            "url": "http://dms-upstream",
+            "routes": [
+                {
+                    "name": "dms-files-api",
+                    "paths": ["/api/v1/files", "/api/v1/folders", "/api/v1/upload", "/api/v1/trash", "/api/v1/quota"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:dms"]
+                }
+            ]
+        },
+        {
+            "name": "link-shortener",
+            "url": "http://link-shortener-upstream",
+            "routes": [
+                {
+                    "name": "link-shortener-api",
+                    "paths": ["/api/v1/links"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:link-shortener"]
+                },
+                {
+                    "name": "link-shortener-redirect",
+                    "paths": ["/r"],
+                    "strip_path": True
+                }
+            ]
+        },
+        {
+            "name": "media-processor",
+            "url": "http://media-processor-upstream",
+            "routes": [
+                {
+                    "name": "media-processor-api",
+                    "paths": ["/api/v1/media/jobs"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:media-processor"]
+                }
+            ]
+        },
+        {
+            "name": "notification",
+            "url": "http://notification-upstream",
+            "routes": [
+                {
+                    "name": "notification-api",
+                    "paths": ["/api/v1/notifications", "/api/v1/preferences"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:notification"]
+                }
+            ]
+        },
+        {
+            "name": "channel-connector",
+            "url": "http://channel-connector-upstream",
+            "routes": [
+                {
+                    "name": "channel-connector-api",
+                    "paths": ["/api/v1/channels"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:channel-connector"]
+                }
+            ]
+        },
+        {
+            "name": "scheduler",
+            "url": "http://scheduler-upstream",
+            "routes": [
+                {
+                    "name": "scheduler-api",
+                    "paths": ["/api/v1/schedules", "/api/v1/automations"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:scheduler"]
+                }
+            ]
+        },
+        {
+            "name": "messaging",
+            "url": "http://messaging-upstream",
+            "routes": [
+                {
+                    "name": "messaging-api",
+                    "paths": ["/api/v1/conversations", "/api/v1/messages"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:messaging"]
+                },
+                {
+                    "name": "messaging-ws",
+                    "paths": ["/ws"],
+                    "strip_path": False,
+                    "protocols": ["ws", "wss"],
+                    "tags": ["scope:messaging"]
+                }
+            ]
+        },
+        # === Dedicated MCP SSE Services (with 60s timeouts) ===
+        {
+            "name": "crm-mcp",
+            "url": "http://crm-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "crm-mcp-route",
+                    "paths": ["/api/v1/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:crm"]
+                }
+            ]
+        },
+        {
+            "name": "knowledge-base-mcp",
+            "url": "http://knowledge-base-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "kb-mcp-route",
+                    "paths": ["/api/v1/kb/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:knowledge-base"]
+                }
+            ]
+        },
+        {
+            "name": "messaging-mcp",
+            "url": "http://messaging-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "messaging-mcp-route",
+                    "paths": ["/api/v1/messaging/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:messaging"]
+                }
+            ]
+        },
+        {
+            "name": "notification-mcp",
+            "url": "http://notification-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "notification-mcp-route",
+                    "paths": ["/api/v1/notification/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:notification"]
+                }
+            ]
+        },
+        {
+            "name": "comment-manager-mcp",
+            "url": "http://comment-manager-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "comment-manager-mcp-route",
+                    "paths": ["/api/v1/comments/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:comment-manager"]
+                }
+            ]
+        },
+        {
+            "name": "content-mcp",
+            "url": "http://content-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "content-mcp-route",
+                    "paths": ["/api/v1/content/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:content"]
+                }
+            ]
+        },
+        {
+            "name": "scheduler-mcp",
+            "url": "http://scheduler-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "scheduler-mcp-route",
+                    "paths": ["/api/v1/scheduler/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:scheduler"]
+                }
+            ]
+        },
+        {
+            "name": "analytics-mcp",
+            "url": "http://analytics-upstream",
+            "connect_timeout": 60000,
+            "read_timeout": 60000,
+            "write_timeout": 60000,
+            "routes": [
+                {
+                    "name": "analytics-mcp-route",
+                    "paths": ["/api/v1/analytics/mcp"],
+                    "strip_path": False,
+                    "plugins": [jwt_plugin],
+                    "tags": ["scope:analytics"]
+                }
+            ]
+        }
+    ]
+    
+    upstream_names = [
+        "ai-core-upstream", "user-service-upstream", "tenant-config-upstream",
+        "chatbot-upstream", "knowledge-base-upstream", "campaign-upstream",
+        "crm-upstream", "analytics-upstream", "comment-manager-upstream",
+        "dms-upstream", "link-shortener-upstream", "media-processor-upstream",
+        "notification-upstream", "channel-connector-upstream", "scheduler-upstream",
+        "messaging-upstream"
+    ]
+    upstreams = [build_upstream_config(name) for name in upstream_names]
+    
     return {
         "_format_version": "3.0",
         "_transform": True,
-        "services": [
-            {
-                "name": "auth-service",
-                "url": "http://keycloak:8080",
-                "routes": [
-                    {
-                        "name": "auth-route",
-                        "paths": ["/api/v1/auth"],
-                        "strip_path": True,
-                        "plugins": [jwt_plugin]
-                    }
-                ]
-            },
-            {
-                "name": "ai-core",
-                "url": "http://ai-core-upstream",
-                "routes": [
-                    {
-                        "name": "ai-jobs-api",
-                        "paths": ["/api/v1/completions/jobs"],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:media-processor"]
-                    },
-                    {
-                        "name": "ai-api",
-                        "paths": [
-                            "/api/v1/completions",
-                            "/api/v1/embeddings",
-                            "/api/v1/models",
-                            "/api/v1/configs",
-                            "/api/v1/analytics",
-                            "/api/v1/prompts"
-                        ],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:ai-core"]
-                    }
-                ]
-            },
-            {
-                "name": "tenant-config",
-                "url": "http://tenant-config:3006",
-                "routes": [
-                    {
-                        "name": "tenant-config-api",
-                        "paths": ["/api/v1/config"],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:tenant-config"]
-                    }
-                ]
-            },
-            {
-                "name": "knowledge-base",
-                "url": "http://knowledge-base:8004",
-                "routes": [
-                    {
-                        "name": "kb-api",
-                        "paths": ["/api/v1/documents", "/api/v1/search"],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:knowledge-base"]
-                    }
-                ]
-            },
-            {
-                "name": "chatbot",
-                "url": "http://chatbot:8001",
-                "routes": [
-                    {
-                        "name": "chatbot-api",
-                        "paths": ["/api/v1/chatbot"],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:chatbot"]
-                    }
-                ]
-            },
-            {
-                "name": "user-service",
-                "url": "http://user-service:3008",
-                "routes": [
-                    {
-                        "name": "user-api",
-                        "paths": ["/api/v1/users"],
-                        "strip_path": False,
-                        "plugins": [jwt_plugin],
-                        "tags": ["scope:auth"]
-                    },
-                    {
-                        "name": "user-permissions-manifest",
-                        "paths": ["/api/v1/permissions/manifest"],
-                        "strip_path": False
-                    }
-                ]
-            },
-            {
-                "name": "channel-connector-webhooks",
-                "url": "http://127.0.0.1:3001",
-                "routes": [
-                    {
-                        "name": "webhooks",
-                        "paths": ["/webhooks"],
-                        "strip_path": False,
-                        "plugins": [request_termination_plugin]
-                    }
-                ]
-            },
-            {
-                "name": "mock-api",
-                "url": "http://127.0.0.1:80",
-                "routes": [
-                    {
-                        "name": "mock-completions",
-                        "paths": ["/api/v1/mock-completions"],
-                        "strip_path": False,
-                        "plugins": [
-                            jwt_plugin,
-                            {
-                                "name": "request-termination",
-                                "config": {
-                                    "status_code": 200,
-                                    "body": "{\"message\": \"mock success\"}",
-                                    "content_type": "application/json"
-                                }
-                            }
-                        ],
-                        "tags": ["scope:ai-core"]
-                    }
-                ]
-            }
-        ],
-        "upstreams": [
-            {
-                "name": "ai-core-upstream",
-                "algorithm": "round-robin",
-                "slots": 10000,
-                "healthchecks": {
-                    "active": {
-                        "type": "http",
-                        "http_path": "/health",
-                        "timeout": 1,
-                        "concurrency": 10,
-                        "healthy": {
-                            "interval": 5,
-                            "successes": 2
-                        },
-                        "unhealthy": {
-                            "interval": 2,
-                            "http_failures": 2,
-                            "timeouts": 2
-                        }
-                    }
-                },
-                "targets": [
-                    {
-                        "target": "127.0.0.1:8000",
-                        "weight": 0
-                    }
-                ]
-            }
-        ],
+        "services": services,
+        "upstreams": upstreams,
         "plugins": [
             {
                 "name": "dynamic-policy",
                 "config": {
-                    "redis_host": "redis-master-1",
-                    "redis_port": 6379
+                    "redis_host": REDIS_HOST,
+                    "redis_port": REDIS_PORT,
+                    "tenant_config_internal_url": os.environ.get("TENANT_CONFIG_INTERNAL_URL", "http://tenant-config:3006"),
+                    "default_tenant_id": os.environ.get("DEFAULT_TENANT_ID", "tenant-test-uuid"),
+                    "default_rate_limit_minute": int(os.environ.get("DEFAULT_RATE_LIMIT_MINUTE", 200)),
+                    "default_rate_limit_hour": int(os.environ.get("DEFAULT_RATE_LIMIT_HOUR", 5000)),
+                    "gateway_signing_secret": os.environ.get("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
                 }
             },
             {
@@ -296,19 +613,19 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
             {
                 "consumer": "keycloak_issuer",
                 "algorithm": "RS256",
-                "key": "http://solavie-keycloak:8080/realms/solavie",
+                "key": f"{KEYCLOAK_URL}/realms/solavie",
                 "rsa_public_key": public_key_pem
             },
             {
                 "consumer": "keycloak_issuer",
                 "algorithm": "RS256",
-                "key": "http://keycloak:8080/realms/solavie",
+                "key": f"{KEYCLOAK_URL.replace('keycloak', 'solavie-keycloak')}/realms/solavie",
                 "rsa_public_key": public_key_pem
             },
             {
                 "consumer": "keycloak_issuer",
                 "algorithm": "RS256",
-                "key": "http://localhost:8080/realms/solavie",
+                "key": KEYCLOAK_BACKUP_ISSUER_URL,
                 "rsa_public_key": public_key_pem
             }
         ]

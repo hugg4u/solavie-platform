@@ -85,9 +85,51 @@ def access_token(ensure_tenant_exists):
 @pytest.fixture(scope="module")
 def redis_client():
     """Redis client để seed test config data cho dynamic policy plugin (Cluster-aware)."""
+    # Dynamic Redis Cluster address remapping for running tests on local Windows host
+    mapping = {}
+    try:
+        output = subprocess.check_output(
+            ["docker", "ps", "--filter", "name=solavie-redis", "--format", "{{.Names}}"],
+            text=True
+        )
+        names = [name.strip() for name in output.strip().split("\n") if name.strip()]
+        for name in names:
+            ip = subprocess.check_output(
+                ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
+                text=True
+            ).strip()
+            port_info = subprocess.check_output(
+                ["docker", "inspect", "-f", "{{(index (index .NetworkSettings.Ports \"6379/tcp\") 0).HostPort}}", name],
+                text=True
+            ).strip()
+            if ip and port_info:
+                mapping[ip] = int(port_info)
+    except Exception as e:
+        print(f"Warning: Failed to get dynamic redis mapping from docker: {e}")
+        # Fallback to default port mapping
+        mapping = {
+            "172.18.0.4": 6389,
+            "172.18.0.5": 6380,
+            "172.18.0.7": 6381,
+            "172.18.0.2": 6382,
+            "172.18.0.8": 6383,
+            "172.18.0.6": 6384
+        }
+
+    def remap(addr):
+        ip, port = addr
+        if ip in mapping:
+            return ("127.0.0.1", mapping[ip])
+        return addr
+
     try:
         from redis.cluster import RedisCluster
-        r = RedisCluster(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        r = RedisCluster(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            decode_responses=True,
+            address_remap=remap
+        )
         r.ping()
         return r
     except Exception as e:
@@ -355,7 +397,7 @@ def test_gateway_jti_blacklisting(access_token, redis_client):
 
     # 2. Đưa JTI vào Redis Blacklist (giả lập sync worker)
     blacklist_key = f"blacklist:jti:{jti}"
-    redis_client.setex(blacklist_key, 60, "revoked")
+    redis_client.set(blacklist_key, "revoked", ex=60)
 
     try:
         # 3. Gửi request qua Gateway với token bị revoked
@@ -696,3 +738,205 @@ def test_gateway_circuit_breaker(ensure_tenant_exists):
         # Cleanup
         del_user_url = f"{KEYCLOAK_URL}/admin/realms/solavie/users/{user_id}"
         requests.delete(del_user_url, headers=admin_headers, timeout=10)
+
+# ============================================================
+# Task 11: MCP SSE Automated Verification (AC 11.1 - 11.5)
+# ============================================================
+import http.server
+import threading
+import socket
+import hmac
+import hashlib
+
+mock_server_received_headers = {}
+
+class MockSSERequestHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Suppress logging to stdout
+        pass
+
+    def do_GET(self):
+        if self.path == "/api/v1/mcp":
+            # Record received headers
+            global mock_server_received_headers
+            mock_server_received_headers = {
+                "x-tenant-id": self.headers.get("X-Tenant-ID"),
+                "x-user-id": self.headers.get("X-User-ID"),
+                "x-user-permissions": self.headers.get("X-User-Permissions"),
+                "x-permissions-signature": self.headers.get("X-Permissions-Signature")
+            }
+            
+            # Send SSE headers
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            # CORS headers
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            # Stream events
+            for i in range(3):
+                try:
+                    self.wfile.write(f"data: {{\"event\": \"hello {i}\"}}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    break
+                time.sleep(0.1)
+        elif self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"healthy"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+@pytest.fixture(scope="module")
+def mock_sse_server():
+    """Starts a local HTTP server in a background thread to mock the MCP Upstream service."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("", 0))
+    port = s.getsockname()[1]
+    s.close()
+    
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), MockSSERequestHandler)
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    yield port
+    
+    server.shutdown()
+    server.server_close()
+
+
+def test_gateway_mcp_sse_routing(access_token, redis_client, mock_sse_server):
+    """
+    AC 11.1 & 11.2: Verify routing of MCP SSE requests to upstream virtual object and longevity.
+    AC 11.4: Verify X-Accel-Buffering: no header is preserved.
+    """
+    port = mock_sse_server
+    target = f"host.docker.internal:{port}"
+    
+    # 1. Register Mock Server target in Redis for crm service discovery
+    redis_client.sadd("registry:service:crm", target)
+    redis_client.set(f"registry:service:crm:node:{target}", "alive", ex=30)
+    
+    # Wait a few seconds for the Registry Sync Daemon to pick up and reload Kong
+    time.sleep(7.0)
+    
+    try:
+        # 2. Make authenticated GET request to MCP route via Gateway with stream=True
+        # We need a token with crm scope
+        token = get_token_with_scopes("crm")
+        url = f"{GATEWAY_URL}/api/v1/mcp"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Tenant-ID": TEST_TENANT_ID
+        }
+        
+        response = requests.get(url, headers=headers, stream=True, timeout=10)
+        
+        # Verify status and headers
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("Content-Type", "").lower()
+        assert response.headers.get("X-Accel-Buffering") == "no"
+        
+        # Verify we receive the streamed events
+        lines = []
+        for line in response.iter_lines():
+            if line:
+                lines.append(line.decode("utf-8"))
+                
+        assert len(lines) >= 3
+        assert any("hello 0" in l for l in lines)
+        assert any("hello 1" in l for l in lines)
+        assert any("hello 2" in l for l in lines)
+        
+    finally:
+        # Cleanup Redis registry
+        redis_client.srem("registry:service:crm", target)
+        redis_client.delete(f"registry:service:crm:node:{target}")
+
+
+def test_gateway_mcp_sse_security_headers_injection(access_token, redis_client, mock_sse_server):
+    """
+    AC 11.3: Verify dynamic headers injection and HMAC signature verification on SSE flows.
+    """
+    port = mock_sse_server
+    target = f"host.docker.internal:{port}"
+    
+    redis_client.sadd("registry:service:crm", target)
+    redis_client.set(f"registry:service:crm:node:{target}", "alive", ex=30)
+    time.sleep(7.0)
+    
+    try:
+        global mock_server_received_headers
+        mock_server_received_headers.clear()
+        
+        token = get_token_with_scopes("crm")
+        url = f"{GATEWAY_URL}/api/v1/mcp"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Tenant-ID": TEST_TENANT_ID
+        }
+        
+        response = requests.get(url, headers=headers, stream=True, timeout=10)
+        assert response.status_code == 200
+        
+        # Give mock server thread a tiny bit to record headers
+        time.sleep(0.5)
+        
+        # Verify headers received by upstream mock server
+        assert mock_server_received_headers.get("x-tenant-id") == TEST_TENANT_ID
+        assert mock_server_received_headers.get("x-user-id") is not None
+        assert mock_server_received_headers.get("x-user-permissions") is not None
+        
+        # Calculate expected signature
+        secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
+        payload = f"{TEST_TENANT_ID}:{mock_server_received_headers.get('x-user-id')}:{mock_server_received_headers.get('x-user-permissions')}"
+        
+        import hashlib
+        expected_sig = hmac.new(
+            secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        
+        assert mock_server_received_headers.get("x-permissions-signature") == expected_sig
+        
+    finally:
+        redis_client.srem("registry:service:crm", target)
+        redis_client.delete(f"registry:service:crm:node:{target}")
+
+
+def test_gateway_mcp_sse_unauthorized_blocked(access_token, redis_client, mock_sse_server):
+    """
+    AC 11.5: Verify Gateway blocks MCP SSE connections with invalid or missing token / scope.
+    """
+    port = mock_sse_server
+    target = f"host.docker.internal:{port}"
+    
+    redis_client.sadd("registry:service:crm", target)
+    redis_client.set(f"registry:service:crm:node:{target}", "alive", ex=30)
+    time.sleep(7.0)
+    
+    try:
+        url = f"{GATEWAY_URL}/api/v1/mcp"
+        
+        # 1. No token -> 401 Unauthorized
+        response_no_token = requests.get(url, timeout=5)
+        assert response_no_token.status_code == 401
+        
+        # 2. Token without scope "crm" -> 403 Forbidden
+        token_no_scope = get_token_with_scopes("ai-core") # Has ai-core but not crm scope
+        headers = {"Authorization": f"Bearer {token_no_scope}"}
+        response_no_scope = requests.get(url, headers=headers, timeout=5)
+        assert response_no_scope.status_code == 403
+        
+    finally:
+        redis_client.srem("registry:service:crm", target)
+        redis_client.delete(f"registry:service:crm:node:{target}")

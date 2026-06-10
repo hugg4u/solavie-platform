@@ -16,8 +16,12 @@ def mock_redis_client():
     return client
 
 def test_sync_cycle_no_changes(mock_redis_client):
-    # Setup mock redis set data
-    mock_redis_client.smembers.return_value = {"172.20.0.5:8000"}
+    # Setup mock redis set data for all services (return empty except ai-core which has matching target)
+    def smembers_side_effect(key):
+        if "ai-core" in key:
+            return {"172.20.0.5:8000"}
+        return set()
+    mock_redis_client.smembers.side_effect = smembers_side_effect
     
     # Mock yml config content
     mock_yaml_data = """
@@ -32,7 +36,7 @@ upstreams:
          patch("builtins.open", mock_open(read_data=mock_yaml_data)) as mock_file, \
          patch("requests.post") as mock_post:
          
-        sync_registry.sync_cycle(mock_redis_client, "registry:service:ai-core")
+        sync_registry.sync_cycle(mock_redis_client)
         
         # Verify no write occurred because targets matched
         mock_file().write.assert_not_called()
@@ -40,7 +44,11 @@ upstreams:
 
 def test_sync_cycle_add_target(mock_redis_client):
     # Setup mock redis: one target already there, one new target
-    mock_redis_client.smembers.return_value = {"172.20.0.5:8000", "172.20.0.6:8000"}
+    def smembers_side_effect(key):
+        if "ai-core" in key:
+            return {"172.20.0.5:8000", "172.20.0.6:8000"}
+        return set()
+    mock_redis_client.smembers.side_effect = smembers_side_effect
     
     # Mock yml config content (only has 172.20.0.5)
     mock_yaml_data = """
@@ -59,7 +67,7 @@ upstreams:
          patch("builtins.open", mock_open(read_data=mock_yaml_data)) as mock_file, \
          patch("requests.post", return_value=mock_response) as mock_post:
          
-        sync_registry.sync_cycle(mock_redis_client, "registry:service:ai-core")
+        sync_registry.sync_cycle(mock_redis_client)
         
         # Open was called at least once for writing
         # Let's verify YAML write contains both targets
@@ -74,7 +82,11 @@ upstreams:
 
 def test_sync_cycle_expired_node_cleanup(mock_redis_client):
     # Setup mock redis: 2 members in set, but one lacks TTL key (exists=False)
-    mock_redis_client.smembers.return_value = {"172.20.0.5:8000", "172.20.0.6:8000"}
+    def smembers_side_effect(key):
+        if "ai-core" in key:
+            return {"172.20.0.5:8000", "172.20.0.6:8000"}
+        return set()
+    mock_redis_client.smembers.side_effect = smembers_side_effect
     
     # 172.20.0.6:8000 is expired
     def exists_side_effect(key):
@@ -96,7 +108,7 @@ upstreams:
          patch("builtins.open", mock_open(read_data=mock_yaml_data)) as mock_file, \
          patch("requests.post") as mock_post:
          
-        sync_registry.sync_cycle(mock_redis_client, "registry:service:ai-core")
+        sync_registry.sync_cycle(mock_redis_client)
         
         # Verify srem was called for the expired node
         mock_redis_client.srem.assert_called_once_with("registry:service:ai-core", "172.20.0.6:8000")
