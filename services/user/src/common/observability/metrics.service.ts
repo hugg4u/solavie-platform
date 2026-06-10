@@ -1,94 +1,116 @@
 import { Injectable } from '@nestjs/common';
+import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 @Injectable()
 export class MetricsService {
-  private requestCounter = new Map<string, number>(); // key: `method|route|status`
-  private durationSum = new Map<string, number>(); // key: `method|route`
-  private durationCount = new Map<string, number>(); // key: `method|route`
-  private durationBuckets = new Map<string, Map<number, number>>(); // key: `method|route`, inner key: le (bucket limit)
+  private readonly registry: Registry;
 
-  // Standard latency buckets in seconds
-  private readonly buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+  public readonly httpRequestsTotal: Counter<string>;
+  public readonly httpRequestDuration: Histogram<string>;
+  public readonly keycloakSyncOperations: Counter<string>;
+  public readonly securitySignatureFailures: Counter<string>;
+  public readonly securityPermissionDenied: Counter<string>;
 
-  recordRequest(method: string, route: string, status: number, durationSeconds: number) {
-    // 1. Record HTTP requests count
-    const counterKey = `${method}|${route}|${status}`;
-    const currentCount = this.requestCounter.get(counterKey) || 0;
-    this.requestCounter.set(counterKey, currentCount + 1);
+  constructor() {
+    this.registry = new Registry();
 
-    // 2. Record HTTP request duration sum & count
-    const durationKey = `${method}|${route}`;
-    const currentSum = this.durationSum.get(durationKey) || 0;
-    this.durationSum.set(durationKey, currentSum + durationSeconds);
+    // Thu thập các metrics mặc định của Node.js (CPU, Memory, GC, v.v.)
+    collectDefaultMetrics({ register: this.registry, prefix: 'user_service_' });
 
-    const currentDurCount = this.durationCount.get(durationKey) || 0;
-    this.durationCount.set(durationKey, currentDurCount + 1);
+    // 1. Thống kê HTTP request
+    this.httpRequestsTotal = new Counter({
+      name: 'user_service_http_requests_total',
+      help: 'Total HTTP requests in User Service',
+      labelNames: ['method', 'handler', 'status_code', 'tenant_id'],
+      registers: [this.registry],
+    });
 
-    // 3. Record HTTP request duration buckets
-    if (!this.durationBuckets.has(durationKey)) {
-      const initialMap = new Map<number, number>();
-      for (const le of this.buckets) {
-        initialMap.set(le, 0);
-      }
-      initialMap.set(Infinity, 0);
-      this.durationBuckets.set(durationKey, initialMap);
-    }
-    
-    const routeBuckets = this.durationBuckets.get(durationKey)!;
-    
-    for (const le of this.buckets) {
-      if (durationSeconds <= le) {
-        const count = routeBuckets.get(le) || 0;
-        routeBuckets.set(le, count + 1);
-      }
-    }
-    
-    // Inf bucket
-    const infCount = routeBuckets.get(Infinity) || 0;
-    routeBuckets.set(Infinity, infCount + 1);
+    this.httpRequestDuration = new Histogram({
+      name: 'user_service_http_request_duration_seconds',
+      help: 'HTTP request latency distribution',
+      labelNames: ['method', 'handler'],
+      buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+      registers: [this.registry],
+    });
+
+    // 2. Thống kê đồng bộ Keycloak
+    this.keycloakSyncOperations = new Counter({
+      name: 'user_service_keycloak_sync_total',
+      help: 'Total sync operations with Keycloak',
+      labelNames: ['direction', 'operation', 'status'], // direction: IN, OUT; status: success, error
+      registers: [this.registry],
+    });
+
+    // 3. Thống kê Bảo mật & Zero-Trust
+    this.securitySignatureFailures = new Counter({
+      name: 'user_service_security_signature_failures_total',
+      help: 'Total HMAC signature validation failures on X-Permissions-Signature',
+      labelNames: ['tenant_id'],
+      registers: [this.registry],
+    });
+
+    this.securityPermissionDenied = new Counter({
+      name: 'user_service_security_permission_denied_total',
+      help: 'Total permission denied decisions at downstream guard',
+      labelNames: ['tenant_id', 'required_permission'],
+      registers: [this.registry],
+    });
   }
 
-  getMetricsResponse(): string {
-    let output = '';
+  /**
+   * Ghi nhận HTTP Request
+   */
+  recordRequest(method: string, route: string, status: number, durationSeconds: number, tenantId: string = 'unknown') {
+    this.httpRequestsTotal.inc({
+      method,
+      handler: route,
+      status_code: status.toString(),
+      tenant_id: tenantId || 'unknown',
+    });
 
-    // 1. Process Uptime Metric
-    output += '# HELP process_uptime_seconds Uptime of the service in seconds.\n';
-    output += '# TYPE process_uptime_seconds gauge\n';
-    output += `process_uptime_seconds ${process.uptime().toFixed(2)}\n\n`;
+    this.httpRequestDuration.observe(
+      {
+        method,
+        handler: route,
+      },
+      durationSeconds,
+    );
+  }
 
-    // 2. HTTP Requests Total Counter Metric
-    output += '# HELP http_requests_total Total number of HTTP requests.\n';
-    output += '# TYPE http_requests_total counter\n';
-    for (const [key, value] of this.requestCounter.entries()) {
-      const [method, route, status] = key.split('|');
-      output += `http_requests_total{method="${method}",route="${route}",status="${status}"} ${value}\n`;
-    }
-    output += '\n';
+  /**
+   * Ghi nhận Keycloak Sync Operation
+   */
+  recordKeycloakSync(direction: 'IN' | 'OUT', operation: string, status: 'success' | 'error') {
+    this.keycloakSyncOperations.inc({
+      direction,
+      operation,
+      status,
+    });
+  }
 
-    // 3. HTTP Request Duration Histogram Metrics
-    output += '# HELP http_request_duration_seconds Response latency in seconds.\n';
-    output += '# TYPE http_request_duration_seconds histogram\n';
-    
-    for (const durationKey of this.durationCount.keys()) {
-      const [method, route] = durationKey.split('|');
-      const routeBuckets = this.durationBuckets.get(durationKey)!;
-      
-      // Print buckets
-      for (const le of this.buckets) {
-        const count = routeBuckets.get(le) || 0;
-        output += `http_request_duration_seconds_bucket{method="${method}",route="${route}",le="${le}"} ${count}\n`;
-      }
-      // Inf bucket
-      const infCount = routeBuckets.get(Infinity) || 0;
-      output += `http_request_duration_seconds_bucket{method="${method}",route="${route}",le="+Inf"} ${infCount}\n`;
-      
-      // Sum and Count
-      const sum = this.durationSum.get(durationKey) || 0;
-      const count = this.durationCount.get(durationKey) || 0;
-      output += `http_request_duration_seconds_sum{method="${method}",route="${route}"} ${sum.toFixed(6)}\n`;
-      output += `http_request_duration_seconds_count{method="${method}",route="${route}"} ${count}\n`;
-    }
+  /**
+   * Ghi nhận lỗi Signature Mismatch
+   */
+  recordSignatureFailure(tenantId: string = 'unknown') {
+    this.securitySignatureFailures.inc({
+      tenant_id: tenantId || 'unknown',
+    });
+  }
 
-    return output;
+  /**
+   * Ghi nhận lỗi Permission Denied
+   */
+  recordPermissionDenied(tenantId: string = 'unknown', requiredPermission: string) {
+    this.securityPermissionDenied.inc({
+      tenant_id: tenantId || 'unknown',
+      required_permission: requiredPermission,
+    });
+  }
+
+  /**
+   * Trả về định dạng metric chuẩn Prometheus
+   */
+  async getMetricsResponse(): Promise<string> {
+    return this.registry.metrics();
   }
 }
