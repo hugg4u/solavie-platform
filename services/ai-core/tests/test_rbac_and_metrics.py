@@ -10,6 +10,7 @@ Tests cover:
 import pytest
 import json
 import uuid
+import os
 from unittest.mock import AsyncMock, patch, MagicMock
 from tools.registry import ToolPermissionManager, TOOL_PERMISSIONS
 
@@ -314,7 +315,7 @@ class TestFastAPIPermissionsSecurity:
         user_id = "user-123"
         perms = "ai-core:chats:create,analytics:metrics:read"
         
-        secret = "default-gateway-signing-secret-key-change-me-in-production"
+        secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
         payload = f"{tenant_id}:{user_id}:{perms}"
         sig = hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
         
@@ -351,7 +352,7 @@ class TestFastAPIPermissionsSecurity:
         user_id = "user-123"
         perms = "analytics:metrics:read"
         
-        secret = "default-gateway-signing-secret-key-change-me-in-production"
+        secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
         payload = f"{tenant_id}:{user_id}:{perms}"
         sig = hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
         

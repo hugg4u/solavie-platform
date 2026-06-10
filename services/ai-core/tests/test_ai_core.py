@@ -443,7 +443,7 @@ async def test_auto_create_routes_on_first_api_key():
     import hmac, hashlib
     user_id = "test-user-123"
     perms = "ai-core:configs:write"
-    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
     payload_str = f"{tenant_id}:{user_id}:{perms}"
     sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
     
@@ -537,7 +537,7 @@ async def test_dynamic_models_endpoint():
     perms = "ai-core:configs:read"
     
     import hmac, hashlib
-    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
     payload_str = f"{tenant_id}:{user_id}:{perms}"
     sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
     

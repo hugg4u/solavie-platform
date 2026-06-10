@@ -35,7 +35,7 @@ class MCPClientManager:
         self.exit_stacks: Dict[tuple, AsyncExitStack] = {}  # (tenant_id, server_name) -> AsyncExitStack
         self._initialized = True
 
-    async def execute_mcp_tool(self, tenant_id: str, full_tool_name: str, arguments: Dict[str, Any], db_session=None) -> str:
+    async def execute_mcp_tool(self, tenant_id: str, full_tool_name: str, arguments: Dict[str, Any], db_session=None, headers: Dict[str, str] = None) -> str:
         """
         Executes a tool call on a Custom MCP SSE Server, enforcing whitelist validation and tenant isolation.
         """
@@ -72,7 +72,7 @@ class MCPClientManager:
 
         # 4. SSE Session Pool management
         try:
-            session = await self._get_or_create_session(tenant_id, server_name, sse_url)
+            session = await self._get_or_create_session(tenant_id, server_name, sse_url, headers=headers)
             # Invoke tool using the session
             # Note: mcp ClientSession call_tool returns a CallToolResult
             result = await session.call_tool(tool_name, arguments)
@@ -97,7 +97,7 @@ class MCPClientManager:
             # Try to reconnect and execute once more as a transparent retry
             try:
                 logger.info(f"Retrying connection and tool execution for '{tool_name}' on server '{server_name}'...")
-                session = await self._get_or_create_session(tenant_id, server_name, sse_url)
+                session = await self._get_or_create_session(tenant_id, server_name, sse_url, headers=headers)
                 result = await session.call_tool(tool_name, arguments)
                 if not result.content:
                     return ""
@@ -163,16 +163,32 @@ class MCPClientManager:
             
         return None
 
-    async def _get_or_create_session(self, tenant_id: str, server_name: str, url: str) -> Any:
+    async def _get_or_create_session(self, tenant_id: str, server_name: str, url: str, headers: Dict[str, str] = None) -> Any:
         key = (str(tenant_id), server_name)
         if key in self.sessions:
             return self.sessions[key]
+
+        # Resolve headers to forward
+        resolved_headers = headers
+        if not resolved_headers:
+            try:
+                from api.deps import security_headers_ctx
+                ctx_headers = security_headers_ctx.get()
+                if ctx_headers:
+                    # Forward security headers that are not None
+                    resolved_headers = {k: v for k, v in ctx_headers.items() if v is not None}
+            except Exception as ex:
+                logger.debug(f"Failed to read security headers from ContextVar: {ex}")
+
+        logger.info(f"Connecting to SSE MCP server '{server_name}' at {url} with headers: {resolved_headers}")
 
         exit_stack = AsyncExitStack()
         try:
             # We connect to SSE server via sse_client
             # Note that sse_client is an async context manager
-            read_stream, write_stream = await exit_stack.enter_async_context(sse_client(url))
+            read_stream, write_stream = await exit_stack.enter_async_context(
+                sse_client(url, headers=resolved_headers)
+            )
             session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
             await session.initialize()
             
