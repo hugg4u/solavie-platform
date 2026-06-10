@@ -71,3 +71,21 @@ Khi Tenant Admin thực hiện cấu hình vai trò (Custom Roles) và phân quy
 *   **Ràng buộc bảo vệ vai trò hệ thống:**
     *   Chặn mọi yêu cầu sửa đổi hoặc xóa đối với các vai trò mặc định: `admin`, `manager`, `agent`, `viewer`.
     *   Chặn mọi yêu cầu tạo mới hoặc đổi tên vai trò tùy chỉnh trùng với danh sách từ khóa bảo lưu của hệ thống: `['system', 'system_admin', 'super_admin', 'root']` (không phân biệt hoa thường) để loại trừ nguy cơ leo thang đặc quyền.
+
+---
+
+## Business Logic — Service Self-Registration
+
+### 1. Logic Đăng ký (Startup Hook)
+* BƯỚC 1: Gọi hàm `_get_internal_ip()` sử dụng socket UDP giả lập kết nối tới `8.8.8.8:80` để lấy IP nội bộ của container.
+* BƯỚC 2: Định nghĩa chuỗi node dạng `{ip}:{port}`.
+* BƯỚC 3: Thực hiện pipeline ghi vào Redis:
+  * `SADD registry:service:tenant-config "{ip}:{port}"`
+  * `SETEX registry:service:tenant-config:node:{ip}:{port} 15 "alive"`
+* BƯỚC 4: Bắt đầu chạy vòng lặp heartbeat (mỗi 5 giây) để gửi lại gói tin `SETEX` và `SADD` để làm mới TTL.
+
+### 2. Logic Hủy đăng ký (Shutdown Hook)
+* BƯỚC 1: Dừng vòng lặp heartbeat.
+* BƯỚC 2: Thực hiện pipeline dọn dẹp Redis:
+  * `SREM registry:service:tenant-config "{ip}:{port}"`
+  * `DEL registry:service:tenant-config:node:{ip}:{port}"`

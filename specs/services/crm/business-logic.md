@@ -294,3 +294,21 @@ Incoming Request (POST /api/v1/mcp/:server/messages)
 *   **Với `solar_calc__calculate_solar_roi`:** Gọi module tính toán ROI cục bộ dựa trên dữ liệu bức xạ và điện mặt trời đã lọc theo `tenant_id` của khách hàng.
 *   **Với `crm__get_contact_360`:** Truy vấn bảng `contacts`, `crm_deals`, `crm_tickets` để tổng hợp hồ sơ khách hàng. Prisma tự động thêm điều kiện `tenant_id` trong câu lệnh `findUnique` hoặc `findFirst`.
 *   **Với `om_ticket__create_om_ticket`:** Kiểm tra xem `contact_id` có thuộc `tenant_id` không, sau đó thực hiện chèn bản ghi mới vào bảng `crm_tickets` và phát event `crm.ticket.created` lên Kafka.
+
+---
+
+## Business Logic — Service Self-Registration
+
+### 1. Logic Đăng ký (Startup Hook)
+* BƯỚC 1: Gọi hàm `_get_internal_ip()` sử dụng socket UDP giả lập kết nối tới `8.8.8.8:80` để lấy IP nội bộ của container.
+* BƯỚC 2: Định nghĩa chuỗi node dạng `{ip}:{port}`.
+* BƯỚC 3: Thực hiện pipeline ghi vào Redis:
+  * `SADD registry:service:crm "{ip}:{port}"`
+  * `SETEX registry:service:crm:node:{ip}:{port} 15 "alive"`
+* BƯỚC 4: Bắt đầu chạy vòng lặp heartbeat (mỗi 5 giây) để gửi lại gói tin `SETEX` và `SADD` để làm mới TTL.
+
+### 2. Logic Hủy đăng ký (Shutdown Hook)
+* BƯỚC 1: Dừng vòng lặp heartbeat.
+* BƯỚC 2: Thực hiện pipeline dọn dẹp Redis:
+  * `SREM registry:service:crm "{ip}:{port}"`
+  * `DEL registry:service:crm:node:{ip}:{port}"`

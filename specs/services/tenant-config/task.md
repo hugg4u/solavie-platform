@@ -113,3 +113,12 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 - [ ] Khởi chạy cục bộ docker-compose, thực hiện gọi API qua Gateway để kiểm chứng Gateway inject signature và downstream verify thành công.
 - [ ] Kiểm tra Redis CLI xem dữ liệu permissions lưu dưới key `tenant:{tenant_id}:role:{role_name}:permissions` có đúng định dạng CSV phân tách alphabet không.
 - [ ] Test trường hợp thay đổi permissions của một custom role và kiểm chứng Gateway invalidate local cache trong < 5 giây.
+
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (NestJS).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

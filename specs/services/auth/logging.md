@@ -82,3 +82,5 @@ Auth Sync Worker chạy bằng Python xuất bản log stdout ở định dạng
 | TokenRefreshFailing | token errors > 10 in 5m | warning |
 | OrganizationCreationFail | admin API errors | critical |
 | SyncWorkerFailure | sum(rate(sync_worker_errors_total[5m])) > 1 | critical |
+
+

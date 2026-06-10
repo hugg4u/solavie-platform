@@ -60,3 +60,43 @@ scheduler_mcp_execution_duration_seconds: Timer [tool_name]
 | PublishFailures | triggered{status=failed} > 3 in 10m | warning |
 | OverdueSchedules | overdue > 5 for 5m | critical |
 | QuartzJobStuck | jobs_running same value for > 10m | warning |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "scheduler",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 8003,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:scheduler"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "scheduler",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 8003,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:scheduler"
+  }
+}
+```

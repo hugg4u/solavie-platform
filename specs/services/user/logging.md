@@ -152,3 +152,43 @@ Dịch vụ sử dụng module `@nestjs/terminus` để cung cấp các API giá
 | HighSignatureMismatch | `sum(rate(user_service_security_signature_failures_total[5m])) > 2` | Critical | Cảnh báo tấn công Header Spoofing hoặc sai cấu hình `GATEWAY_SIGNING_SECRET` giữa Gateway và User Service |
 | DownstreamPermissionDenials | `sum(rate(user_service_security_permission_denied_total[5m])) > 10` | Warning | Kiểm tra phân quyền trên Keycloak/Redis của Tenant hoặc cảnh báo hành vi truy cập trái phép |
 | PostgreSQLConnectionDown | Kết nối tới database `solavie_user_db` bị ngắt quãng > 30s | Critical | Kiểm tra tài nguyên DB, RLS policies, và connection pool |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "user",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3008,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:user"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "user",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3008,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:user"
+  }
+}
+```

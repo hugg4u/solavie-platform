@@ -94,3 +94,43 @@ Dịch vụ phơi bày các chỉ số đo lường hiệu năng tại endpoint 
 | **`PostgreSQLConnectionDown`** | Kết nối tới database `config_db` bị gián đoạn liên tục quá 30s. | Critical | Kiểm tra log PostgreSQL, kết nối mạng trong cụm Docker/Kubernetes và connection pool. |
 | **`DownstreamPermissionDenials`** | `sum(rate(tenant_config_security_permission_denied_total[5m])) > 10` | Warning | Cảnh báo người dùng thực hiện truy cập trái phép hoặc cấu hình quyền trên Keycloak/Redis bị sai lệch. |
 | **`DefaultConfigProvisionFail`** | Lắng nghe event tạo tenant mới nhưng lưu default config vào DB gặp lỗi > 3 lần. | Critical | Kiểm tra tính nhất quán dữ liệu của bảng `tenant_configs` và các Kafka topics. |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "tenant-config",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3006,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:tenant-config"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "tenant-config",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3006,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:tenant-config"
+  }
+}
+```

@@ -69,3 +69,43 @@ GET /metrics  → Prometheus format
 | HighOverrideRate | overrides / processed > 20% in 1h | info (model needs retraining) |
 | SpamSpike | spam classified > 3x normal rate in 15m | warning |
 | EscalationFlood | escalated > 20 in 10m | warning |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "comment-manager",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3005,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:comment-manager"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "comment-manager",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3005,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:comment-manager"
+  }
+}
+```

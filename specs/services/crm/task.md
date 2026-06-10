@@ -145,3 +145,12 @@ This document tracks the implementation checklist for **CRM Service** based on t
 - [ ] Triển khai middleware xác thực JWT và so khớp chéo `tenant_id` từ arguments của tool call với JWT payload.
 - [ ] Thực thi ghi nhận Prometheus metrics: `crm_mcp_tool_executions_total` và `crm_mcp_security_violations_total`.
 - [ ] Viết unit tests kiểm tra việc chặn truy cập trái phép khi gửi lệch `tenant_id` trong tool call.
+
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (NestJS).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

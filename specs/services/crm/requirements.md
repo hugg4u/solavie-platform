@@ -142,4 +142,14 @@ Dịch vụ quản lý khách hàng đa kênh của Solavie — auto-create cont
 4. THE CRM_Service SHALL enforce parameter validation against the schema declared by the MCP server for each tool.
 5. THE CRM_Service SHALL return standard JSON-RPC 2.0 responses wrapped in the MCP response format.
 
+---
 
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE CRM Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE CRM Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:crm` khi startup.
+3. THE CRM Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:crm:node:{ip}:{port}` với TTL là 15 giây.
+4. THE CRM Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:crm` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

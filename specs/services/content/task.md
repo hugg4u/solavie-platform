@@ -113,3 +113,11 @@ This document tracks the implementation checklist for **CONTENT Service** based 
 - [ ] Triển khai cơ chế bảo mật tiêm `tenant_id` từ header và áp dụng vào các hàm sinh nội dung (RAG, database storage, MinIO).
 - [ ] Viết các test case pytest kiểm chứng cô lập dữ liệu đa thuê.
 
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (FastAPI).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

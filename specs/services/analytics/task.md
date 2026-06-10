@@ -98,3 +98,11 @@ This document tracks the implementation checklist for **ANALYTICS Service** base
 - [ ] Cấu hình cơ chế tiêm `tenant_id` từ header `X-Tenant-ID` trực tiếp vào câu lệnh SQL/JPA truy vấn TimescaleDB.
 - [ ] Viết các bài kiểm thử đơn vị và kiểm thử tích hợp đảm bảo cô lập tenant trên TimescaleDB.
 
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (Spring Boot).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

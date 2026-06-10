@@ -85,3 +85,11 @@ This document tracks the implementation checklist for **COMMENT-MANAGER Service*
 - [ ] Thực thi cơ chế tiêm `tenant_id` từ header của request trực tiếp vào các Prisma query để cô lập tenant và gọi API platform tương ứng.
 - [ ] Viết unit tests và integration các kịch bản kiểm soát truy cập chéo tenant trên comment.
 
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (NestJS).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

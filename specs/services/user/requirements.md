@@ -73,3 +73,14 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 5. Đối với vai trò `system` hoặc `system_admin`, THE USER_Service SHALL chỉ cho phép tự động gán quyền wildcard `*` và bypass kiểm tra khi và chỉ khi `tenant_id` trích xuất trùng khớp với Master Tenant ID (`solavie-system-master`). Nếu vai trò `system`/`system_admin` xuất hiện dưới vai trò thuộc Organization thông thường, USER_Service SHALL chặn và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
 6. THE USER_Service SHALL chặn và từ chối mọi yêu cầu tạo mới hoặc gán các vai trò thuộc danh sách từ khóa bảo lưu (`system`, `system_admin`, `super_admin`, `root`) cho người dùng thuộc tenant thông thường.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE User Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE User Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:user` khi startup.
+3. THE User Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:user:node:{ip}:{port}` với TTL là 15 giây.
+4. THE User Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:user` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

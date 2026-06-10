@@ -155,3 +155,12 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] Triển khai middleware xác thực JWT và so khớp chéo `tenant_id` từ arguments của tool call với JWT payload/header.
 - [ ] Thực thi ghi nhận Prometheus metrics: `kb_mcp_tool_executions_total` và `kb_mcp_security_violations_total`.
 - [ ] Viết unit tests kiểm chứng bảo mật chéo tenant và chặn truy cập trái phép.
+
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (FastAPI).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

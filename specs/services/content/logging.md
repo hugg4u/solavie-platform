@@ -57,3 +57,43 @@ content_security_permission_denied_total: Counter [tenant_id, required_permissio
 | GenerationFailing | generated{status=error} > 3 in 10m | warning |
 | LowQualityRate | quality_score < 0.7 for > 50% in 1h | info |
 | ApprovalBacklog | pending approvals > 20 | info |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "content",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 8002,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:content"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "content",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 8002,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:content"
+  }
+}
+```

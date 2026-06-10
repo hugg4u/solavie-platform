@@ -494,3 +494,21 @@ Incoming POST /api/v1/kb/mcp/messages (JSON-RPC)
 │      chứa nội dung văn bản (text)        │
 └──────────────────────────────────────────┘
 ```
+
+---
+
+## Business Logic — Service Self-Registration
+
+### 1. Logic Đăng ký (Startup Hook)
+* BƯỚC 1: Gọi hàm `_get_internal_ip()` sử dụng socket UDP giả lập kết nối tới `8.8.8.8:80` để lấy IP nội bộ của container.
+* BƯỚC 2: Định nghĩa chuỗi node dạng `{ip}:{port}`.
+* BƯỚC 3: Thực hiện pipeline ghi vào Redis:
+  * `SADD registry:service:knowledge-base "{ip}:{port}"`
+  * `SETEX registry:service:knowledge-base:node:{ip}:{port} 15 "alive"`
+* BƯỚC 4: Bắt đầu chạy vòng lặp heartbeat (mỗi 5 giây) để gửi lại gói tin `SETEX` và `SADD` để làm mới TTL.
+
+### 2. Logic Hủy đăng ký (Shutdown Hook)
+* BƯỚC 1: Dừng vòng lặp heartbeat.
+* BƯỚC 2: Thực hiện pipeline dọn dẹp Redis:
+  * `SREM registry:service:knowledge-base "{ip}:{port}"`
+  * `DEL registry:service:knowledge-base:node:{ip}:{port}"`

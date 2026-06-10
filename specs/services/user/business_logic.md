@@ -59,3 +59,21 @@ User Service thực thi mô hình an toàn thông tin Zero-Trust thông qua Nest
 *   **Quy tắc kiểm tra Master Realm:** Đối với các request mang vai trò đặc quyền `system` hoặc `system_admin`, hệ thống chỉ cho phép gán quyền wildcard `*` và bỏ qua kiểm tra khi và chỉ khi `tenant_id` của request trùng khớp hoàn toàn với Master Tenant ID (`solavie-system-master`).
 *   Nếu vai trò bảo lưu này xuất hiện trong token thuộc Organization của một Tenant thông thường, User Service sẽ lập tức chặn request và trả về lỗi `403 Forbidden` để ngăn chặn hacker tự gán quyền admin hệ thống.
 *   Đồng thời, hệ thống từ chối mọi yêu cầu tạo mới hoặc gán các vai trò tùy chỉnh trùng với danh sách từ khóa bảo lưu cho người dùng thông thường của tenant.
+
+---
+
+## Business Logic — Service Self-Registration
+
+### 1. Logic Đăng ký (Startup Hook)
+* BƯỚC 1: Gọi hàm `_get_internal_ip()` sử dụng socket UDP giả lập kết nối tới `8.8.8.8:80` để lấy IP nội bộ của container.
+* BƯỚC 2: Định nghĩa chuỗi node dạng `{ip}:{port}`.
+* BƯỚC 3: Thực hiện pipeline ghi vào Redis:
+  * `SADD registry:service:user "{ip}:{port}"`
+  * `SETEX registry:service:user:node:{ip}:{port} 15 "alive"`
+* BƯỚC 4: Bắt đầu chạy vòng lặp heartbeat (mỗi 5 giây) để gửi lại gói tin `SETEX` và `SADD` để làm mới TTL.
+
+### 2. Logic Hủy đăng ký (Shutdown Hook)
+* BƯỚC 1: Dừng vòng lặp heartbeat.
+* BƯỚC 2: Thực hiện pipeline dọn dẹp Redis:
+  * `SREM registry:service:user "{ip}:{port}"`
+  * `DEL registry:service:user:node:{ip}:{port}"`

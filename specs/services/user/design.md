@@ -301,3 +301,24 @@ Do NestJS chạy trên kiến trúc đơn luồng (Event Loop) với các reques
      },
    });
    ```
+
+---
+
+## Service Discovery Integration Design
+
+Dịch vụ User tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính để hỗ trợ phát hiện dịch vụ động:
+
+### 1. Kiến trúc Client
+* **Cơ chế:**
+  * **Startup Event:** Khi tiến trình của dịch vụ khởi động, client thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:user`.
+  * **Heartbeat Thread/Task:** Chạy định kỳ mỗi 5 giây để thực hiện:
+    * Ghi đè khóa sự sống: `SETEX registry:service:user:node:{ip}:{port} 15 "alive"`.
+    * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:user {ip}:{port}`.
+  * **Shutdown Event:** Khi nhận tín hiệu tắt tiến trình (`SIGTERM`/`SIGINT`), client thực hiện dọn dẹp:
+    * Xóa IP khỏi Set: `SREM registry:service:user {ip}:{port}`.
+    * Xóa khóa sống: `DEL registry:service:user:node:{ip}:{port}`.
+
+### 2. Tích hợp theo Tech Stack
+* **NestJS (Node.js):** Sử dụng các lifecycle hooks `OnModuleInit` và `OnApplicationShutdown` kết hợp thư viện `ioredis` và `setInterval` cho heartbeat.
+* **FastAPI (Python):** Sử dụng lifespan event handlers của FastAPI kết hợp `asyncio.create_task` và `redis-py`.
+* **Spring Boot (Java):** Sử dụng annotation `@PostConstruct` và `@PreDestroy` kết hợp `ScheduledExecutorService` và `Jedis`/`Lettuce`.

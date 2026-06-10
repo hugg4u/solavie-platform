@@ -102,3 +102,11 @@ This document tracks the implementation checklist for **SCHEDULER Service** base
 - [ ] Tích hợp cơ chế bảo mật tiêm `tenant_id` từ request header trực tiếp vào các Quartz Job và DB models.
 - [ ] Viết các test case tự động để xác nhận cô lập tenant khi đặt lịch.
 
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (Spring Boot).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

@@ -91,3 +91,15 @@ Dịch vụ xử lý ảnh và video bất đồng bộ cho Solavie Marketing Pl
 - **Authentication & Authorization:** APIs của Media Processor Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `media-processor`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Media Processor Service.
 - **Tenant Isolation:** Dữ liệu Media Processor **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Media Processor Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Media Processor Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:media-processor` khi startup.
+3. THE Media Processor Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:media-processor:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Media Processor Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:media-processor` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

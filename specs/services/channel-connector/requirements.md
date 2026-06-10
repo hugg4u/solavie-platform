@@ -75,3 +75,15 @@ Dịch vụ kết nối các kênh Facebook, Zalo, TikTok — nhận/gửi tin n
 - **Authentication & Authorization:** APIs của Channel Connector Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `channel-connector`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Channel Connector Service.
 - **Tenant Isolation:** Dữ liệu Channel Connector **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
+
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Channel Connector Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Channel Connector Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:channel-connector` khi startup.
+3. THE Channel Connector Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:channel-connector:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Channel Connector Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:channel-connector` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
