@@ -35,13 +35,15 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 - [ ] AC 2.4: Trả về HTTP 422 kèm danh sách chi tiết các lỗi validation nếu phát hiện giá trị không hợp lệ.
 - [ ] AC 2.5: Ràng buộc kiểu Boolean: Kiểm tra strict true/false, không chấp nhận chuỗi `"true"`/`"false"` hoặc số `1`/`0`.
 
-### Task 3: Hot Reload qua Redis Pub/Sub
+### Task 3: Hot Reload qua Redis Pub/Sub & Kafka
 > *User Story: Là một Tenant Admin, tôi muốn thay đổi cấu hình có hiệu lực ngay lập tức trên toàn hệ thống.*
 - [ ] AC 3.1: Đồng bộ hóa ghi dữ liệu: Trong cùng một transaction nghiệp vụ, thực hiện ghi giá trị mới vào Redis Cache và gọi Redis client `PUBLISH` lên kênh `config.updates`.
 - [ ] AC 3.2: Đảm bảo thời gian lan truyền cấu hình xuống downstream memory của các service khác trong vòng < 5 giây.
 - [ ] AC 3.3: Định nghĩa cấu trúc payload của event `config.updates` gồm: `tenant_id`, `category`, `updated_fields`, `updated_at`.
 - [ ] AC 3.4: Xử lý lỗi Redis Cache: Retry tối đa 3 lần với backoff 1s; nếu lỗi tiếp diễn, ghi nhận log lỗi hệ thống và trả về HTTP 207 (Multi-Status).
 - [ ] AC 3.5: Xử lý lỗi Pub/Sub: Retry tối đa 3 lần; nếu lỗi, ghi nhận hệ thống nhưng vẫn trả về HTTP 200 (vì DB đã lưu thành công).
+- [ ] AC 3.6: Đóng vai trò là Kafka Producer phát sự kiện cấu hình bảo mật hoặc vai trò lên Kafka topic `config.updates` khi có thay đổi liên quan đến xác thực/phân quyền (Luồng 3).
+- [ ] AC 3.7: Xử lý lỗi phát Kafka: thực hiện retry tối đa 3 lần với exponential backoff và chuyển hướng tin nhắn lỗi sang DLQ nếu thất bại hoàn toàn để tránh mất mát dữ liệu cấu hình bảo mật.
 
 ### Task 4: gRPC Config Reader
 > *User Story: Là một microservice nội bộ, tôi muốn truy vấn cấu hình nhanh qua gRPC khi Redis cache miss.*

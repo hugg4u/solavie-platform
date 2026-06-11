@@ -339,24 +339,27 @@ Chi tiết gọi Keycloak Admin API để đồng bộ:
 Để đảm bảo thông tin nghiệp vụ tại **User Service** luôn đồng bộ với trạng thái danh tính tại Keycloak, hệ thống cấu hình **Keycloak Event Listener (HTTP Webhook / Redis Event Publisher)** để tự động đẩy sự kiện khi có thay đổi liên quan đến User:
 
 ### 🔄 Quy trình đồng bộ:
-1. Khi xảy ra các sự kiện User nhạy cảm trên Keycloak, một Custom Event Listener SPI sẽ bắn sự kiện sang Redis channel `auth.user.events` (hoặc Kafka topic `auth.user.events`).
-2. **User Service** lắng nghe channel/topic này để cập nhật trạng thái tương ứng trong cơ sở dữ liệu `solavie_user_db`.
+1. Khi xảy ra các sự kiện User nhạy cảm trên Keycloak (ví dụ: VERIFY_EMAIL, UPDATE_EMAIL, DISABLE_USER, DELETE_USER), Custom Event Listener SPI trên Keycloak sẽ gửi HTTP webhook về cho **Auth Sync Worker**.
+2. **Auth Sync Worker** đóng vai trò Kafka Producer, chuyển tiếp và publish sự kiện vào Apache Kafka topic `auth.events.user`.
+3. **User Service** (Consumer) lắng nghe topic này để cập nhật trạng thái tương ứng trong cơ sở dữ liệu `solavie_user_db`.
 
 ```mermaid
 sequenceDiagram
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (auth.user.events)
+    participant Worker as Auth Sync Worker
+    participant Kafka as Kafka (auth.events.user)
     participant US as User Service (Backend)
 
     KC->>KC: Trigger User Event (e.g. VERIFY_EMAIL)
-    KC->>Redis: PUBLISH auth.user.events {event_type, user_id, details}
-    Redis-->>US: Nhận event thời gian thực
+    KC->>Worker: Webhook Event {event_type, user_id, details}
+    Worker->>Kafka: Publish to auth.events.user topic
+    Kafka-->>US: Consume event thời gian thực
     US->>US: Cập nhật bảng users (status='ACTIVE' hoặc 'SUSPENDED')
 ```
 
 ### 📋 Danh sách sự kiện và Hành động đồng bộ:
 
-| Sự kiện trên Keycloak (Event Type) | Payload gửi đi | Hành động tại User Service |
+| Sự kiện trên Keycloak (Event Type) | Payload gửi đi qua Kafka | Hành động tại User Service |
 |:---|:---|:---|
 | **`VERIFY_EMAIL`** / **`REGISTER`** | `{"event": "user.verified", "user_id": "uuid", "email": "..."}` | Cập nhật `status = 'ACTIVE'` |
 | **`UPDATE_EMAIL`** | `{"event": "user.email_updated", "user_id": "uuid", "new_email": "..."}` | Cập nhật email trong hồ sơ |

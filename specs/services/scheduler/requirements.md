@@ -18,8 +18,9 @@ Dịch vụ lên lịch đăng bài và automation flows — calendar management
 #### Acceptance Criteria
 1. THE Scheduler_Service SHALL cho phép schedule post trên 1 hoặc nhiều channels
 2. THE Scheduler_Service SHALL hỗ trợ timezone per-tenant
-3. WHEN đến thời điểm publish, THE Scheduler_Service SHALL trigger publish event qua Kafka
-4. THE Scheduler_Service SHALL hỗ trợ recurring schedules (daily, weekly)
+3. WHEN đến thời điểm publish, THE Scheduler_Service SHALL đóng vai trò Kafka Producer phát sự kiện yêu cầu đăng bài tới Kafka topic `scheduler.post.due` (Luồng 4).
+4. THE Scheduler_Service SHALL đóng vai trò Kafka Consumer lắng nghe các topics `content.published` và `scheduler.post.failed` (Luồng 4) được phát đi từ Content/Publisher Service để cập nhật trạng thái xuất bản bài viết tương ứng vào cơ sở dữ liệu `scheduler_db`.
+5. THE Scheduler_Service SHALL hỗ trợ recurring schedules (daily, weekly) thông qua định cấu hình Quartz Cron triggers.
 
 ### Requirement 2: Calendar View
 

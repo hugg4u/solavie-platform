@@ -129,52 +129,64 @@ public void checkMissedSchedules() {
 // Giảm 80% chi phí query so với quét toàn bộ pending schedules
 ```
 
-### Luồng 2: Retry Logic
+### Luồng 2: Retry Logic & Kafka Consumer (Luồng 4 - MỚI)
 
 ```java
-@KafkaListener(topics = "channel.publish.result")
-public void handlePublishResult(PublishResultEvent event) {
-    Schedule schedule = scheduleRepo.findById(event.getScheduleId());
+@KafkaListener(topics = "content.published")
+public void handlePublishSuccess(PublishSuccessEvent event) {
+    Schedule schedule = scheduleRepo.findById(event.getScheduleId())
+        .orElseThrow(() -> new ScheduleNotFound(event.getScheduleId()));
     
-    if (event.getStatus().equals("success")) {
-        schedule.setStatus("published");
-        schedule.setPublishedAt(Instant.now());
+    schedule.setStatus("published");
+    schedule.setPublishedAt(Instant.now());
+    scheduleRepo.save(schedule);
+    
+    log.info("Schedule {} marked as published successfully via Kafka", event.getScheduleId());
+}
+
+@KafkaListener(topics = "scheduler.post.failed")
+public void handlePublishFailure(PublishFailureEvent event) {
+    Schedule schedule = scheduleRepo.findById(event.getScheduleId())
+        .orElseThrow(() -> new ScheduleNotFound(event.getScheduleId()));
+    
+    schedule.setRetryCount(schedule.getRetryCount() + 1);
+    schedule.setLastError(event.getError());
+    
+    if (schedule.getRetryCount() >= schedule.getMaxRetries()) {
+        // All retries exhausted
+        schedule.setStatus("failed");
         scheduleRepo.save(schedule);
         
-        // Notify content service
-        kafkaTemplate.send("content.published", ...);
-        
+        // Notify user via Notification service queue (Kafka: notification.send)
+        kafkaTemplate.send("notification.send", NotificationRequest.builder()
+            .tenantId(schedule.getTenantId())
+            .userId(schedule.getCreatedBy())
+            .type("EMAIL")
+            .template("post_publish_failed")
+            .parameters(Map.of(
+                "schedule_id", schedule.getId().toString(),
+                "post_id", schedule.getPostId().toString(),
+                "error", event.getError()
+             ))
+            .build());
+            
+        log.error("Publish failed for schedule {} after {} attempts. Notification sent.", 
+            schedule.getId(), schedule.getRetryCount());
     } else {
-        // Failed
-        schedule.setRetryCount(schedule.getRetryCount() + 1);
-        schedule.setLastError(event.getError());
+        // Retry with exponential backoff
+        Duration delay = Duration.ofSeconds(
+            (long) Math.pow(2, schedule.getRetryCount()) * 30 // 30s, 60s, 120s
+        );
+        Instant retryAt = Instant.now().plus(delay);
         
-        if (schedule.getRetryCount() >= schedule.getMaxRetries()) {
-            // All retries exhausted
-            schedule.setStatus("failed");
-            scheduleRepo.save(schedule);
-            
-            // Notify user
-            kafkaTemplate.send("scheduler.post.failed", FailureEvent.builder()
-                .tenantId(schedule.getTenantId())
-                .scheduleId(schedule.getId())
-                .error(event.getError())
-                .retryCount(schedule.getRetryCount())
-                .build());
-        } else {
-            // Retry with exponential backoff
-            Duration delay = Duration.ofSeconds(
-                (long) Math.pow(2, schedule.getRetryCount()) * 30 // 30s, 60s, 120s
-            );
-            Instant retryAt = Instant.now().plus(delay);
-            
-            schedule.setStatus("pending");
-            schedule.setScheduledAt(retryAt);
-            scheduleRepo.save(schedule);
-            
-            // Re-register Quartz job
-            rescheduleQuartzJob(schedule, retryAt);
-        }
+        schedule.setStatus("pending");
+        schedule.setScheduledAt(retryAt);
+        scheduleRepo.save(schedule);
+        
+        // Re-register Quartz job
+        rescheduleQuartzJob(schedule, retryAt);
+        log.warn("Rescheduled failed job {} to retry at {} (Attempt {}/{})", 
+            schedule.getId(), retryAt, schedule.getRetryCount(), schedule.getMaxRetries());
     }
 }
 ```

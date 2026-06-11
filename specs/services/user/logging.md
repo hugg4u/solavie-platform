@@ -78,15 +78,24 @@ process.on('SIGTERM', () => {
 
 ## Trace Spans
 
+### Luồng 1: HTTP API Gateway -> Invite User (Producer)
 ```
-[HTTP/gRPC Request] (root span from API Gateway)
+[HTTP Request] (root span from API Gateway)
 ├── [HmacGuard:verify_signature] — 0.5ms (So sánh timing-safe chữ ký số)
 ├── [AsyncLocalStorage:set_tenant_context] — 0.1ms
 ├── [PermissionsGuard:validate] — 0.2ms
 └── [UserController:inviteUser] — 120ms
     ├── [PrismaClient:users:create] — 15ms (Lưu user shadow với status='PENDING')
     ├── [KeycloakAdminClient:createUser] — 85ms (Gọi HTTP API tạo user trên IDP)
-    └── [NotificationClient:sendInviteEmail] — 12ms (Publish event user.invited lên Redis/Kafka)
+    └── [KafkaProducer:notification.send] — 12ms (Publish event gửi email mời vào Kafka)
+```
+
+### Luồng 2: Kafka Consumer -> Identity Sync (`auth.events.user`)
+```
+[KafkaConsumer:auth.events.user] (root span)
+├── [AsyncLocalStorage:set_tenant_context] — 0.1ms
+└── [UserSyncConsumer:processEvent] — 30ms
+    └── [PrismaClient:users:update] — 12ms (Cập nhật database local status='ACTIVE' / 'SUSPENDED')
 ```
 
 ---
@@ -96,7 +105,7 @@ process.on('SIGTERM', () => {
 Các metrics tùy chỉnh được phơi bày tại endpoint `/metrics` thông qua package `prom-client`:
 
 ```typescript
-import { Counter, Histogram } from 'prom-client';
+import { Counter, Histogram, Gauge } from 'prom-client';
 
 // Thống kê HTTP request
 export const httpRequestsTotal = new Counter({
@@ -119,6 +128,25 @@ export const keycloakSyncOperations = new Counter({
   labelNames: ['direction', 'operation', 'status'], // direction: IN (KC->US), OUT (US->KC); status: success, error
 });
 
+// Thống kê Kafka Events
+export const kafkaProducedEventsTotal = new Counter({
+  name: 'user_service_kafka_produced_events_total',
+  help: 'Total events produced to Kafka in User Service',
+  labelNames: ['topic', 'status'], // topic: token.revoked, notification.send, audit.events
+});
+
+export const kafkaConsumedEventsTotal = new Counter({
+  name: 'user_service_kafka_consumed_events_total',
+  help: 'Total events consumed from Kafka in User Service',
+  labelNames: ['topic', 'status'], // topic: auth.events.user
+});
+
+export const kafkaConsumerLag = new Gauge({
+  name: 'user_service_kafka_consumer_lag',
+  help: 'Kafka consumer lag in User Service',
+  labelNames: ['topic', 'partition'],
+});
+
 // Thống kê Bảo mật & Zero-Trust
 export const securitySignatureFailures = new Counter({
   name: 'user_service_security_signature_failures_total',
@@ -139,7 +167,7 @@ export const securityPermissionDenied = new Counter({
 
 Dịch vụ sử dụng module `@nestjs/terminus` để cung cấp các API giám sát trạng thái:
 * `GET /health` -> Trả về `200 OK` nếu ứng dụng hoạt động bình thường.
-* `GET /ready` -> Trả về trạng thái sẵn sàng sau khi kiểm tra kết nối PostgreSQL và Keycloak Admin API.
+* `GET /ready` -> Trả về trạng thái sẵn sàng sau khi kiểm tra kết nối PostgreSQL, Kafka connection, và Keycloak Admin API.
 * `GET /metrics` -> Xuất các chỉ số Prometheus.
 
 ---
@@ -149,6 +177,8 @@ Dịch vụ sử dụng module `@nestjs/terminus` để cung cấp các API giá
 | Tên Alert | Điều kiện | Mức độ | Hành động khắc phục |
 |-----------|-----------|--------|---------------------|
 | KeycloakSyncFailures | `sum(rate(user_service_keycloak_sync_total{status="error"}[5m])) > 5` | Critical | Kiểm tra log kết nối API Keycloak Admin Client, kiểm tra credentials client |
+| KafkaConsumerLagHigh | `sum(user_service_kafka_consumer_lag{topic="auth.events.user"}) > 100` | Warning | Kiểm tra tốc độ xử lý của User Service consumer hoặc tài nguyên database |
+| KafkaPublishErrors | `sum(rate(user_service_kafka_produced_events_total{status="error"}[5m])) > 2` | Critical | Kiểm tra kết nối tới Kafka cluster, brokers status |
 | HighSignatureMismatch | `sum(rate(user_service_security_signature_failures_total[5m])) > 2` | Critical | Cảnh báo tấn công Header Spoofing hoặc sai cấu hình `GATEWAY_SIGNING_SECRET` giữa Gateway và User Service |
 | DownstreamPermissionDenials | `sum(rate(user_service_security_permission_denied_total[5m])) > 10` | Warning | Kiểm tra phân quyền trên Keycloak/Redis của Tenant hoặc cảnh báo hành vi truy cập trái phép |
 | PostgreSQLConnectionDown | Kết nối tới database `solavie_user_db` bị ngắt quãng > 30s | Critical | Kiểm tra tài nguyên DB, RLS policies, và connection pool |

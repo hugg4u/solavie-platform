@@ -113,35 +113,58 @@ CREATE INDEX idx_schedules_tenant ON schedules(tenant_id, scheduled_at DESC);
 CREATE INDEX idx_auto_tenant ON automation_flows(tenant_id, enabled);
 ```
 
-## Kafka Events
-
-### Consumed: `content.approved`
-→ Auto-create schedule if content has suggested_time
-
-### Published: `scheduler.post.due`
-```json
-{
-  "event_id": "uuid",
-  "tenant_id": "uuid",
-  "schedule_id": "uuid",
-  "post_id": "uuid",
-  "channel_ids": ["uuid"],
-  "action": "publish"
-}
-```
-
-### Published: `scheduler.post.failed`
-```json
-{
-  "event_id": "uuid",
-  "tenant_id": "uuid",
-  "schedule_id": "uuid",
-  "error": "string",
-  "retry_count": 3
-}
-```
-
-## Quartz Job Config
+## Kafka Events (Luồng 4 - MỚI)
+ 
+ ### Consumed Topics
+ 
+ #### 1. Topic: `content.approved`
+ - **Mô tả:** Nhận sự kiện bài viết được phê duyệt từ Content Service để tự động lên lịch nếu có thời gian gợi ý (`suggested_time`).
+ 
+ #### 2. Topic: `content.published`
+ - **Mô tả:** Nhận sự kiện đăng bài thành công từ Content/Publisher Service để cập nhật trạng thái schedule thành `published` trong DB.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "published_at": "ISO-8601 timestamp",
+   "channel_id": "uuid"
+ }
+ ```
+ 
+ #### 3. Topic: `scheduler.post.failed`
+ - **Mô tả:** Nhận sự kiện đăng bài thất bại từ Content/Publisher Service để thực hiện cơ chế retry hoặc thông báo lỗi cho người dùng.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "error": "Error details string",
+   "retry_count": 1
+ }
+ ```
+ 
+ ### Published Topics
+ 
+ #### 1. Topic: `scheduler.post.due`
+ - **Mô tả:** Phát sự kiện yêu cầu đăng bài khi Quartz Scheduler trigger bài viết đến giờ hẹn xuất bản.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "channel_ids": ["uuid"],
+   "action": "publish"
+ }
+ ```
+ 
+ ## Quartz Job Config
 ```java
 // Publish job runs every 30 seconds, checks for due schedules
 @Scheduled(fixedRate = 30000)

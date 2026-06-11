@@ -30,9 +30,12 @@ graph TB
         GRPC_S["gRPC Server"]
         
         subgraph "Modules"
-            CONFIG_MOD["Config Module\n(CRUD + Validation)"]
-            ROLE_MOD["Role & Permission Module\n(Auth Proxy Role Sync)"]
-            HOTRELOAD["Hot Reload Module\n(Redis Pub/Sub)"]
+            CONFIG_MOD["Config Module
+(CRUD + Validation)"]
+            ROLE_MOD["Role & Permission Module
+(Auth Proxy Role Sync)"]
+            HOTRELOAD["Hot Reload Module
+(Redis Pub/Sub & Kafka Producer)"]
             AUDIT["Audit Log Module"]
             DEFAULT["Default Config Module"]
         end
@@ -42,13 +45,17 @@ graph TB
         PG[("PostgreSQL (config_db)")]
         Redis[("Redis Cache & Pub/Sub")]
         Keycloak[("Keycloak IDP")]
+        Kafka[("Kafka Broker")]
     end
 
     subgraph "Consumers & Gateway"
-        Gateway["Kong API Gateway\n(Cache 3 tầng & Verification)"]
+        Gateway["Kong API Gateway
+(Cache 3 tầng & Verification)"]
         AICore["AI Core Service"]
         CRMSvc["CRM Service"]
         US["User Service (Auth Proxy)"]
+        SyncWorker["Auth Sync Worker
+(Kafka Consumer)"]
     end
 
     Dashboard["Dashboard (Admin)"] -->|HTTPS| REST
@@ -64,7 +71,10 @@ graph TB
     CONFIG_MOD --> AUDIT --> PG
     
     HOTRELOAD -->|SET / PUBLISH| Redis
+    HOTRELOAD -->|Publish security updates| Kafka
     Redis -->|Pub/Sub Notification| Gateway & AICore & CRMSvc
+    Kafka -->|Topic: config.updates| SyncWorker
+    SyncWorker -->|Keycloak Org Admin API| Keycloak
 ```
 
 ---
@@ -387,23 +397,41 @@ message GetAllConfigResponse {
 | `config.updates` | Channel | Payload thông báo thay đổi cấu hình/vai trò | N/A (Pub/Sub) |
 | `system.limits.updates` | Channel | Payload thông báo thay đổi hạn mức gói | N/A (Pub/Sub) |
 
+## Kafka Topics & Event Channels (Luồng 3 - MỚI)
+
+| Topic | Phân đoạn (Partitions) | Định dạng Payload | Phím phân đoạn (Partition Key) | Mô tả |
+|---|---|---|---|---|
+| `config.updates` | 3 | JSON | `tenant_id` | Sự kiện cập nhật cấu hình bảo mật hoặc vai trò người dùng (Luồng 3) |
+
 ### Event Payloads:
-- **`config.updates` (cho Category Config):**
+- **`config.updates` (Luồng 3 - Config Category):**
   ```json
   {
+    "event_id": "uuid-v4",
     "tenant_id": "solavie-001",
-    "category": "ai_kb",
-    "updated_fields": ["confidence_threshold", "chatbot_enabled"],
-    "updated_at": "2026-06-07T01:44:23Z"
+    "category": "security_comments_notif",
+    "updated_fields": ["auth_password_min_length", "auth_max_login_attempts"],
+    "payload": {
+      "auth_password_min_length": 8,
+      "auth_max_login_attempts": 5
+    },
+    "timestamp": "2026-06-07T01:44:23Z"
   }
   ```
-- **`config.updates` (cho Roles & Permissions):**
+- **`config.updates` (Luồng 3 - Roles & Permissions):**
   ```json
   {
+    "event_id": "uuid-v4",
     "tenant_id": "solavie-001",
     "category": "roles",
     "role_name": "custom_agent",
-    "updated_at": "2026-06-07T01:44:23Z"
+    "payload": {
+      "name": "custom_agent",
+      "permissions": [
+        { "resource": "chatbot", "action": "read" }
+      ]
+    },
+    "timestamp": "2026-06-07T01:44:23Z"
   }
   ```
 

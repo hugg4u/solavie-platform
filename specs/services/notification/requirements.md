@@ -32,6 +32,7 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 1. IF primary channel thất bại, THEN fallback sang channel khác
 2. IF tất cả channels thất bại, THEN queue cho retry sau
 3. THE Notification_Service SHALL log delivery status per notification
+4. THE Notification_Service SHALL đóng vai trò Kafka Consumer tiêu thụ (consume) các yêu cầu gửi thông báo từ Kafka topic `notification.send` (Luồng 5) để xử lý bất đồng bộ và đảm bảo không mất mát tin nhắn kể cả khi nhà mạng hoặc mail server đối tác bị sập.
 
 ### Requirement 4: MCP Server Integration
 

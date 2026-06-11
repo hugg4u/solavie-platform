@@ -35,6 +35,12 @@
 // Zero-Trust Security Metrics
 scheduler_security_signature_failures_total: Counter [tenant_id, client_ip]
 scheduler_security_permission_denied_total: Counter [tenant_id, required_permission]
+
+// Kafka Integration Metrics (MỚI)
+scheduler_kafka_publish_total: Counter [topic, status] // status: success, error
+scheduler_kafka_consume_total: Counter [topic, status] // status: success, error
+scheduler_kafka_consumer_lag: Gauge [topic, partition]
+
 ```java
 // Exposed at /actuator/prometheus
 schedules_created_total: Counter [tenant_id]

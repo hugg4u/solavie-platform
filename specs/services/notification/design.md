@@ -71,14 +71,32 @@ CREATE INDEX idx_notif_user ON notifications(user_id, read_at NULLS FIRST, creat
 CREATE INDEX idx_notif_tenant ON notifications(tenant_id, created_at DESC);
 ```
 
-## Kafka Events Consumed
-
-| Topic | Action |
-|-------|--------|
-| `messaging.handoff.requested` | Notify assigned agent (priority: critical) |
-| `crm.lead.score.changed` | Notify assigned agent (priority: high) |
-| `scheduler.post.failed` | Notify post creator (priority: high) |
-| `comment.escalation` | Notify assigned agent (priority: high) |
+## Kafka Events Consumed (Luồng 5 - MỚI)
+ 
+ | Topic | Action |
+ |-------|--------|
+ | `messaging.handoff.requested` | Notify assigned agent (priority: critical) |
+ | `crm.lead.score.changed` | Notify assigned agent (priority: high) |
+ | `scheduler.post.failed` | Notify post creator (priority: high) |
+ | `comment.escalation` | Notify assigned agent (priority: high) |
+ | `notification.send` | Gửi thông báo bất đồng bộ qua Email/SMS/Push cho người dùng |
+ 
+ ### Payload của `notification.send` (Luồng 5):
+ ```json
+ {
+   "event_id": "uuid-v4",
+   "tenant_id": "uuid-v4",
+   "user_id": "uuid-v4",
+   "type": "EMAIL", // EMAIL | SMS | PUSH
+   "template": "post_publish_failed",
+   "parameters": {
+     "schedule_id": "uuid-v4",
+     "post_id": "uuid-v4",
+     "error": "Reason details"
+   },
+   "timestamp": "ISO-8601 timestamp"
+ }
+ ```
 
 ## Delivery SLA
 - Critical (handoff): < 3 seconds

@@ -416,8 +416,8 @@ Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện 
     - Inject `X-User-Permissions` (chuỗi CSV các quyền đã sắp xếp).
     - Inject `X-Permissions-Signature` (signature).
 6.  **Bước 6: Token & User Revocation Verification**:
-    - Check JTI Blacklist: Gửi lệnh `GET blacklist:jti:{jti}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (Token has been revoked).
-    - Check User Suspension: Gửi lệnh `GET blacklist:user:{user_id}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (User has been suspended).
+    - Check JTI Blacklist: Gửi lệnh `GET blacklist:jti:{jti}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (Token has been revoked). Dữ liệu blacklist này được cập nhật bất đồng bộ bởi Auth Service (Sync Worker) khi consume sự kiện từ Kafka topic `token.revoked` (Luồng 2).
+    - Check User Suspension: Gửi lệnh `GET blacklist:user:{user_id}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (User has been suspended). Dữ liệu này được cập nhật bất đồng bộ từ Kafka topic `auth.events.user` (Luồng 1) bởi Sync Worker.
 
 ## Data Models
 

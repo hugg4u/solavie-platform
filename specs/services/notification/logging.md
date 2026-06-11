@@ -70,6 +70,7 @@ GET /metrics  → Prometheus format
 | HandoffSLABreach | sla_breached{priority=critical} > 0 | critical |
 | SlackAPIDown | slack delivery errors > 5 in 2m | warning |
 | EmailBounceHigh | email bounces > 5% | warning |
+| KafkaConsumerOffline | rate(notifications_kafka_consumed_total[5m]) == 0 | critical (Kafka notification consumer offline) |
 
 ---
 

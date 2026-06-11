@@ -196,6 +196,17 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 
 ---
 
+## Apache Kafka Integration (MỚI)
+
+### Task: Tích hợp Apache Kafka vào Sync Worker
+- [ ] Triển khai Kafka client (sử dụng `confluent-kafka` hoặc `kafka-python`) trong Auth Sync Worker.
+- [ ] Cấu hình Auth Sync Worker làm Kafka Consumer để consume sự kiện thay đổi cấu hình từ topic `config.updates` thuộc consumer-group `auth-sync-config-group`.
+- [ ] Cấu hình Auth Sync Worker làm Kafka Producer để publish các sự kiện danh tính từ Keycloak vào topic `auth.events.user`.
+- [ ] Cấu hình cơ chế manual offset commit cho Kafka consumer để bảo đảm không mất sự kiện khi Keycloak Admin API bị lỗi.
+- [ ] Triển khai các integration test cases để kiểm thử luồng Kafka consumer/producer trong Sync Worker.
+
+---
+
 ## Done When
 
 - [x] All Acceptance Criteria for Requirements are implemented and verified.
@@ -207,4 +218,4 @@ This document tracks the implementation checklist for **AUTH Service** based on 
 - [x] **[MIGRATION]** NFR đạt: 10,000+ tenant, 1000 concurrent login p95 < 500ms.
 
 ---
-*Last updated: 2026-06-08 — Migration plan added (see migration.md)*
+*Last updated: 2026-06-10 — Kafka integration checklist added*

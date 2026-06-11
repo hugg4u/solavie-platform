@@ -58,7 +58,7 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 5. THE Auth_Service SHALL áp dụng chính sách mật khẩu (độ dài tối thiểu `auth_password_min_length` từ 6-30 ký tự, độ phức tạp) được đồng bộ từ cấu hình bảo mật của Tenant Config Service
 6. THE Auth_Service (Keycloak) SHALL chỉ quản lý các thông tin xác thực cốt lõi (UUID, Email, Password, Active Status), trong khi các thông tin nghiệp vụ phong phú của User (SĐT, avatar, phòng ban) SHALL được lưu trữ và quản lý độc lập tại **User Service**, liên kết 1:1 qua User UUID (`sub` claim).
 7. THE Auth_Service (Keycloak) SHALL cung cấp các REST API quản trị (Keycloak Admin APIs) để cho phép **User Service** cập nhật thông tin (khóa/mở khóa tài khoản, cập nhật email/họ tên) từ Dashboard ngược lên.
-8. THE Auth_Service (Keycloak) SHALL được cấu hình Custom Event Listener SPI để tự động xuất bản (publish) sự kiện thay đổi trạng thái người dùng (Verify Email, Lock Account, Update Profile) sang Redis channel/Kafka topic `auth.user.events` phục vụ đồng bộ dữ liệu xuống Backend.
+8. THE Auth_Service (Keycloak) SHALL được cấu hình Custom Event Listener SPI để tự động gửi các sự kiện thay đổi trạng thái người dùng (Verify Email, Lock Account, Update Profile) về Auth Sync Worker. Auth Sync Worker đóng vai trò Kafka Producer, đẩy các sự kiện này vào Apache Kafka topic `auth.events.user` để đồng bộ dữ liệu xuống User Service.
 
 ### Requirement 5: Token Security
 
@@ -80,8 +80,8 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 1. THE Auth_Service SHALL bắt buộc PKCE (Proof Key for Code Exchange) sử dụng mã hóa `S256` đối với client public (`dashboard`) để chống lại Authorization Code Interception.
 2. THE Auth_Service SHALL áp dụng cơ chế Refresh Token Rotation (RTR) - vô hiệu hóa Refresh Token cũ ngay sau khi được sử dụng (`revokeRefreshToken = true`, `refreshTokenMaxReuse = 0`) để chống replay attack.
 3. THE Auth_Service SHALL cấu hình chính sách OTP mặc định (TOTP, HmacSHA1, 6 digits, 30s period) cho shared Realm 'solavie'.
-4. THE API Gateway (Kong) SHALL thực hiện thu hồi token tức thời thông qua JTI Blacklisting bằng cách trích xuất claim `jti` từ Access Token và truy vấn Redis cache (`blacklist:jti:{jti}`) cho mọi API request.
-5. THE Auth_Sync_Worker SHALL đồng bộ cấu hình bảo mật thông qua hàng đợi tin cậy cao Redis Streams (`config.updates.stream`) sử dụng Consumer Groups để bảo đảm không mất mát cấu hình khi worker gặp sự cố mạng hoặc khởi động lại.
+4. THE API Gateway (Kong) SHALL thực hiện thu hồi token tức thời thông qua JTI Blacklisting bằng cách trích xuất claim `jti` từ Access Token và truy vấn Redis blacklist cache (`blacklist:jti:{jti}`) được cập nhật bởi Auth Sync Worker.
+5. THE Auth_Sync_Worker SHALL đồng bộ cấu hình bảo mật thông qua hàng đợi tin cậy cao Apache Kafka topic `config.updates` sử dụng Consumer Groups để bảo đảm không mất mát cấu hình khi worker gặp sự cố mạng hoặc khởi động lại.
 
 ### Requirement 7: Client Scopes (Least Privilege)
 

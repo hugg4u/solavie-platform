@@ -162,13 +162,13 @@ sequenceDiagram
     participant Admin as Tenant Admin (Dashboard)
     participant US as User Service (Backend)
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (token.revoked)
+    participant Kafka as Kafka (token.revoked)
 
     Admin->>US: POST /api/v1/users/{id}/suspend (hoặc /unsuspend)
     US->>KC: 1. Đặt trạng thái: PUT /admin/realms/solavie/users/{id} {"enabled": false}
     US->>KC: 2. Hủy Sessions: POST /admin/realms/solavie/users/{id}/logout
     KC-->>US: Pt xác nhận thành công
-    US->>Redis: 3. PUBLISH token.revoked {"jti": "...", "exp": ...}
+    US->>Kafka: 3. Publish event to token.revoked {"jti": "...", "exp": ...}
     US->>US: 4. Cập nhật status='SUSPENDED' ở database Backend
     US-->>Admin: Trả về trạng thái đã cập nhật thành công
 ```
@@ -177,12 +177,14 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (auth.user.events)
+    participant Worker as Auth Sync Worker
+    participant Kafka as Kafka (auth.events.user)
     participant US as User Service (Backend)
 
     KC->>KC: Trigger event: user.disabled (hoặc user.enabled)
-    KC->>Redis: PUBLISH auth.user.events {"event": "user.disabled", "user_id": "uuid"}
-    Redis-->>US: Nhận event
+    KC->>Worker: Webhook Event "user.disabled"
+    Worker->>Kafka: Publish event to auth.events.user topic
+    Kafka-->>US: Consume event
     US->>US: Cập nhật status='SUSPENDED' (hoặc 'ACTIVE') ở database Backend
 ```
 

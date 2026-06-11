@@ -74,6 +74,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 3. THE Tenant_Config SHALL publish event `config.updates` với payload: tenant_id, category, updated_fields (danh sách tên field đã thay đổi), updated_at
 4. IF ghi Redis cache thất bại sau khi lưu DB thành công, THEN THE Tenant_Config SHALL retry ghi Redis tối đa 3 lần với backoff 1s; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi và trả về HTTP 207 (Multi-Status) chỉ rõ DB đã lưu nhưng cache chưa đồng bộ
 5. IF publish Redis Pub/Sub thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi nhưng vẫn trả về HTTP 200 vì DB đã lưu thành công; services sẽ nhận config mới qua cache miss fallback
+6. WHEN Tenant Admin cập nhật các cấu hình bảo mật liên quan đến xác thực và phân quyền (bao gồm `auth_password_min_length`, `auth_max_login_attempts`, hoặc Custom Roles & Permissions), THE Tenant_Config SHALL đóng vai trò là Kafka Producer phát sự kiện (event) cấu hình bảo mật thay đổi tới Kafka topic `config.updates` (Luồng 3). Sự kiện này bắt buộc phải được gửi thành công (At-least-once delivery) với cơ chế retry để đảm bảo Auth Service (Sync Worker) tiêu thụ và cập nhật đồng bộ lên Keycloak Organization. Payload sự kiện bao gồm: `tenant_id`, `category` ("security_comments_notif" hoặc "roles"), `updated_fields`, `payload` (chứa chi tiết các giá trị cấu hình bảo mật mới hoặc vai trò được cập nhật) và `timestamp`.
 
 ### Requirement 4: gRPC Config Reader
 

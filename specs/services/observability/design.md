@@ -346,6 +346,32 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
 
 
+## Audit Logging System & Kafka Consumer (Luồng 6 - MỚI)
+
+Để lưu trữ nhật ký kiểm toán (Audit Logs) tập trung từ tất cả 18 microservices nghiệp vụ:
+1. **Lắng nghe sự kiện:** Observability Service (hoặc Audit Log Consumer) đăng ký tiêu thụ (consume) Kafka topic `audit.events` (Luồng 6).
+2. **Cơ sở dữ liệu lưu trữ:** Sử dụng **ClickHouse** làm database chính cho Audit Logs để phục vụ ghi tốc độ cao và nén dữ liệu cực tốt.
+3. **Cấu trúc bảng ClickHouse:**
+```sql
+CREATE TABLE audit_logs (
+    event_id UUID,
+    tenant_id UUID,
+    user_id UUID,
+    action LowCardinality(String), -- e.g., 'user.create', 'config.update'
+    resource LowCardinality(String), -- e.g., 'user', 'tenant_config'
+    status LowCardinality(String), -- 'success', 'failed'
+    details String, -- JSON metadata
+    client_ip String,
+    user_agent String,
+    timestamp DateTime64(3)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (tenant_id, timestamp, event_id);
+```
+4. **Cơ chế Idempotent & Commit:** Consumer sử dụng `enable.auto.commit = false` và so khớp khóa `event_id` (UUID) trong ClickHouse hoặc Redis cache tạm thời để loại bỏ các tin nhắn trùng lặp trước khi thực hiện batch-write vào ClickHouse (việc batch-write định kỳ mỗi 5-10 giây giúp tối ưu hóa hiệu năng ClickHouse).
+
+---
+
 ## Zero-Trust HMAC Guard & Permission Manifest
 
 ### 1. Permission Manifest API

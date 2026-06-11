@@ -148,3 +148,36 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 1.  **Về kiến trúc**: Hệ thống 18 dịch vụ hiện tại rất đầy đủ và bảo mật tốt, sẵn sàng cho mô hình SaaS sau này.
 2.  **Khuyến nghị về hạ tầng (Phase 1)**: Dựa trên quyết định giữ nguyên các microservices độc lập nhằm triệt tiêu rủi ro quản lý modular monolith chéo, Solavie **PHẢI** chuẩn bị hạ tầng máy chủ tối thiểu **16 GB RAM (Khuyến nghị 32 GB RAM)**, **8 vCPUs** và **150 GB NVMe SSD** để vận hành ổn định 24 containers ở môi trường thực tế (Tham khảo cấu hình chi tiết tại Mục 3).
 3.  **Khuyến nghị tính năng ưu tiên**: Bổ sung đặc tả các trường dữ liệu khảo sát (Site Survey) vào CRM và thiết lập API tích hợp với HelioScope/OpenSolar để tự động hóa khâu tạo Proposal gửi khách hàng ngay trong giai đoạn tiếp theo.
+
+---
+
+## 6. PHÂN TÍCH TÍNH CHỊU LỖI VÀ AN TOÀN DỮ LIỆU CỦA 6 LUỒNG KAFKA
+
+Việc chuyển đổi và thiết lập cơ chế Event-Driven qua Apache Kafka mang lại các thuộc tính chịu lỗi và an toàn dữ liệu vượt trội cho hệ thống Solavie, giải quyết triệt để các rủi ro của cơ chế Redis Pub/Sub thô trước đây:
+
+### 6.1. Chi tiết phân tích từng luồng
+
+1. **Luồng 1: Identity Sync (`auth.events.user`)**
+   * **Rủi ro trước đây:** Sử dụng Redis Pub/Sub thô. Nếu `User Service` bị crash hoặc offline trong lúc Keycloak cập nhật người dùng, sự kiện đồng bộ sẽ bị mất vĩnh viễn, dẫn đến lệch trạng thái tài khoản.
+   * **Giải pháp Kafka:** Kafka lưu trữ log sự kiện bền vững trên đĩa với cấu hình retention 7 ngày. `User Service` sử dụng Consumer Group cố định (`user-identity-sync-group`). Khi `User Service` offline và online trở lại, nó sẽ tự động đọc tiếp từ offset được commit gần nhất, đảm bảo tính nhất quán cuối cùng (Eventual Consistency) mà không mất mát bất kỳ sự kiện nào.
+
+2. **Luồng 2: Token Revocation (`token.revoked`)**
+   * **Tính chịu lỗi:** Sự kiện thu hồi token được `User Service` publish chắc chắn vào Kafka. `Auth Sync Worker` consume và cập nhật vào Redis Blacklist. Nếu Redis bị sập và khởi động lại, `Auth Sync Worker` có thể replay các event trong khoảng thời gian hiệu lực của token từ Kafka để tái thiết lập Blacklist trên Redis, đảm bảo Kong Gateway luôn check đúng.
+
+3. **Luồng 3: Config Sync (`config.updates`)**
+   * **An toàn cấu hình:** Các thay đổi về cấu hình Tenant được gửi an toàn qua Kafka. Nếu Keycloak Admin API bị timeout hoặc rate limit, `Auth Sync Worker` sẽ retry consume với cơ chế Exponential Backoff thay vì drop sự kiện, đảm bảo cấu hình bảo mật cuối cùng luôn được Keycloak cập nhật chính xác.
+
+4. **Luồng 4: Scheduler Queue (`scheduler.post.due`, `content.published`, `scheduler.post.failed`)**
+   * **Bảo đảm đăng tải:** Giảm tải cho Scheduler Service bằng cách đẩy tin đăng bài vào Kafka. Nếu `Content Service` bị quá tải hoặc API mạng xã hội phản hồi chậm, hàng đợi Kafka đóng vai trò là bộ đệm (Backpressure buffer), điều tiết tốc độ consume của consumer mà không làm nghẽn Scheduler.
+
+5. **Luồng 5: Notification Queue (`notification.send`)**
+   * **Không bỏ sót thông báo:** Việc gửi OTP hoặc email khẩn cấp cho khách hàng không được phép thất bại âm thầm. Kafka topic lưu giữ tin nhắn giúp `Notification Service` có thể retry gửi lại nhiều lần thông qua các nhà cung cấp khác nhau nếu nhà cung cấp chính (ví dụ: Twilio) bị gián đoạn.
+
+6. **Luồng 6: Audit Logs (`audit.events`)**
+   * **Độ bền dữ liệu tối đa:** Log bảo mật được ghi nhận bất đồng bộ qua Kafka, không làm ảnh hưởng đến hiệu năng của business transactions. Ngay cả khi cụm ClickHouse/Elasticsearch lưu trữ log bị sập, Kafka broker vẫn lưu trữ logs an toàn để ghi nhận lại sau khi hệ thống lưu trữ phục hồi.
+
+### 6.2. Các cơ chế đảm bảo an toàn & vận hành cụ thể
+* **Manual Offset Commit:** Các consumer được cấu hình `enable.auto.commit = false`. Offset chỉ được commit sau khi consumer đã ghi nhận dữ liệu thành công vào database hoặc dịch vụ đích. Nếu có lỗi xảy ra trong quá trình xử lý, message sẽ không bị mất và sẽ được xử lý lại (At-least-once delivery).
+* **Idempotency Key:** Mỗi message Kafka đều đi kèm một UUID duy nhất trong payload làm key. Consumer sẽ thực hiện kiểm tra trùng lặp (Idempotent check) trước khi xử lý để tránh các lỗi ghi nhận trùng lặp dữ liệu trong trường hợp Kafka gửi lại message do chập chờn mạng.
+* **Dead Letter Queue (DLQ):** Khi một thông điệp bị lỗi định dạng hoặc không thể xử lý sau nhiều lần retry, nó sẽ được định tuyến sang topic DLQ tương ứng (ví dụ: `auth.events.user.dlq`) để quản trị viên kiểm tra thủ công, tránh làm tắc nghẽn (head-of-line blocking) toàn bộ partition.
+

@@ -159,6 +159,7 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 ### Task 8: Revocation & Suspension Blacklists (MỚI)
 - [x] Triển khai kiểm tra JTI Blacklist lưu trữ trong Redis key `blacklist:jti:{jti}` trong plugin `dynamic-policy` để từ chối các token đã bị thu hồi tức thời.
 - [x] Triển khai kiểm tra User Blacklist trong Redis key `blacklist:user:{user_id}` để từ chối các người dùng đang bị đình chỉ (Suspended).
+- [x] Xác thực tích hợp liên thông: Đảm bảo dữ liệu JTI/User Blacklist trong Redis được cập nhật bất đồng bộ thông qua các sự kiện Kafka từ topics `token.revoked` và `auth.events.user` qua Sync Worker.
 
 ---
 *Last updated: 2026-06-10 — All phases completed, including Keycloak Organizations integration, L1/L2 caching, Circuit Breaker, and Infrastructure-Agnostic Service Discovery.*

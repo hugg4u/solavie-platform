@@ -32,11 +32,12 @@ This document tracks the implementation checklist for **NOTIFICATION Service** b
 - [ ] AC 2.2: THE Notification_Service SHALL respect quiet hours (không gửi ngoài giờ làm việc)
 - [ ] AC 2.3: THE Notification_Service SHALL hỗ trợ priority levels: critical (always), high, normal, low
 
-### Task 3: 3: Delivery Guarantee
+### Task 3: 3: Delivery Guarantee & Kafka Integration
 **Acceptance Criteria Implementation:**
 - [ ] AC 3.1: IF primary channel thất bại, THEN fallback sang channel khác
 - [ ] AC 3.2: IF tất cả channels thất bại, THEN queue cho retry sau
 - [ ] AC 3.3: THE Notification_Service SHALL log delivery status per notification
+- [ ] AC 3.4: THE Notification_Service SHALL đóng vai trò Kafka Consumer tiêu thụ (consume) các yêu cầu gửi thông báo từ Kafka topic `notification.send` (Luồng 5) để xử lý bất đồng bộ.
 
 ### Task 4: Implement Business Logic Rules
 **Business Validations:**

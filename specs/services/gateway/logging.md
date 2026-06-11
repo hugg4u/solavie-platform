@@ -78,6 +78,14 @@ gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache
 gateway_security_rbac_fetch_failures_total: Counter [tenant_id, source] // source: redis, fallback_tcs
 
 
+## Correlation with Kafka Event Logs (Luồng 2 - MỚI)
+Khi Gateway từ chối request do token nằm trong JTI Blacklist hoặc tài khoản bị đình chỉ (Suspended), log sự kiện của Gateway phải chứa đầy đủ thông tin định danh:
+- `jti`: ID duy nhất của JWT token bị thu hồi.
+- `user_id`: ID của người dùng.
+- `reason`: "token_blacklisted" hoặc "user_suspended".
+
+Thông tin này được dùng để đối chiếu với timestamp sự kiện phát ra trên Kafka topic `token.revoked` và `auth.events.user` nhằm đo lường độ trễ đồng bộ cuối-cuối (End-to-End Revocation Latency).
+
 ## Giai đoạn 4 — Logging & Metrics cho Cache & Circuit Breaker (MỚI)
 
 ### 1. Log sự kiện thay đổi trạng thái Circuit Breaker

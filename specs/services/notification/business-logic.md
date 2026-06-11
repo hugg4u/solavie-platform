@@ -245,6 +245,46 @@ class SLATracker {
 
 ---
 
+### Luồng 5: Tiêu thụ sự kiện từ hàng đợi gửi thông báo (Luồng 5 - MỚI)
+
+Để hỗ trợ gửi các thông báo Email/SMS/Push bất đồng bộ từ các microservices nghiệp vụ khác:
+1. **Lắng nghe sự kiện:** Dịch vụ đăng ký lắng nghe (consume) Kafka topic `notification.send`.
+2. **Xử lý sự kiện:** Nhận sự kiện, kiểm tra tùy chọn preferences của user nhận, và chuyển tiếp qua dispatchers (Email/Slack/Push).
+3. **Mẫu code NestJS (KafkaJS):**
+```typescript
+@EventPattern('notification.send')
+async handleNotificationSend(@Payload() message: NotificationSendEvent) {
+  const { event_id, tenant_id, user_id, type, template, parameters } = message;
+  
+  // 1. Kiểm tra tính trùng lặp (Idempotency) dựa trên event_id
+  const isDuplicate = await this.notificationService.checkIdempotency(event_id);
+  if (isDuplicate) {
+    this.logger.warn(`Duplicate notification event ignored: ${event_id}`);
+    return;
+  }
+  
+  // 2. Phân giải thông tin người nhận và preferences
+  const user = await this.userService.getUserById(user_id);
+  const prefs = await this.notificationService.getPreferences(user_id);
+  
+  // 3. Render nội dung từ template và parameters
+  const { title, body } = this.templateService.render(template, parameters);
+  
+  // 4. Thực hiện gửi thông báo qua kênh chỉ định (hoặc kênh fallback)
+  await this.deliveryService.deliver({
+    tenantId: tenant_id,
+    userId: user_id,
+    userEmail: user.email,
+    type,
+    title,
+    body,
+    priority: message.priority || 'normal'
+  }, prefs);
+}
+```
+
+---
+
 ### Luồng 4: Xử lý MCP SSE JSON-RPC Requests
 
 ```

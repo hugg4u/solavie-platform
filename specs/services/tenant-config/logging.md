@@ -41,6 +41,27 @@ Dịch vụ Tenant Config Service sử dụng logger chuẩn của NestJS (tích
 *   Mọi giá trị nhạy cảm trước khi ghi log hoặc ghi vào bảng `config_audit_logs` bắt buộc phải được che giấu bằng chuỗi định dạng `[REDACTED]`.
 *   **KHÔNG** ghi log giá trị biến môi trường `GATEWAY_SIGNING_SECRET`.
 
+### 1.4. Nhật ký phát sự kiện Kafka (Kafka Event Publish Logs - Luồng 3 MỚI)
+Khi Tenant Config Service phát sự kiện thay đổi cấu hình bảo mật hoặc vai trò lên Kafka topic `config.updates` (Luồng 3), log ghi nhận phải có cấu trúc JSON:
+```json
+{
+  "timestamp": "2026-06-08T11:45:00.123Z",
+  "level": "info",
+  "service": "tenant-config-service",
+  "trace_id": "xyz789abc012",
+  "message": "Security config update published to Kafka",
+  "context": {
+    "topic": "config.updates",
+    "partition": 1,
+    "offset": 105,
+    "tenant_id": "tenant-uuid-1234",
+    "category": "security_comments_notif",
+    "updated_fields": ["auth_password_min_length"],
+    "latency_ms": 12
+  }
+}
+```
+
 ---
 
 ## 2. Phân Vết Hệ Thống (OpenTelemetry Tracing)
@@ -74,6 +95,8 @@ Dịch vụ phơi bày các chỉ số đo lường hiệu năng tại endpoint 
     *   *Labels:* `tenant_id`
 *   **`tenant_config_security_permission_denied_total`** (Counter): Số lần từ chối truy cập do thiếu quyền.
     *   *Labels:* `tenant_id`, `required_permission`
+*   **`tenant_config_kafka_operations_total`** (Counter): Thống kê số lần đẩy sự kiện lên Kafka topic `config.updates`.
+    *   *Labels:* `operation` (`publish`), `status` (`success`, `error`)
 
 ---
 

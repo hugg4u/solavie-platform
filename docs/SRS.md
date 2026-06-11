@@ -196,19 +196,91 @@ graph TD
 
 
 ### 2.5. Cơ chế đồng bộ cấu hình (Configuration Sync Flow)
-Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, việc thay đổi cấu hình định tuyến (routing), các API keys và feature gates được đồng bộ qua cơ chế **Dual-Publishing** (kết hợp giữa Redis Pub/Sub và Redis Streams) để đảm bảo cả tốc độ lẫn độ tin cậy cao:
+Để đảm bảo hiệu năng tối ưu trên hot-path gọi mô hình AI và tính tự trị (autonomy) của từng microservice, việc thay đổi cấu hình định tuyến (routing), các API keys và feature gates được đồng bộ qua cơ chế **Dual-Publishing** (kết hợp giữa Redis Pub/Sub để invalidation cache nhanh và Apache Kafka để đồng bộ tin cậy) để đảm bảo cả tốc độ lẫn độ bền vững cao:
 
 1. **Quản trị tập trung (Centralized Management)**: Admin thay đổi cấu hình model routing hoặc cập nhật API Keys (được mã hóa đối xứng AES-256) trên Dashboard, gửi yêu cầu tới `Tenant Config Service` (NestJS) và lưu vào `config_db`.
 2. **Kích hoạt sự kiện (Event Trigger)**: `Tenant Config Service` ghi nhận thay đổi, cập nhật Redis cache và đồng thời đẩy sự kiện cập nhật vào:
-   * **Redis Stream** (`config.updates.stream`): Dành cho các worker đồng bộ tin cậy cần cơ chế ACK (như `Auth Sync Worker`).
+   * **Kafka Topic** (`config.updates`): Dành cho các worker đồng bộ tin cậy cần cơ chế offset commit và lưu trữ bền vững (như `Auth Sync Worker`).
    * **Redis Pub/Sub Channel** (`config.updates`): Dành cho các API service nhận dạng invalidation cache tức thời (như `AI Core Service`).
 3. **Nhận thông điệp (Event Consumption)**:
    * `AI Core Service` (FastAPI) chạy background thread subscribe kênh Pub/Sub `config.updates` để thực hiện invalidate in-memory cache tức thì.
-   * `Auth Sync Worker` (Python) lắng nghe từ Redis Stream `config.updates.stream` thông qua **Consumer Group** (`auth-sync-group`). Cơ chế ACK bảo đảm rằng nếu worker sập nguồn, tin nhắn cấu hình sẽ được lưu vết và xử lý lại ngay khi worker online trở lại.
+   * `Auth Sync Worker` (Python) lắng nghe từ Kafka Topic `config.updates` thông qua **Consumer Group** (`auth-sync-config-group`). Cơ chế commit offset thủ công (manual commit) bảo đảm rằng nếu worker sập nguồn, tin nhắn cấu hình sẽ được giữ lại trên Kafka broker và xử lý lại ngay khi worker online trở lại.
 4. **Đồng bộ và Invalidate Cache**:
    * Khi nhận được sự kiện, các services gọi gRPC `GetConfig` (hoặc REST fallback) sang `Tenant Config Service` để truy vấn và ghi nhận cấu hình bảo mật/model mới nhất vào local DB để backup.
    * Keycloak Realm settings (Password Policy, Brute force) được cập nhật đồng bộ qua Keycloak Admin API `/admin/realms/{realm}`.
 5. **Tự động Khởi tạo Cấu hình Định tuyến mặc định (Auto-configuration on First Key):** Khi Tenant thêm hoặc đồng bộ khóa API đầu tiên của họ, hệ thống tự động kiểm tra số lượng khóa API hiện hoạt trong DB. Nếu là khóa hoạt động đầu tiên, hệ thống sẽ tự động truy vấn bảng mặc định hệ thống `system_default_route_configs` để lấy các cấu hình mặc định (cheapest models) của nhà cung cấp khóa tương ứng, tự động tạo và lưu trữ 5 bản ghi định tuyến (`LLMRouteConfig`) cho cả 5 usecases của Tenant, đồng thời xóa cache Redis để sẵn sàng sử dụng định tuyến ngay lập tức.
+
+### 2.5.1. Đặc tả 6 Luồng Event-Driven qua Apache Kafka (Kafka Core Flows)
+Để đảm bảo tính nhất quán (Eventual Consistency), khả năng chịu tải vượt trội, và tính chịu lỗi (Fault Tolerance) cho toàn bộ hệ thống, Solavie thiết lập 6 luồng dữ liệu cốt lõi qua Apache Kafka như sau:
+
+```mermaid
+graph TD
+    subgraph "Luồng 1: Identity Sync (auth.events.user)"
+        KC[Keycloak] -->|Webhook| AW_P[Auth Sync Worker - Producer]
+        AW_P -->|Publish| K_Topic1[(Kafka: auth.events.user)]
+        K_Topic1 -->|Consume| US_C[User Service - Consumer]
+        US_C -->|Save| US_DB[(User PostgreSQL DB)]
+    end
+
+    subgraph "Luồng 2: Token Revocation (token.revoked)"
+        US_P[User Service - Producer] -->|Publish| K_Topic2[(Kafka: token.revoked)]
+        K_Topic2 -->|Consume| AW_C[Auth Sync Worker - Consumer]
+        AW_C -->|Write Blacklist| R_Blacklist[(Redis Blacklist)]
+        Kong[Kong API Gateway] -->|Check < 1ms| R_Blacklist
+    end
+
+    subgraph "Luồng 3: Config Sync (config.updates)"
+        TC_P[Tenant Config Service - Producer] -->|Publish| K_Topic3[(Kafka: config.updates)]
+        K_Topic3 -->|Consume| AW_C3[Auth Sync Worker - Consumer]
+        AW_C3 -->|Admin API| Keycloak_Org[Keycloak Org Settings]
+    end
+
+    subgraph "Luồng 4: Scheduler Queue"
+        Sched[Scheduler Service] -->|Publish| K_Topic4[(Kafka: scheduler.post.due)]
+        K_Topic4 -->|Consume & Publish| Pub_Svc[Publisher Service]
+        Pub_Svc -->|Success/Failed| K_Topic4_Res[(Kafka: content.published / scheduler.post.failed)]
+        K_Topic4_Res -->|Consume| Sched
+    end
+
+    subgraph "Luồng 5: Notification Queue"
+        Any_Svc[Any Service] -->|Publish| K_Topic5[(Kafka: notification.send)]
+        K_Topic5 -->|Consume| Notif_Svc[Notification Service]
+        Notif_Svc -->|Dispatch| Notif_Prov[Email/SMS Provider]
+    end
+
+    subgraph "Luồng 6: Audit Logs"
+        Any_Svc2[Any Service] -->|Publish| K_Topic6[(Kafka: audit.events)]
+        K_Topic6 -->|Consume| Obs_Svc[Observability Service]
+        Obs_Svc -->|Ingest| CH[(ClickHouse / Elasticsearch)]
+    end
+```
+
+#### Chi tiết Kỹ thuật 6 Luồng Kafka:
+
+1. **Luồng 1 (Identity Sync) - Topic `auth.events.user`:**
+   * **Mục đích:** Đồng bộ tức thì các cập nhật về người dùng từ Keycloak về cơ sở dữ liệu `user_db` của `User Service`.
+   * **Cơ chế:** Khi có thay đổi (User tạo mới, cập nhật email, vô hiệu hóa, xóa), Keycloak kích hoạt webhook hoặc Auth Sync Worker lắng nghe. Auth Sync Worker hoạt động như một Kafka Producer, đẩy thông điệp dạng JSON chứa `tenant_id`, `user_id`, `event_type` và thông tin cập nhật vào topic `auth.events.user`. `User Service` chạy Kafka Consumer thuộc consumer-group `user-identity-sync-group` nhận và cập nhật trực tiếp vào cơ sở dữ liệu PostgreSQL cục bộ, áp dụng RLS để phân tách dữ liệu.
+   
+2. **Luồng 2 (Token Revocation) - Topic `token.revoked`:**
+   * **Mục đích:** Hủy token truy cập ngay lập tức khi người dùng đăng xuất hoặc khi tài khoản bị vô hiệu hóa bởi admin để đảm bảo an ninh.
+   * **Cơ chế:** `User Service` đóng vai trò Producer đẩy thông điệp chứa token `jti` (JWT ID) và thời gian hết hạn (`exp`) vào topic `token.revoked`. `Auth Sync Worker` đóng vai trò Consumer, nhận thông điệp và ghi nhận `jti` vào Redis Blacklist với TTL tương ứng. Kong API Gateway thực hiện kiểm tra `jti` từ token của request tới Redis Blacklist (< 1ms) để từ chối các request mang token đã bị hủy.
+   
+3. **Luồng 3 (Config Sync) - Topic `config.updates`:**
+   * **Mục đích:** Đồng bộ các thay đổi về cấu hình Tenant (quy tắc bảo mật, password policy, login settings) từ `Tenant Config Service` sang Keycloak.
+   * **Cơ chế:** Khi Admin cập nhật cấu hình thông qua Dashboard, `Tenant Config Service` ghi nhận thay đổi và publish sự kiện vào topic `config.updates`. `Auth Sync Worker` consume sự kiện này và gọi trực tiếp Keycloak Admin REST API để áp dụng cấu hình bảo mật mới lên Keycloak Organization tương ứng của Tenant.
+   
+4. **Luồng 4 (Scheduler Queue) - Topics `scheduler.post.due`, `content.published`, `scheduler.post.failed`:**
+   * **Mục đích:** Điều phối quy trình lập lịch và đăng tải bài viết lên các mạng xã hội (Facebook, TikTok, Zalo).
+   * **Cơ chế:** Khi đến giờ đăng tải cấu hình trong Quartz Scheduler, `Scheduler Service` publish bài viết sang topic `scheduler.post.due`. `Content Service` / `Publisher Service` nhận bài viết từ topic này, tiến hành gọi API mạng xã hội để đăng tải. Sau khi hoàn thành, service này publish kết quả trả về vào topic `content.published` (nếu thành công) hoặc `scheduler.post.failed` (nếu thất bại) để `Scheduler Service` cập nhật trạng thái bài viết trong cơ sở dữ liệu.
+   
+5. **Luồng 5 (Notification Queue) - Topic `notification.send`:**
+   * **Mục đích:** Hàng đợi bất đồng bộ tập trung xử lý gửi thông báo (OTP, Email giao dịch, cảnh báo khẩn cấp, thông báo leo thang sự kiện).
+   * **Cơ chế:** Bất kỳ service nào cần gửi thông báo đều đóng vai trò Producer, đẩy payload thông báo chuẩn hóa (chứa `tenant_id`, `recipient`, `channel_type`, `template_id`, `template_params`) vào topic `notification.send`. `Notification Service` làm Consumer nhận tin nhắn, phân tích nhà cung cấp dịch vụ (SMTP, Twilio, Zalo ZNS) và thực hiện gửi thông báo, xử lý retry tự động khi gặp lỗi mạng.
+   
+6. **Luồng 6 (Audit Logs) - Topic `audit.events`:**
+   * **Mục đích:** Thu thập tập trung mọi sự kiện kiểm toán bảo mật từ các service phục vụ tuân thủ (compliance) và phân tích hành vi.
+   * **Cơ chế:** Mọi microservice khi thực hiện các hành vi nhạy cảm (Đăng nhập, thay đổi cấu hình định tuyến AI, truy xuất dữ liệu CRM, thanh toán) sẽ đẩy log kiểm toán vào topic `audit.events`. `Observability Service` consume sự kiện và đẩy bất đồng bộ vào ClickHouse hoặc Elasticsearch phục vụ truy vấn và tạo Dashboard giám sát tập trung.
+
 
 ---
 
