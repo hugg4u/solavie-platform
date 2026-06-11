@@ -3,7 +3,7 @@ import { Observable, throwError } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
 import { MetricsService } from './metrics.service';
 import { Response, Request } from 'express';
-import { getTenantId } from '../../context/tenant-context';
+import { getTenantId } from '../context/tenant-context';
 
 @Injectable()
 export class MetricsInterceptor implements NestInterceptor {

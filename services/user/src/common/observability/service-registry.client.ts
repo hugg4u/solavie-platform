@@ -22,21 +22,31 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
     try {
       return await new Promise<string>((resolve, reject) => {
         const socket = dgram.createSocket('udp4');
-        socket.connect(53, '8.8.8.8', () => {
-          const ip = socket.address().address;
-          socket.close();
-          resolve(ip);
-        });
-        socket.on('error', (err) => {
-          socket.close();
-          reject(err);
-        });
-        
-        // Bổ sung timeout 1s để không bị treo
-        setTimeout(() => {
-          socket.close();
+        const timer = setTimeout(() => {
+          try {
+            socket.close();
+          } catch (e) {}
           reject(new Error('UDP socket connect timeout'));
         }, 1000);
+
+        socket.connect(53, '8.8.8.8', () => {
+          clearTimeout(timer);
+          try {
+            const ip = socket.address().address;
+            socket.close();
+            resolve(ip);
+          } catch (err) {
+            reject(err);
+          }
+        });
+
+        socket.on('error', (err) => {
+          clearTimeout(timer);
+          try {
+            socket.close();
+          } catch (e) {}
+          reject(err);
+        });
       });
     } catch (err: any) {
       this.logger.warn(`Failed to resolve IP via UDP socket: ${err.message}. Falling back to OS network interfaces.`);

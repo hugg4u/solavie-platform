@@ -40,6 +40,19 @@ async function bootstrap() {
     },
   });
 
+  // 3.5. Cấu hình Kafka Microservice
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.KAFKA,
+    options: {
+      client: {
+        brokers: [process.env.KAFKA_BROKER || 'kafka:9092'],
+      },
+      consumer: {
+        groupId: 'user-service-group',
+      },
+    },
+  });
+
   // 4. Khởi chạy microservice
   await app.startAllMicroservices();
 

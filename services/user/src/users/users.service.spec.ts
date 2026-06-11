@@ -50,6 +50,11 @@ describe('UsersService', () => {
     put: jest.fn(),
   };
 
+  const mockKafka = {
+    emit: jest.fn(),
+    connect: jest.fn().mockResolvedValue(null),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -58,6 +63,7 @@ describe('UsersService', () => {
         { provide: KeycloakAdminService, useValue: mockKeycloakAdmin },
         { provide: RedisService, useValue: mockRedis },
         { provide: HttpService, useValue: mockHttp },
+        { provide: 'KAFKA_SERVICE', useValue: mockKafka },
       ],
     }).compile();
 

@@ -8,6 +8,7 @@ import hmac
 import hashlib
 import redis
 import requests
+from kafka import KafkaProducer, KafkaConsumer
 
 # Configure Logging
 logging.basicConfig(
@@ -26,6 +27,52 @@ KC_ADMIN_PASSWORD = os.getenv("KC_ADMIN_PASSWORD", "admin_secret_pass")
 # AC 4.8: User Service Webhook for event forwarding
 USER_SERVICE_WEBHOOK_URL = os.getenv("USER_SERVICE_WEBHOOK_URL", "http://user-service:3008/api/v1/users/events")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+# Kafka Configuration
+KAFKA_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+kafka_producer = None
+kafka_consumer = None
+
+def init_kafka():
+    global kafka_producer, kafka_consumer
+    logger.info(f"Initializing Kafka with servers: {KAFKA_SERVERS}")
+    
+    # Initialize Kafka Producer
+    retries = 5
+    while retries > 0:
+        try:
+            kafka_producer = KafkaProducer(
+                bootstrap_servers=KAFKA_SERVERS,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                acks='all',
+                request_timeout_ms=5000
+            )
+            logger.info("Kafka Producer initialized successfully.")
+            break
+        except Exception as e:
+            logger.warning(f"Failed to initialize Kafka Producer, retrying... ({retries} left). Error: {e}")
+            retries -= 1
+            time.sleep(5)
+            
+    # Initialize Kafka Consumer
+    retries = 5
+    while retries > 0:
+        try:
+            kafka_consumer = KafkaConsumer(
+                'token.revoked',
+                bootstrap_servers=KAFKA_SERVERS,
+                group_id='auth-sync-token-group',
+                value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+                enable_auto_commit=False,
+                auto_offset_reset='earliest',
+                consumer_timeout_ms=100
+            )
+            logger.info("Kafka Consumer initialized successfully.")
+            break
+        except Exception as e:
+            logger.warning(f"Failed to initialize Kafka Consumer, retrying... ({retries} left). Error: {e}")
+            retries -= 1
+            time.sleep(5)
 
 
 def wait_for_keycloak(keycloak_url, timeout=120):
@@ -116,11 +163,10 @@ def update_org_security_config(keycloak_url, admin_token, realm_name, org_id, mi
 
 def forward_user_event_to_service(event_payload: dict):
     """
-    AC 4.8: Forward Keycloak user events sang User Service webhook.
-    Ký HMAC-SHA256 dựa trên WEBHOOK_SECRET để User Service có thể xác thực chữ ký.
-    Map từ event type của Keycloak sang chuẩn event của User Service.
+    AC 4.8 / Kafka Migration:
+    Thay vì gọi HTTP REST Webhook, chúng ta phát sự kiện qua Kafka topic 'auth.events.user'.
+    Nếu Kafka chưa sẵn sàng hoặc bị lỗi, thực hiện fallback gọi HTTP REST Webhook.
     """
-    # Map Keycloak event types -> User Service event schema
     kc_event_map = {
         "VERIFY_EMAIL": "user.verified",
         "REGISTER": "user.verified",
@@ -132,16 +178,25 @@ def forward_user_event_to_service(event_payload: dict):
     raw_event = event_payload.get("event") or event_payload.get("type", "")
     mapped_event = kc_event_map.get(raw_event, raw_event)
 
-    webhook_payload = {
+    payload = {
         "event": mapped_event,
         "userId": event_payload.get("user_id") or event_payload.get("userId"),
         "realm": event_payload.get("realm") or event_payload.get("realmId"),
         "email": event_payload.get("email"),
     }
 
-    payload_str = json.dumps(webhook_payload, separators=(",", ":"))
+    # 1. Thử gửi qua Kafka
+    if kafka_producer:
+        try:
+            future = kafka_producer.send('auth.events.user', value=payload)
+            record_metadata = future.get(timeout=3)
+            logger.info(f"Published user event '{mapped_event}' for userId={payload['userId']} to Kafka topic 'auth.events.user'. Partition: {record_metadata.partition}, Offset: {record_metadata.offset}")
+            return
+        except Exception as e:
+            logger.error(f"Failed to publish user event to Kafka, falling back to HTTP Webhook: {e}")
 
-    # Sign payload with HMAC-SHA256
+    # 2. Fallback Webhook HTTP REST
+    payload_str = json.dumps(payload, separators=(",", ":"))
     signature = ""
     if WEBHOOK_SECRET:
         mac = hmac.new(
@@ -159,11 +214,11 @@ def forward_user_event_to_service(event_payload: dict):
     try:
         resp = requests.post(USER_SERVICE_WEBHOOK_URL, data=payload_str, headers=headers, timeout=5)
         if resp.status_code in [200, 201, 204]:
-            logger.info(f"[ac4.8] Forwarded user event '{mapped_event}' for userId={webhook_payload['userId']} to User Service. Status: {resp.status_code}")
+            logger.info(f"[Fallback Webhook] Forwarded user event '{mapped_event}' for userId={payload['userId']} to User Service. Status: {resp.status_code}")
         else:
-            logger.error(f"[ac4.8] Failed to forward user event '{mapped_event}' to User Service. Status: {resp.status_code}, Body: {resp.text}")
+            logger.error(f"[Fallback Webhook] Failed to forward user event '{mapped_event}' to User Service. Status: {resp.status_code}, Body: {resp.text}")
     except Exception as e:
-        logger.error(f"[ac4.8] Error forwarding user event to User Service: {e}")
+        logger.error(f"[Fallback Webhook] Error forwarding user event: {e}")
 
 
 def sync_org_security(r, tenant_id):
@@ -217,6 +272,9 @@ def main():
     try:
         # Wait for Keycloak
         wait_for_keycloak(KEYCLOAK_URL)
+        
+        # Initialize Kafka Broker Connection
+        init_kafka()
         
         # Connect to Redis (Cluster-aware)
         try:
@@ -281,6 +339,28 @@ def main():
                         forward_user_event_to_service(data)
             except Exception as e:
                 logger.error(f"Error processing pub/sub message: {str(e)}")
+
+            # 1.5. Poll Kafka messages for token.revoked (Group: auth-sync-token-group)
+            if kafka_consumer:
+                try:
+                    msg_pack = kafka_consumer.poll(timeout_ms=100)
+                    for tp, messages in msg_pack.items():
+                        for message in messages:
+                            logger.info(f"Received Kafka message on topic '{message.topic}': {message.value}")
+                            data = message.value
+                            jti = data.get("jti")
+                            exp = data.get("exp")
+                            if jti and exp:
+                                # Calculate TTL: exp is epoch timestamp
+                                ttl = int(exp - time.time())
+                                if ttl > 0:
+                                    r.setex(f"blacklist:jti:{jti}", ttl, "revoked")
+                                    logger.info(f"Successfully blacklisted token JTI '{jti}' in Redis from Kafka for {ttl} seconds.")
+                            
+                            # AC 2.5: manual offset commit
+                            kafka_consumer.commit()
+                except Exception as e:
+                    logger.error(f"Error processing Kafka message: {str(e)}")
 
             # 2. Check Redis Stream config.updates.stream messages
             try:
