@@ -547,7 +547,21 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-34, US-062
 
-### FR-CRM-012: Tiếp nhận báo lỗi và Điều phối Ticket O&M
+### FR-CRM-012: Xuất Proposal PDF thông qua công cụ MCP (Proposal PDF via MCP)
+- **Mô tả:** Hệ thống **PHẢI** cho phép AI Agent truy vấn Proposal PDF thông qua MCP tool `get_proposal_preview`. Kết quả trả về từ CRM Service **PHẢI** là một đối tượng JSON chứa đường dẫn tải xuống bảo mật (Presigned URL) có thời hạn hiệu lực (TTL) là 15 phút được tạo bởi DMS Service cùng tóm tắt ROI tương ứng, thay vì chỉ trả về một bản tóm tắt bằng văn bản thuần túy.
+- **Đầu vào:** `proposal_id` và `tenant_id` lấy từ context xác thực của User.
+- **Đầu ra:** Đối tượng JSON chứa `{ pdf_url, roi_summary: { capacity_kwp, monthly_kwh, savings_ratio, payback_years } }`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-33, US-060
+
+### FR-CRM-013: Tạo và Truy vấn O&M Ticket thông qua MCP (O&M Ticket via MCP)
+- **Mô tả:** Hệ thống **PHẢI** hỗ trợ tạo và cập nhật O&M tickets tự động thông qua các công cụ MCP (`create_om_ticket` và `get_ticket_status`). Khi một Ticket được tạo qua MCP tool, CRM Service **PHẢI** lưu trữ vào `crm_db` và đồng thời publish sự kiện `crm.ticket.created` lên Kafka để Notification Service tự động gán và gửi thông báo cho Kỹ thuật viên bảo trì.
+- **Đầu vào:** `contact_id`, `title`, `description`, `priority` từ lời gọi tool của Agent.
+- **Đầu ra:** Bản ghi Ticket mới trong `crm_db`, sự kiện Kafka được đẩy đi, và Kỹ thuật viên được gán tự động.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-33, US-061
+
+### FR-CRM-020: Tiếp nhận báo lỗi và Điều phối Ticket O&M
 - **Mô tả:** Hệ thống **PHẢI** hỗ trợ tạo vé hỗ trợ vận hành bảo trì (O&M Ticket) khi khách hàng báo lỗi qua chat hoặc hotline, cho phép thiết lập độ ưu tiên (Low, Medium, High, Critical) và phân công Kỹ thuật viên bảo dưỡng xử lý hiện trường.
 - **Đầu vào:** ID khách hàng, mô tả lỗi, độ ưu tiên, ID Kỹ thuật viên bảo trì.
 - **Đầu ra:** Bản ghi Ticket mới lưu trong bảng `crm_tickets`, gửi thông báo khẩn qua Notification Service tới Kỹ thuật viên được gán, và lưu log audit hành trình.
@@ -880,7 +894,7 @@
 
 ## 5.19. Bổ sung Phân hệ CRM — Lead Scoring & CSAT
 
-### FR-CRM-013: Tích hợp API bản đồ bức xạ mặt trời (HelioScope/OpenSolar)
+### FR-CRM-021: Tích hợp API bản đồ bức xạ mặt trời (HelioScope/OpenSolar)
 - **Mô tả:** Hệ thống **NÊN** hỗ trợ kết nối với các dịch vụ bên thứ ba (HelioScope hoặc OpenSolar) thông qua API để lấy sơ đồ thiết kế 3D bố trí tấm pin trên mái nhà và sản lượng bức xạ chính xác dựa trên tọa độ GPS của công trình.
 - **Đầu vào:** Tọa độ GPS (latitude, longitude) của công trình, diện tích mái khả dụng.
 - **Đầu ra:** Sơ đồ bố trí 3D (ảnh) và dữ liệu bức xạ (kWh/m²/năm) lưu vào `crm_surveys`.
@@ -1033,12 +1047,19 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 
-### FR-AI-013: API `/models` danh mục mô hình động từ Registry
+### FR-AI-014: API `/models` danh mục mô hình động từ Registry
 - **Mô tả:** API endpoint `/api/v1/completions/models` **PHẢI** trả về danh sách mô hình hoàn toàn động bằng cách truy vấn trực tiếp từ LiteLLM registry (`model_cost`) của 12 nhà cung cấp được hỗ trợ trong hệ thống đối với tất cả mô hình dạng Chat (`mode == "chat"`). Hệ thống **PHẢI** tự động thêm các mô hình local (như `qwen2.5-coder`, `llama3`) vào kết quả trả về, thay vì trả về danh sách tĩnh fix cứng.
 - **Đầu vào:** Yêu cầu GET `/api/v1/completions/models`, LiteLLM registry.
 - **Đầu ra:** JSON payload chứa danh sách hơn 339 mô hình động kèm provider của chúng.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10
+
+### FR-AI-015: Bộ nhớ đệm ngữ nghĩa cho Chatbot (Semantic Caching)
+- **Mô tả:** AI Core Service **PHẢI** hỗ trợ cơ chế bộ nhớ đệm ngữ nghĩa sử dụng Redis Stack Vector Search (KNN) để tối ưu hóa chi phí LLM call và tăng tốc thời gian phản hồi chatbot. Hệ thống **PHẢI** sử dụng model local FastEmbed `multilingual-e5-small` để sinh vector embeddings 384 chiều cho câu hỏi của người dùng và thực hiện tìm kiếm KNN trên index `idx:semantic_cache` với bộ lọc `tenant_id` và `use_case = chatbot`. Nếu Cosine Similarity (1 - Cosine Distance) >= 0.92, hệ thống **PHẢI** ghi nhận là **Cache Hit** và trả về câu trả lời lưu trong cache ngay lập tức (< 10ms), bỏ qua hoàn toàn việc gọi LLM. Ngược lại (**Cache Miss**), hệ thống chạy Agent bình thường và lên lịch ghi cache bất đồng bộ với TTL 24 giờ.
+- **Đầu vào:** Tenant ID, use_case, tin nhắn thô của khách hàng.
+- **Đầu ra:** Câu trả lời tương ứng (từ Cache hoặc LLM) và trạng thái cache hit/miss được phản ánh qua metrics.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-018
 
 ---
 

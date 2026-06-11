@@ -43,12 +43,16 @@ crm_kafka_events_consumed_total: Counter [topic]
 crm_mcp_tool_executions_total: Counter [tenant_id, server_name, tool_name, status]
 crm_mcp_tool_execution_duration_seconds: Histogram [tenant_id, server_name, tool_name]
 crm_mcp_security_violations_total: Counter [tenant_id, reason]
-```
 
+// Proposal PDF Metrics
+crm_proposal_pdf_generated_total: Counter [tenant_id, status]
+crm_proposal_pdf_duration_seconds: Histogram [tenant_id]
 
 // Zero-Trust Security Metrics
 crm_security_signature_failures_total: Counter [tenant_id, client_ip]
 crm_security_permission_denied_total: Counter [tenant_id, required_permission]
+```
+
 
 ## Health Endpoints
 ```
@@ -67,6 +71,7 @@ GET /metrics  → Prometheus format
 | KafkaConsumerLag | lag > 500 for 5m | warning |
 | MCPSecurityBreach | crm_mcp_security_violations_total > 0 | critical |
 | MCPExecutionFailure | crm_mcp_tool_executions_total{status="error"} > 5 in 5m | warning |
+| ProposalPDFGenerationFailure | sum(rate(crm_proposal_pdf_generated_total{status="error"}[5m])) / sum(rate(crm_proposal_pdf_generated_total[5m])) > 0.05 or histogram_quantile(0.95, sum(rate(crm_proposal_pdf_duration_seconds_bucket[5m])) by (le)) > 10 | warning (PDF error rate > 5% or p95 latency > 10s) |
 
 ---
 
@@ -104,6 +109,60 @@ Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký tr�
   "status": "success",
   "context": {
     "redis_key": "registry:service:crm"
+  }
+}
+```
+
+### 3. Log Proposal PDF Generation
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "crm",
+  "message": "Proposal PDF generated and uploaded to DMS",
+  "action": "proposal_pdf_generated",
+  "tenant_id": "tenant-uuid",
+  "context": {
+    "proposal_id": "proposal-uuid",
+    "dms_file_id": "dms-file-uuid",
+    "pdf_size_kb": 245,
+    "duration_ms": 1230
+  }
+}
+```
+
+### 4. Log MCP Tool Call Execution (với Security Cross-Tenant validation)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "crm",
+  "message": "MCP tool call execution completed",
+  "action": "mcp_tool_execution",
+  "tenant_id": "tenant-uuid",
+  "context": {
+    "server_name": "solar_calc",
+    "tool_name": "get_proposal_preview",
+    "input_params_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "validation_result": "valid"
+  }
+}
+```
+
+### 5. Log MCP Tool Call Cross-Tenant Security Block
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "warn",
+  "service": "crm",
+  "message": "MCP tool call blocked: cross-tenant access attempt detected",
+  "action": "mcp_tool_blocked",
+  "tenant_id": "tenant-uuid-authorized",
+  "context": {
+    "requested_tenant_id": "tenant-uuid-target-victim",
+    "server_name": "crm",
+    "tool_name": "get_contact_360",
+    "validation_result": "cross-tenant-blocked"
   }
 }
 ```

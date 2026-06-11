@@ -98,12 +98,13 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 **User Story:** Là developer, tôi muốn đăng ký các Custom MCP Server nội bộ (solar_calc, crm, om_ticket) cho AI sử dụng một cách động và bảo mật.
 
 #### Acceptance Criteria
-1. THE AI_Core SHALL maintain a whitelisted registry của các Custom MCP Servers (`tenant_mcp_servers` table) theo từng tenant.
+1. THE AI_Core SHALL maintain a whitelisted registry của các Custom MCP Servers (`tenant_mcp_servers` table) theo từng tenant. Các server được phép đăng ký mặc định gồm: `solar_calc`, `crm`, và `om_ticket`.
 2. THE AI_Core SHALL dynamically query and establish SSE (Server-Sent Events) connections tới các whitelisted MCP servers này thông qua `MCPClientManager` để lấy danh sách tools động. Khi thiết lập kết nối, `MCPClientManager` bắt buộc phải chuyển tiếp (inject) đầy đủ các headers bảo mật được phân giải từ client request bao gồm `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, và `X-Permissions-Signature` vào `sse_client` session để bảo đảm tính cô lập dữ liệu đa thuê.
 3. THE AI_Core SHALL restrict tools per use case (permission matrix) và thực hiện phân quyền người dùng dựa trên Global Permission Spec (`{service}:{resource}:{action}`). Lớp Guard và Executor bắt buộc phải xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET`, sau đó đối chiếu mã quyền hạn in-memory O(1) với độ trễ dưới 2ms trước khi chạy. AI Core SHALL expose API manifest `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên và hành động mà service hỗ trợ.
 4. THE AI_Core SHALL automatically inject/overwrite the `tenant_id` parameter from authenticated JWT into every tool execution argument payload to guarantee strict tenant data isolation.
 5. THE AI_Core SHALL block all connections to external public/community MCP servers (like raw postgres, sqlite, or filesystem servers) to eliminate SSRF and prompt injection data exfiltration risks.
 6. THE AI_Core SHALL rate limit tool calls (per tool, per tenant) sử dụng cơ chế Redis Token Bucket, và log tất cả tool calls cho audit.
+7. THE AI_Core SHALL support tool `get_proposal_preview` via MCP which MUST return a PDF presigned URL (with TTL 15 minutes) and a structured ROI summary, instead of a plain text summary, to ensure the user receives the actual generated PDF proposal document.
 
 ### Requirement 9: Web Search Integration (MỚI)
 
@@ -132,6 +133,20 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 9. THE AI_Core SHALL tích hợp bộ đánh giá kiểm chứng nguồn tin (NLI Grounding Validator) ở đầu ra bằng mô hình suy luận tự nhiên (NLI) để so khớp câu trả lời với tài liệu RAG gốc. Nếu phát hiện mâu thuẫn (Contradiction) hoặc không có căn cứ (Neutral) với điểm số tin cậy (Grounding Score) < 0.80, hệ thống SHALL chặn phản hồi và tiến hành thử lại (tối đa 2 lần) trước khi tự động chuyển giao cuộc chat cho nhân viên.
 10. THE AI_Core SHALL tích hợp bộ kiểm duyệt nội dung đầu ra độc lập (Output Content Moderation) tại tầng ContentGuardrail để phát hiện và ngăn chặn các nội dung thô tục (Profanity), độc hại (Toxicity), và nguy cơ rò rỉ chỉ dẫn hệ thống (Prompt Leakage prevention) trước khi khôi phục dữ liệu PII. Nếu phát hiện vi phạm, hệ thống SHALL chặn phản hồi và trả về câu từ chối mặc định an toàn: "Xin lỗi, tôi không thể hiển thị nội dung này do vi phạm chính sách an toàn thông tin."
 
+### Requirement 11: Semantic Caching (MỚI)
+
+**User Story:** Là business owner, tôi muốn tối ưu chi phí LLM call và tăng tốc thời gian phản hồi chatbot cho các câu hỏi trùng lặp hoặc tương đương từ người dùng.
+
+#### Acceptance Criteria
+1. THE AI_Core SHALL tích hợp cơ chế bộ nhớ đệm ngữ nghĩa sử dụng Redis Stack Vector Search (KNN) tại Redis DB 0.
+2. THE AI_Core SHALL tự động khởi tạo index vector `idx:semantic_cache` trên Redis Stack nếu chưa tồn tại. Schema index bắt buộc bao gồm: `tenant_id` (TAG), `use_case` (TAG), `question` (TEXT), `response` (TEXT), và `vector` (VECTOR - thuật toán KNN Flat hoặc HNSW, khoảng cách Cosine, 384 dimensions).
+3. THE AI_Core SHALL sử dụng local FastEmbed model `multilingual-e5-small` để sinh vector embeddings 384 chiều cho câu hỏi của người dùng tại máy chủ cục bộ (< 20ms).
+4. THE AI_Core SHALL thực hiện truy vấn so khớp độ tương đồng ngữ nghĩa trên Redis Stack bằng lệnh `FT.SEARCH` sử dụng tham số vector và lọc chính xác theo `tenant_id` và `use_case = chatbot`.
+5. IF độ tương đồng ngữ nghĩa (1 - Cosine Distance) >= 0.92, THEN hệ thống SHALL ghi nhận là **Cache Hit**, lập tức trả về câu trả lời lưu trong cache với độ trễ < 10ms, bỏ qua hoàn toàn việc gọi LangGraph Agent và các API LLM bên ngoài, đồng thời tăng Prometheus metric `ai_core_semantic_cache_hits_total`.
+6. IF độ tương đồng ngữ nghĩa < 0.92, THEN hệ thống SHALL ghi nhận là **Cache Miss**, thực hiện luồng ReAct Agent bình thường, đồng thời tăng Prometheus metric `ai_core_semantic_cache_misses_total`.
+7. ON Cache Miss, sau khi Agent sinh câu trả lời thành công, hệ thống SHALL kích hoạt một background task (chạy bất đồng bộ qua FastAPI BackgroundTasks) để lưu câu hỏi, câu trả lời, và vector embeddings mới vào Redis cache với khóa `{tenant_id}:semantic_cache:{hash_cau_hoi}` và TTL mặc định là 86,400 giây (24 giờ).
+8. THE AI_Core SHALL cô lập dữ liệu cache tuyệt đối giữa các tenants thông qua metadata filter `tenant_id` trong truy vấn `FT.SEARCH`, ngăn chặn hoàn toàn rò rỉ dữ liệu chéo tenant.
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của AI Core Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `ai-core`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến AI Core Service.
@@ -140,10 +155,6 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 ---
 
 ## Future Roadmap (Phase 2)
-
-### Requirement 11: Semantic Caching
-- **AC 11.1:** Dịch vụ SHALL tích hợp Redis Vector Search để lưu trữ các câu trả lời của LLM.
-- **AC 11.2:** Khi có câu hỏi mới có độ tương đồng ngữ nghĩa > 90% (Cosine Similarity) với câu hỏi cũ đã lưu, hệ thống SHALL trả về ngay lập tức từ cache, bỏ qua cuộc gọi LLM và KB Search để tối ưu chi phí và tăng tốc phản hồi (< 10ms).
 
 ### Requirement 12: Structured Outputs Enforcement
 - **AC 12.1:** Dịch vụ SHALL sử dụng JSON Schema (qua tính năng `response_format` của LLM APIs) để bắt buộc Agent phản hồi theo đúng cấu hình định dạng, giúp chatbot và CRM parse kết quả an toàn.

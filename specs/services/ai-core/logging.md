@@ -31,6 +31,62 @@
 }
 ```
 
+### Semantic Cache Log Format (MỚI)
+```json
+{
+  "timestamp": "2026-06-11T11:20:00.123Z",
+  "level": "info",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Semantic cache query result",
+  "context": {
+    "use_case": "chatbot",
+    "question": "giá lắp điện mặt trời là bao nhiêu",
+    "question_hash": "md5_hash_value",
+    "similarity_score": 0.954,
+    "cache_hit": true,
+    "latency_ms": 8
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-06-11T11:20:01.123Z",
+  "level": "info",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Semantic cache query result",
+  "context": {
+    "use_case": "chatbot",
+    "question": "pin mặt trời bảo hành bao lâu",
+    "question_hash": "md5_hash_value_2",
+    "similarity_score": 0.721,
+    "cache_hit": false,
+    "latency_ms": 12
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-06-11T11:20:05.123Z",
+  "level": "error",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Failed to write response to semantic cache",
+  "action": "cache_write_error",
+  "context": {
+    "use_case": "chatbot",
+    "question_hash": "md5_hash_value_2",
+    "error_message": "Redis connection timed out"
+  }
+}
+```
+
 ### Log Levels
 | Level | Khi nào dùng | Ví dụ |
 |-------|-------------|-------|
@@ -145,6 +201,26 @@ ai_cache_misses = Counter(
     "ai_core_cache_misses_total",
     "Prompt cache misses",
     ["use_case"]
+)
+
+# Semantic Cache metrics (MỚI)
+ai_semantic_cache_hits = Counter(
+    "ai_core_semantic_cache_hits_total",
+    "Total semantic cache hits",
+    ["tenant_id", "use_case"]
+)
+
+ai_semantic_cache_misses = Counter(
+    "ai_core_semantic_cache_misses_total",
+    "Total semantic cache misses",
+    ["tenant_id", "use_case"]
+)
+
+ai_semantic_cache_similarity = Histogram(
+    "ai_core_semantic_cache_similarity_score",
+    "Semantic cache cosine similarity score distribution",
+    ["tenant_id", "use_case"],
+    buckets=[0.5, 0.7, 0.8, 0.85, 0.9, 0.92, 0.95, 0.98, 1.0]
 )
 
 # Circuit breaker

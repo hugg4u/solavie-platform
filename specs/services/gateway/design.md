@@ -94,6 +94,9 @@ services:
 
   - name: crm
     url: http://crm:3003
+    connect_timeout: 60000
+    read_timeout: 60000
+    write_timeout: 60000
     routes:
       - name: crm-api
         paths: ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets", "/api/v1/mcp"]

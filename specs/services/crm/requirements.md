@@ -96,7 +96,7 @@ Dịch vụ quản lý khách hàng đa kênh của Solavie — auto-create cont
 1. THE CRM_Service SHALL tính toán tự động dựa trên hóa đơn tiền điện và diện tích mái: công suất tối ưu (kWp), số lượng tấm pin, sản lượng điện dự kiến/tháng (kWh), tỷ lệ tiết kiệm (%), thời gian hoàn vốn (năm)
 2. THE CRM_Service SHALL áp dụng công thức chuẩn: 1 kWp ≈ 6-7m² diện tích mái; giờ nắng miền Nam 4.0-4.5h/ngày; bảng giá điện EVN hiện hành
 3. THE CRM_Service SHALL hỗ trợ kết nối API bên thứ ba (HelioScope/OpenSolar) qua AI Core để lấy sơ đồ thiết kế 3D và sản lượng bức xạ chính xác theo vị trí GPS
-4. WHEN Agent nhấn "Xuất báo giá", THE CRM_Service SHALL tự động biên soạn Proposal PDF gồm: thông tin khách hàng, thông số kỹ thuật mái, kết quả tính toán ROI, ảnh hiện trường
+4. WHEN Agent nhấn "Xuất báo giá", THE CRM_Service SHALL tự động biên soạn Proposal PDF gồm: thông tin khách hàng, thông số kỹ thuật mái, kết quả tính toán ROI, ảnh hiện trường. Khi gọi `get_proposal_preview` qua MCP, kết quả trả về PHẢI là Presigned URL tới tệp Proposal PDF này (hạn dùng 15 phút) kèm theo tóm tắt ROI dưới dạng cấu trúc JSON, KHÔNG chỉ trả về tóm tắt văn bản thông thường.
 5. THE CRM_Service SHALL lưu Proposal PDF vào DMS dạng Private và tạo Presigned URL TTL 15 phút để Agent gửi cho khách qua Zalo/Facebook
 6. THE CRM_Service SHALL liên kết dms_file_id của Proposal PDF với bản ghi crm_proposals trong DB
 
@@ -141,6 +141,41 @@ Dịch vụ quản lý khách hàng đa kênh của Solavie — auto-create cont
 3. THE CRM_Service SHALL extract `tenant_id` from the HTTP header `X-Tenant-ID` (or custom JWT claim) and strictly restrict all tool executions within that tenant.
 4. THE CRM_Service SHALL enforce parameter validation against the schema declared by the MCP server for each tool.
 5. THE CRM_Service SHALL return standard JSON-RPC 2.0 responses wrapped in the MCP response format.
+
+### Requirement 10: MCP Solar Calc Full Spec
+
+**User Story:** Là một AI Agent hoặc Sales Agent, tôi muốn có đầy đủ đặc tả chi tiết của Solar Calc tools để thực hiện tính toán ROI chính xác theo các công thức quy định.
+
+#### Acceptance Criteria
+1. THE CRM_Service SHALL hỗ trợ công cụ `calculate_solar_roi` thực hiện tính toán ROI tự động:
+   - Inputs: `monthly_bill` (số, VND), `roof_area_sqm` (số, m2), `location_zone` (chuỗi, enum: 'south', 'central', 'north')
+   - Formula:
+     * `sqm_per_kwp` = 6.5
+     * `peak_sun_hours` = South: 4.25, Central: 3.75, North: 3.25
+     * `system_efficiency` = 0.80
+     * `max_kwp_by_area` = `roof_area_sqm` / `sqm_per_kwp`
+     * `monthly_kwh_needed` = `monthly_bill` / `evn_price_per_kwh` (giả định EVN tier pricing trung bình 2,700 VND/kWh)
+     * `optimal_kwp` = min(`max_kwp_by_area`, `monthly_kwh_needed` / (`peak_sun_hours` * 30 * `system_efficiency`))
+     * `system_size_kwp` = round(`optimal_kwp`, 1)
+     * `panel_quantity` = ceil(`system_size_kwp` / 0.4) (tấm pin 400Wp)
+     * `estimated_kwh_month` = `system_size_kwp` * `peak_sun_hours` * 30 * `system_efficiency`
+     * `monthly_savings_vnd` = `estimated_kwh_month` * `evn_price_per_kwh`
+     * `savings_percentage` = (`monthly_savings_vnd` / `monthly_bill`) * 100
+     * `total_investment` = `system_size_kwp` * `unit_price_per_kwp` (15,000,000 VND/kWp)
+     * `payback_years` = `total_investment` / (`monthly_savings_vnd` * 12)
+   - Outputs: roi_summary chứa đầy đủ các chỉ số tính toán trên.
+2. THE CRM_Service SHALL hỗ trợ công cụ `get_proposal_preview` để truy xuất liên kết và tóm tắt đề xuất đã tạo:
+   - Inputs: `deal_id` (UUID)
+   - Outputs: `{ pdf_url, roi_summary }`.
+
+### Requirement 11: Semantic Cache Integration
+
+**User Story:** Là một hệ thống, tôi muốn CRM Service hỗ trợ AI Core tích hợp Semantic Cache để tối ưu chi phí hội thoại và giảm độ trễ phản hồi cho các yêu cầu nghiệp vụ tương đương.
+
+#### Acceptance Criteria
+1. THE CRM_Service SHALL hỗ trợ thiết lập và truy vấn dữ liệu ngữ nghĩa trên cache Redis Stack (DB 0) kết hợp khoảng cách Cosine.
+2. THE CRM_Service SHALL đảm bảo tính cô lập dữ liệu tuyệt đối giữa các tenant trong cache (tenant isolation) thông qua metadata filter `tenant_id` trong mọi truy vấn `FT.SEARCH`.
+3. THE CRM_Service SHALL hỗ trợ thời gian sống của tài liệu cache (TTL) mặc định là 86,400 giây (24 giờ).
 
 ---
 

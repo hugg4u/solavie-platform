@@ -85,8 +85,12 @@ This document tracks the implementation checklist for **CRM Service** based on t
 - [ ] AC 7.2: THE CRM_Service SHALL áp dụng công thức chuẩn: 1 kWp ≈ 6-7m² diện tích mái; giờ nắng miền Nam 4.0-4.5h/ngày; bảng giá điện EVN hiện hành
 - [ ] AC 7.3: THE CRM_Service SHALL hỗ trợ kết nối API bên thứ ba (HelioScope/OpenSolar) qua AI Core để lấy sơ đồ thiết kế 3D và sản lượng bức xạ chính xác theo vị trí GPS
 - [ ] AC 7.4: WHEN Agent nhấn "Xuất báo giá", THE CRM_Service SHALL tự động biên soạn Proposal PDF gồm: thông tin khách hàng, thông số kỹ thuật mái, kết quả tính toán ROI, ảnh hiện trường
+  - [ ] AC 7.4a: Cấu hình cài đặt Puppeteer và Chromium Headless trong môi trường Docker
+  - [ ] AC 7.4b: Tạo mẫu báo cáo HTML (Handlebars template) hiển thị logo, thông tin khách hàng, ROI table, ảnh hiện trường
+  - [ ] AC 7.4c: Thực hiện render HTML sang PDF buffer, upload lên DMS (Private) và tạo Presigned URL TTL 15 phút
 - [ ] AC 7.5: THE CRM_Service SHALL lưu Proposal PDF vào DMS dạng Private và tạo Presigned URL TTL 15 phút để Agent gửi cho khách qua Zalo/Facebook
 - [ ] AC 7.6: THE CRM_Service SHALL liên kết dms_file_id của Proposal PDF với bản ghi crm_proposals trong DB
+
 
 ### Task 8: 8: O&M Ticketing — Bảo trì & Vận hành sau bán hàng
 > *User Story: Là một Agent, tôi muốn tạo và quản lý phiếu hỗ trợ kỹ thuật khi khách hàng báo lỗi hệ thống Solar.*
@@ -146,11 +150,12 @@ This document tracks the implementation checklist for **CRM Service** based on t
 - [ ] Thực thi ghi nhận Prometheus metrics: `crm_mcp_tool_executions_total` và `crm_mcp_security_violations_total`.
 - [ ] Viết unit tests kiểm tra việc chặn truy cập trái phép khi gửi lệch `tenant_id` trong tool call.
 
----
+### Task 11: Service Discovery Registry Integration (MỚI)
+- [ ] AC 11.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 11.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động (`OnModuleInit` -> SADD + SETEX 15s, start heartbeat) và tắt (`OnApplicationShutdown` -> SREM + DEL) của ứng dụng (NestJS).
+- [ ] AC 11.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
 
-## Service Discovery Client Integration (MỚI)
+### Task 12: Proposal PDF via MCP (MỚI)
+- [ ] AC 12.1: Triển khai `get_proposal_preview` tool trên Solar Calc MCP Server trả về `{ pdf_url, roi_summary }` với PDF Presigned URL từ DMS.
+- [ ] AC 12.2: Tích hợp logic JWT validation & tenant cross-check trên tool call `get_proposal_preview`.
 
-### Task 21: Service Discovery Client Integration
-- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
-- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (NestJS).
-- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.

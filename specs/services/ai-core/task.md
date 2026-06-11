@@ -201,11 +201,15 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 
 ---
 
-## Future Phase 2 Task Checklist
-
-### Task 13: Semantic Caching Implementation
-- [x] AC 11.1: Tích hợp Redis Stack và cài đặt module RediSearch vector index trong code
-- [x] AC 11.2: Triển khai kiểm tra tương đồng ngữ nghĩa câu hỏi trước khi gọi LLM/KB Search
+### Task 13: Semantic Caching Implementation (MỚI - Giai đoạn 2 & 3)
+- [ ] **13.1**: requirements.txt thêm fastembed>=0.3.0
+- [ ] **13.2**: core/config.py thêm REDIS_STACK_URL, SEMANTIC_CACHE_THRESHOLD=0.92, SEMANTIC_CACHE_TTL=86400
+- [ ] **13.3**: gateway/semantic_cache.py tạo SemanticCacheManager:
+  - Thiết kế Vector Schema `idx:semantic_cache` trên Redis Stack (TAG tenant_id, TAG use_case, TEXT question, TEXT response, VECTOR vector HNSW 384 Cosine).
+  - Tích hợp FastEmbed `multilingual-e5-small` tại cục bộ để sinh vector 384 chiều của câu hỏi.
+- [ ] **13.4**: gateway/router.py integrate cache vào complete() (tìm kiếm vector KNN với cosine similarity >= 0.92, tenant-isolated)
+- [ ] **13.5**: core/metrics.py thêm cache hit/miss metrics (ai_core_semantic_cache_hits_total, ai_core_semantic_cache_misses_total)
+- [ ] **13.6**: Viết pytest cho semantic cache (lookup hit, lookup miss, tenant isolation, async write)
 
 ### Task 14: Structured Outputs Integration
 - [x] AC 12.1: Định nghĩa JSON schema và tích hợp `response_format` trong LiteLLM completion calls
@@ -279,4 +283,29 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 20.3: Tích hợp `ServiceRegistryClient` vào FastAPI lifespan startup/shutdown event handlers.
 - [x] AC 20.4: Viết unit tests kiểm thử với mock Redis kiểm chứng luồng hoạt động đăng ký/heartbeat/deregister của client.
 
+### Task 21: Integration of CRM, Solar Calc, and O&M MCP Tools (MỚI - Giai đoạn 2)
+- [ ] **21.1**: Cập nhật `ALL_TOOLS` trong `services/ai-core/tools/registry.py` để bổ sung JSON Schema cho các tool mới:
+  - `calculate_solar_roi`
+  - `get_proposal_preview`
+  - `create_om_ticket`
+  - `get_ticket_status`
+  - `create_lead_deal`
+  - `update_deal_stage`
+- [ ] **21.2**: Cập nhật `mcp_mapping` trong `services/ai-core/tools/executor.py` để trỏ chính xác các tool:
+  - `"calculate_solar_roi"` trỏ sang `"solar_calc__calculate_solar_roi"`
+  - `"get_proposal_preview"` trỏ sang `"solar_calc__get_proposal_preview"`
+  - `"create_om_ticket"` trỏ sang `"om_ticket__create_om_ticket"`
+  - `"get_ticket_status"` trỏ sang `"om_ticket__get_ticket_status"`
+  - `"create_lead_deal"` trỏ sang `"crm__create_lead_deal"`
+  - `"update_deal_stage"` trỏ sang `"crm__update_deal_stage"`
+- [ ] **21.3**: Cập nhật `PERMISSION_MATRIX` trong `services/ai-core/tools/registry.py` để cho phép `chatbot` gọi các tool ROI, Proposal, và O&M Ticket.
+- [ ] **21.4**: Cập nhật `TOOL_PERMISSIONS` trong `services/ai-core/tools/registry.py` để phân quyền RBAC cho các tool mới:
+  - `calculate_solar_roi` -> `crm:deals:read`
+  - `get_proposal_preview` -> `crm:deals:read`
+  - `create_lead_deal` -> `crm:deals:create`
+  - `update_deal_stage` -> `crm:deals:update`
+  - `create_om_ticket` -> `crm:tickets:create`
+  - `get_ticket_status` -> `crm:tickets:read`
+- [ ] **21.5**: Đăng ký Circuit Breakers cho các remote tool mới này trong `TOOL_BREAKERS` tại `services/ai-core/tools/executor.py`.
+- [ ] **21.6**: Viết pytest để kiểm tra độ chính xác của mcp_mapping và thực thi RBAC.
 

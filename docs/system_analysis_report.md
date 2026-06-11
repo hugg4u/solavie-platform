@@ -69,14 +69,18 @@ Sau khi đối chiếu với mô hình vận hành của Solavie, kiến trúc h
 | **TimescaleDB Database** (Lưu trữ metrics & logs time-series) | 1 | 1.5 GB | 1.5 GB |
 | **Qdrant Vector Database** (Chứa và index dữ liệu tri thức) | 1 | 800 MB | 0.8 GB |
 | **Apache Kafka + KRaft** (JVM broker điều phối event-driven) | 1 | 1.5 GB | 1.5 GB |
-| **Redis Cache** (Lưu session, config hot-reload) | 1 | 400 MB | 0.4 GB |
+| **Redis Stack** (RediSearch & Caching) | 1 | 800 MB | 0.8 GB |
 | **MinIO Storage** (S3 compatible server) | 1 | 300 MB | 0.3 GB |
 | **Hệ điều hành & OS agents** (Docker daemon, Logging, Monitoring) | - | 1.6 GB | 1.6 GB |
-| **TỔNG CỘNG TIÊU THỤ (DỰ KIẾN)** | **24 Containers** | - | **≈ 13.0 GB** |
+| **TỔNG CỘNG TIÊU THỤ (DỰ KIẾN)** | **24 Containers** | - | **≈ 13.4 GB** |
 
 *   **Khuyến nghị về RAM**:
     *   **Cấu hình tối thiểu (Minimum)**: **16 GB RAM** (đủ để chạy hệ thống ở mức tải thấp, môi trường staging/dev).
-    *   **Cấu hình khuyến nghị (Recommended)**: **32 GB RAM** (đảm bảo hệ thống vận hành êm ái, có đủ dung lượng buffer khi có traffic spike hoặc khi chạy chiến dịch broadcast tin nhắn hàng loạt).
+    *   **Cấu hình khuyến nghị (Recommended)**: **32 GB RAM** (đảm bảo hệ thống vận hành êm ái, có đủ dung lượng buffer khi có traffic spike hoặc khi chạy chiến dịch công suất cao, và tránh tình trạng Redis Stack bị OOM khi nạp nhiều Vector Index).
+    *   **Thuyết minh tính toán Redis Stack & CRM Service**: 
+        - Dịch vụ `crm-service` dự kiến chạy NestJS tiêu thụ khoảng 200MB RAM ở mức idle/moderate load.
+        - Redis Stack tiêu thụ khoảng 800MB RAM, trong đó 400MB dành cho các cấu trúc cache dữ liệu truyền thống (Session, Config cache) và 400MB dành riêng cho module RediSearch nạp index vector HNSW của Semantic Caching. Công thức ước tính RAM cho vector index: `RAM ≈ Số lượng Vector * (Kích thước Vector * 4 bytes + Overhead cấu trúc HNSW)`. Với vector 384 dimensions của model `multilingual-e5-small` và `M=16`, mỗi bản ghi cache tiêu tốn khoảng 2.5KB RAM cho vector index. Hệ thống có thể mở rộng lưu trữ tới 100,000 cache entries trên RAM mà không vượt quá hạn mức 800MB.
+
 
 ### 3.2. Yêu cầu về CPU (vCPU Cores)
 - **Tối thiểu**: **4 Cores vCPU**.
@@ -140,6 +144,7 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 | **Database chính bị chậm do phình to dữ liệu** | **Cao (Medium)** | Thực thi triệt để Data Retention Policy: logs cũ hơn 30 ngày và tin nhắn cũ hơn 90 ngày bắt buộc phải dọn dẹp sạch khỏi database hoạt động để đưa sang file Parquet trên S3. |
 | **Độ trễ đồng nhất thông tin phân quyền giữa các Kong Workers (W3)** | **Trung bình (Medium)** | Thiết lập cơ chế Cache Versioning trên Redis kết hợp Pub/Sub để phát tín hiệu xóa L1 local cache của từng Worker ngay khi phân quyền thay đổi, giảm trễ xuống < 5s. |
 | **Sập đổ dây chuyền (Cascade Failure) khi Config Service offline (W6)** | **Trung bình (Medium)** | Áp dụng Circuit Breaker cho API Fallback của Gateway, tự động chuyển sang degraded mode (dùng L1 local cache cũ) thay vì trả về 503 Fail-Secure ngay lập tức. |
+| **Mất mát dữ liệu hoặc quá tải RAM trên Redis Stack do RediSearch Index (W7)** | **Cao (Medium)** | Thiết lập cấu hình giới hạn kích thước memory tối đa cho index vector và sử dụng thuật toán HNSW với parameters phù hợp (M=16, ef_construction=200) để cân bằng giữa RAM tiêu thụ và độ chính xác search. |
 
 ---
 

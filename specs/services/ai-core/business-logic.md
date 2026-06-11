@@ -296,6 +296,60 @@ PROCESSING_TOOLS = [
         "required_permission": "crm:update",
     },
 ]
+
+### Category 5: Solar & O&M Custom MCP Tools (MỚI)
+
+Các công cụ được cung cấp động từ Custom MCP Servers tại `CRM Service` thông qua kết nối SSE:
+
+```python
+SOLAR_OM_MCP_TOOLS = [
+    {
+        "name": "solar_calc__calculate_solar_roi",
+        "description": "Calculate solar panel system capacity, monthly generation kWh, financial savings, and ROI payback period based on location, roof area, and electricity bill.",
+        "parameters": {
+            "tenant_id": "string",
+            "monthly_bill_vnd": "number - average monthly electricity bill in VND",
+            "roof_area_sqm": "number - available roof area in square meters",
+            "location_zone": "string - 'North', 'Central', 'South'",
+            "roof_type": "string - 'concrete', 'tile', 'metal_sheet'",
+        },
+        "service": "crm",
+        "required_permission": "crm:proposals:create",
+    },
+    {
+        "name": "solar_calc__get_proposal_preview",
+        "description": "Retrieve summary details and link of a previously generated solar proposal.",
+        "parameters": {
+            "tenant_id": "string",
+            "proposal_id": "string"
+        },
+        "service": "crm",
+        "required_permission": "crm:proposals:read",
+    },
+    {
+        "name": "om_ticket__create_om_ticket",
+        "description": "Create an Operations and Maintenance (O&M) ticket for device failure or solar system maintenance.",
+        "parameters": {
+            "tenant_id": "string",
+            "contact_id": "string - customer contact ID",
+            "title": "string - issue summary",
+            "description": "string - detailed issue description",
+            "priority": "string - 'low', 'medium', 'high', 'critical'"
+        },
+        "service": "crm",
+        "required_permission": "crm:tickets:create",
+    },
+    {
+        "name": "om_ticket__get_ticket_status",
+        "description": "Retrieve the current status, assigned technician, and logs of an O&M ticket.",
+        "parameters": {
+            "tenant_id": "string",
+            "ticket_id": "string"
+        },
+        "service": "crm",
+        "required_permission": "crm:tickets:read",
+    }
+]
 ```
 
 ---
@@ -569,6 +623,17 @@ class ToolExecutor:
         for r in data.get("results", [])[:max_results]:
             results.append(f"- {r['title']}: {r['content'][:200]}")
         return "\n".join(results)
+
+### 3. MCP Tool Mappings
+
+Hệ thống sử dụng cấu hình ánh xạ `mcp_mapping` để tự động định tuyến các tool gọi từ chatbot tới các Custom MCP Server nội bộ tương ứng thông qua tool execution:
+*   `"calculate_solar_roi"` trỏ sang `"solar_calc__calculate_solar_roi"`
+*   `"get_proposal_preview"` trỏ sang `"solar_calc__get_proposal_preview"`
+*   `"create_om_ticket"` trỏ sang `"om_ticket__create_om_ticket"`
+*   `"get_ticket_status"` trỏ sang `"om_ticket__get_ticket_status"`
+*   `"create_lead_deal"` trỏ sang `"crm__create_lead_deal"`
+*   `"update_deal_stage"` trỏ sang `"crm__update_deal_stage"`
+
 ```
 
 ---
@@ -721,24 +786,44 @@ Agent nhận error → tự quyết định: skip tool đó và trả lời vớ
 
 ## Luồng xử lý theo Use Case
 
-### Use Case: Chatbot (ReAct Agent)
+### Use Case: Chatbot (ReAct Agent) with Semantic Cache
 
-```
-Customer: "Sản phẩm A có mấy màu và giá bao nhiêu?"
+#### Luồng hoạt động:
+1. Nhận tin nhắn từ khách hàng: *"Sản phẩm A giá bao nhiêu và có những màu nào?"*
+2. Hệ thống gọi local FastEmbed `multilingual-e5-small` tạo vector embeddings 384 chiều của tin nhắn (< 20ms).
+3. Thực hiện truy vấn Vector Search KNN trên Redis Stack DB 0.
+4. **Trường hợp Cache Hit (similarity >= 0.92):**
+   - Lập tức lấy câu trả lời lưu trong Redis cache và trả về trực tiếp cho khách hàng.
+   - Bỏ qua hoàn toàn LangGraph Agent, gRPC, và các cuộc gọi LLM API.
+   - Thời gian xử lý cực nhanh: < 10ms.
+5. **Trường hợp Cache Miss (similarity < 0.92):**
+   - Chuyển tiếp request vào đồ thị LangGraph Agent thực thi ReAct loop bình thường:
+     - **Iteration 1:**
+       - Thought: "Cần tìm thông tin sản phẩm A trong knowledge base"
+       - Action: `knowledge_base_search(query="sản phẩm A giá màu sắc", tenant_id="abc")`
+       - Observation: "Sản phẩm A: giá 500k, có 3 màu: đỏ, xanh, trắng."
+     - **Iteration 2:**
+       - Thought: "Đã có đủ thông tin để trả lời"
+       - Final Answer: "Sản phẩm A có 3 màu (đỏ, xanh, trắng) và giá 500.000đ ạ."
+       - Confidence: 0.94
+   - Sau khi trả về câu trả lời cho user, hệ thống kích hoạt Background Task để lưu câu hỏi và câu trả lời kèm vector embeddings vào Redis Stack cache (TTL 24h).
 
-Agent Loop:
-  Iteration 1:
-    Thought: "Cần tìm thông tin sản phẩm A trong knowledge base"
-    Action: knowledge_base_search(query="sản phẩm A màu giá", tenant_id="abc")
-    Observation: "Sản phẩm A: giá 500k, có 3 màu: đỏ, xanh, trắng. Size S/M/L."
-  
-  Iteration 2:
-    Thought: "Đã có đủ thông tin để trả lời"
-    Final Answer: "Sản phẩm A có 3 màu (đỏ, xanh, trắng) và giá 500.000đ ạ."
-    Confidence: 0.92
+Total: 2 iterations, 1 tool call (nếu cache miss) hoặc 0 iterations, 0 tool calls (nếu cache hit)
 
-Total: 2 iterations, 1 tool call
-```
+#### Thuật toán chi tiết Semantic Cache:
+1. **Trích xuất câu hỏi**: Lấy nội dung câu hỏi (hoặc tin nhắn mới nhất) từ `messages[-1]`.
+2. **Sinh Vector**: Gọi FastEmbed `multilingual-e5-small` sinh embedding 384 dimensions của câu hỏi tại máy chủ cục bộ.
+3. **Tìm kiếm Vector KNN**: Thực hiện truy vấn trên Redis Stack DB 0 sử dụng `FT.SEARCH` với bộ lọc:
+   `(@tenant_id:{tenant_id} @use_case:chatbot) => [KNN 1 @vector $query_vec AS score]`
+4. **So khớp Ngưỡng (Threshold Check)**:
+   - Tính toán `similarity = 1.0 - score` (với score là Cosine Distance trả về từ Redis).
+   - Nếu `similarity >= 0.92` -> **Cache Hit**: Trả về `response` ngay lập tức, ghi nhận Prometheus metric và trả kết quả.
+   - Nếu `similarity < 0.92` -> **Cache Miss**: Tiếp tục chạy ReAct Agent bình thường.
+5. **Ghi Cache Bất đồng bộ (Async Write-Through)**:
+   - Khi Agent sinh câu trả lời thành công từ LLM, kích hoạt FastAPI `BackgroundTasks` hoặc Celery task.
+   - Tạo MD5 hash của câu hỏi để làm khóa phụ: `hash_val = md5(question)`.
+   - Lưu Hash vào Redis với key `semantic_cache:{tenant_id}:{hash_val}` gồm các trường: `tenant_id`, `use_case`, `question`, `response`, và `vector` (nhị phân).
+   - Thiết lập TTL 86400 giây (24 giờ).
 
 ### Use Case: Content Generation (ReAct Agent)
 

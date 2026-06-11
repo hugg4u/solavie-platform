@@ -188,6 +188,42 @@ class DuplicateDetector {
 }
 ```
 
+### Luồng 4: Proposal PDF Generation (8 bước chuẩn)
+
+Quy trình tự động tạo đề xuất báo giá (Proposal PDF) và cung cấp liên kết truy xuất tạm thời:
+1. **Thu thập dữ liệu đầu vào:** Hệ thống tiếp nhận hóa đơn tiền điện trung bình (`monthly_bill`), diện tích mái khả dụng từ bản vẽ khảo sát (`roof_area_sqm`) và khu vực lắp đặt (`location_zone`).
+2. **Tính toán ROI & Thông số:**
+   * Tính công suất tối đa theo diện tích mái: `max_kwp_by_area = roof_area_sqm / 6.5`
+   * Tính điện năng tiêu thụ hàng tháng mong muốn: `monthly_kwh_needed = monthly_bill / 2700` (sử dụng đơn giá EVN trung bình 2,700 VND/kWh)
+   * Phân giải giờ nắng đỉnh (`peak_sun_hours`) theo vùng:
+     * `south`: 4.25 giờ/ngày
+     * `central`: 3.75 giờ/ngày
+     * `north`: 3.25 giờ/ngày
+   * Công suất hệ thống đề xuất: `optimal_kwp = min(max_kwp_by_area, monthly_kwh_needed / (peak_sun_hours * 30 * 0.80))`
+   * Làm tròn công suất: `system_size_kwp = round(optimal_kwp, 1)`
+   * Số lượng pin (400Wp/tấm): `panel_quantity = ceil(system_size_kwp / 0.4)`
+   * Sản lượng điện hàng tháng ước tính: `estimated_kwh_month = system_size_kwp * peak_sun_hours * 30 * 0.80`
+   * Số tiền tiết kiệm hàng tháng: `monthly_savings_vnd = estimated_kwh_month * 2700`
+   * Tỷ lệ tiết kiệm: `savings_percentage = (monthly_savings_vnd / monthly_bill) * 100`
+   * Tổng mức đầu tư: `total_investment = system_size_kwp * 15000000` (giá vật tư/thi công 15,000,000 VND/kWp)
+   * Thời gian hoàn vốn: `payback_years = total_investment / (monthly_savings_vnd * 12)`
+3. **Biên soạn HTML Template:** Sử dụng thư viện `Handlebars` kết hợp template HTML của tenant (`proposal-template.hbs`), ghép các biến dữ liệu khách hàng, các kết quả tính toán tài chính ROI ở trên và danh sách ảnh khảo sát mái.
+4. **Sinh tệp PDF bằng Puppeteer:** Khởi chạy Chromium Headless (`puppeteer.launch`), nạp trang HTML đã biên soạn và xuất ra bộ đệm PDF (`page.pdf()`).
+5. **Tải lên DMS Service:** Gửi tệp PDF dưới dạng buffer lên DMS Service qua API nội bộ, lưu trữ dưới dạng tệp `Private` tại thư mục của tenant trên MinIO.
+6. **Lưu thông tin đề xuất:** Lưu `dms_file_id` (UUID nhận về từ DMS) và các thông số tính toán vào bảng `crm_proposals` trong `crm_db`.
+7. **Tạo Presigned URL:** Gọi DMS API tạo liên kết tải tạm thời (Presigned URL) cho tệp vừa tải lên với TTL là 900 giây (15 phút).
+8. **Trả về kết quả:** Phản hồi JSON dạng `{ pdf_url, roi_summary }` chứa liên kết tải và tóm tắt ROI cho Agent/AI Core.
+
+### Luồng 5: O&M Ticket MCP Full Flow
+
+Quy trình tiếp nhận và điều phối sự cố O&M thông qua giao thức MCP:
+1. **Tiếp nhận yêu cầu:** AI Core nhận dạng sự cố thiết bị từ đoạn chat của khách hàng, trích xuất `contact_id`, `title` (Tóm tắt sự cố), `description` (Mô tả chi tiết) và gọi tool `create_om_ticket` của MCP Server `om_ticket`.
+2. **Xác thực và tạo Ticket:** CRM Service kiểm tra tính hợp lệ của token/quyền và so khớp chéo `tenant_id` từ request. Nếu hợp lệ, chèn bản ghi Ticket mới vào bảng `crm_tickets` ở trạng thái `open`.
+3. **Phát sự kiện lên Kafka:** CRM Service publish event `crm.ticket.created` lên Kafka topic `crm.ticket.events` chứa payload chi tiết: `{ ticket_id, tenant_id, contact_id, priority, title }`.
+4. **Phân phối / Gán kỹ thuật viên:** Trưởng bộ phận thông qua Dashboard CRM tiến hành phân công Kỹ thuật viên bảo trì phụ trách Ticket (chuyển trạng thái sang `assigned`). Notification Service lắng nghe event, tự động push notification cảnh báo nhiệm vụ đến mobile app của Kỹ thuật viên.
+5. **Kỹ thuật viên cập nhật & Đóng Ticket:** Kỹ thuật viên tiến hành xử lý, upload ảnh nghiệm thu lên DMS và cập nhật `resolution_notes`, đóng ticket (`closed`).
+6. **Tự động gửi CSAT Survey:** Khi Ticket cập nhật trạng thái thành `closed`, CRM Service phát event `crm.ticket.closed`. Messaging Service bắt sự kiện này và tự động gửi tin nhắn cảm ơn kèm đường link khảo sát CSAT (hiệu lực 72 giờ) qua Zalo OA/Facebook Page gốc cho khách hàng.
+
 ---
 
 ## Audit Logging
