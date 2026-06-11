@@ -5,20 +5,24 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 # Create async Redis client
-try:
-    # Redis Cluster does not support database index, strip it if present in URL
-    # e.g. redis://redis:6379/1 -> redis://redis:6379
-    url = settings.REDIS_URL
-    if "/" in url.replace("://", ""):
-        parts = url.rsplit("/", 1)
-        if parts[1].isdigit():
-            url = parts[0]
-            
-    from redis.asyncio.cluster import RedisCluster
-    redis_client = RedisCluster.from_url(url, decode_responses=True)
-except Exception as e:
-    logger.warning(f"Failed to initialize Redis Cluster: {e}. Falling back to Standalone Redis client.")
-    redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+url = settings.REDIS_URL
+if "localhost" in url or "127.0.0.1" in url:
+    logger.info("Local/Host environment detected. Using Standalone Redis client.")
+    redis_client = aioredis.from_url(url, decode_responses=True)
+else:
+    try:
+        # Redis Cluster does not support database index, strip it if present in URL
+        # e.g. redis://redis:6379/1 -> redis://redis:6379
+        if "/" in url.replace("://", ""):
+            parts = url.rsplit("/", 1)
+            if parts[1].isdigit():
+                url = parts[0]
+                
+        from redis.asyncio.cluster import RedisCluster
+        redis_client = RedisCluster.from_url(url, decode_responses=True)
+    except Exception as e:
+        logger.warning(f"Failed to initialize Redis Cluster: {e}. Falling back to Standalone Redis client.")
+        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
 
 # Create a standalone Redis client dedicated for PubSub, as async RedisCluster lacks pubsub support
 redis_pubsub_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)

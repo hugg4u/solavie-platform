@@ -1,7 +1,13 @@
 import pytest
 import asyncio
+from unittest.mock import AsyncMock
+
+# Globally mock redis clients to prevent network requests during tests
+import core.redis_client
+core.redis_client.redis_client = AsyncMock()
+core.redis_client.redis_pubsub_client = AsyncMock()
+
 from db.database import engine
-from core.redis_client import redis_client
 
 @pytest.fixture(scope="function", autouse=True)
 def cleanup_connections():
@@ -15,10 +21,8 @@ def cleanup_connections():
             
         if loop.is_running():
             loop.create_task(engine.dispose())
-            loop.create_task(redis_client.aclose())
         else:
             loop.run_until_complete(engine.dispose())
-            loop.run_until_complete(redis_client.aclose())
     except Exception:
         pass
 

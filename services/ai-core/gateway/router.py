@@ -19,6 +19,7 @@ from core.redis_client import redis_client
 from db.database import SessionLocal
 from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig
 from core.utils import is_vietnamese
+from gateway.semantic_cache import SemanticCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ class LLMGateway:
     _cheapest_models_cache = {}
 
     def __init__(self):
+        self.semantic_cache = SemanticCacheManager()
         litellm.telemetry = False
         # AC FIX-1B: Enable automatic message sanitization for all providers.
         # LiteLLM will auto-repair invalid turn ordering (e.g., consecutive assistant messages,
@@ -700,6 +702,43 @@ class LLMGateway:
         response_format: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Sends chat completion using routing and failover with optional tool support and pybreaker."""
+        start_time = time.time()
+        
+        # Check Semantic Cache first
+        cached_response = None
+        similarity_score = 0.0
+        question = None
+        if use_case == "chatbot" and messages:
+            last_msg = messages[-1]
+            if isinstance(last_msg, dict) and last_msg.get("role") == "user" and isinstance(last_msg.get("content"), str):
+                question = last_msg.get("content")
+                if question:
+                    cached_response, similarity_score = await self.semantic_cache.lookup(tenant_id, use_case, question)
+                    
+        if cached_response is not None:
+            from core.metrics import ai_core_semantic_cache_hits_total
+            ai_core_semantic_cache_hits_total.inc()
+            
+            return {
+                "content": cached_response,
+                "tool_calls": None,
+                "model_used": "semantic-cache",
+                "provider": "redis-stack",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_usd": 0.0,
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "cache_hit": True,
+                "is_fallback": False,
+                "reasoning_content": None,
+                "citations": []
+            }
+
+        # Cache Miss: Increment Prometheus miss metric
+        if use_case == "chatbot" and question:
+            from core.metrics import ai_core_semantic_cache_misses_total
+            ai_core_semantic_cache_misses_total.inc()
+
         route = await self.get_routing(tenant_id, use_case)
         model = model_override or route["primary_model"]
         fallback_model = route["fallback_model"]
@@ -871,6 +910,10 @@ class LLMGateway:
                     }
                 }
                 tool_calls_list.append(tc_dict)
+        
+        # Write to semantic cache asynchronously on cache miss
+        if use_case == "chatbot" and not tool_calls and question and content:
+            asyncio.create_task(self.semantic_cache.write_async(tenant_id, use_case, question, content))
         
         return {
             "content": content,

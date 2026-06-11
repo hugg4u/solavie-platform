@@ -230,14 +230,30 @@ services:
       redis-master-1:
         condition: service_healthy
 
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: solavie-redis-stack
+    ports:
+      - "6399:6379"
+    volumes:
+      - redis_stack_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
   ai-core:
     build:
       context: ./services/ai-core
       dockerfile: Dockerfile
+    ports:
+      - "8009:8000"
     environment:
       - ENVIRONMENT=development
       - AI_CORE_DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres-db:5432/postgres
       - REDIS_URL=redis://redis-master-1:6379
+      - REDIS_STACK_URL=redis://redis-stack:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
@@ -250,6 +266,8 @@ services:
       postgres-db:
         condition: service_healthy
       redis-master-1:
+        condition: service_healthy
+      redis-stack:
         condition: service_healthy
 
   user-service:
@@ -336,4 +354,5 @@ volumes:
   redis_replica_1_data:
   redis_replica_2_data:
   redis_replica_3_data:
+  redis_stack_data:
   kong_config:

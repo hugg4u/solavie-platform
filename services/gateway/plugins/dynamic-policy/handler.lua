@@ -292,7 +292,7 @@ function DynamicPolicyHandler:access(conf)
       local origin = kong.request.get_header("Origin") or "*"
       kong.response.set_header("Access-Control-Allow-Origin", origin)
       kong.response.set_header("Access-Control-Allow-Credentials", "true")
-      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-Permissions, X-Permissions-Signature")
+      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-ID, X-User-Permissions, X-Permissions-Signature")
       kong.response.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
       return kong.response.exit(204)
   end
@@ -592,7 +592,7 @@ function DynamicPolicyHandler:access(conf)
       
       kong.response.set_header("Access-Control-Allow-Origin", origin)
       kong.response.set_header("Access-Control-Allow-Credentials", "true")
-      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-Permissions, X-Permissions-Signature")
+      kong.response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-ID, X-User-ID, X-User-Permissions, X-Permissions-Signature")
       kong.response.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
       
       local method = kong.request.get_method()
