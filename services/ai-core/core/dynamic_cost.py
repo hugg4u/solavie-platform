@@ -14,7 +14,8 @@ from core.redis_client import redis_client
 logger = logging.getLogger("solavie.ai_core.dynamic_cost")
 
 LITELLM_PRICING_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-CACHE_FILE_PATH = "storage/model_prices_cache.json"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_FILE_PATH = os.path.join(BASE_DIR, "storage", "model_prices_cache.json")
 
 # Fallback hardcoded defaults if LiteLLM registry lookup fails completely (all 12 providers mapped)
 from core.providers import PROVIDERS_REGISTRY, USE_CASE_PARAMS

@@ -41,8 +41,10 @@ DEFAULT_MODEL_ROUTING = {}
 def init_default_model_routing():
     global DEFAULT_MODEL_ROUTING
     
-    # Try to load local cache file on module load to populate LiteLLM registry immediately
-    CACHE_FILE_PATH = "storage/model_prices_cache.json"
+    # Resolve absolute path relative to this file to keep the service isolated
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    CACHE_FILE_PATH = os.path.join(BASE_DIR, "storage", "model_prices_cache.json")
+    
     if os.path.exists(CACHE_FILE_PATH):
         try:
             with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:
