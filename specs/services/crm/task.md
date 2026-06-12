@@ -159,3 +159,13 @@ This document tracks the implementation checklist for **CRM Service** based on t
 - [ ] AC 12.1: Triển khai `get_proposal_preview` tool trên Solar Calc MCP Server trả về `{ pdf_url, roi_summary }` với PDF Presigned URL từ DMS.
 - [ ] AC 12.2: Tích hợp logic JWT validation & tenant cross-check trên tool call `get_proposal_preview`.
 
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

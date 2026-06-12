@@ -102,3 +102,14 @@ Dịch vụ xác thực và phân quyền tập trung — Keycloak. OAuth2/OIDC 
 1. THE AUTH_Service SHALL cung cấp API manifest tại `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên (resources) và hành động (actions) được hỗ trợ.
 2. THE AUTH_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
 3. THE AUTH_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `auth:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `auth:*` (Toàn quyền trên service), và `auth:{resource}:*` (Toàn quyền trên tài nguyên).
+
+
+---
+
+## Service Discovery (Self-Registration) & Health Endpoint (Tối ưu hóa)
+1. THE Service SHALL tự phát hiện IP card mạng nội bộ khi khởi chạy theo độ ưu tiên: Biến môi trường `CONTAINER_IP` > Quét các interface card mạng vật lý của OS > Fallback kết nối UDP fake đến `8.8.8.8`.
+2. THE Service SHALL tự động đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:auth` khi startup.
+3. THE Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:auth:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Service SHALL tự động xóa IP của mình trên Redis Set và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
+5. THE Service SHALL cung cấp API endpoint `/health` (hoặc `/healthz`) trả về HTTP 200 OK để phục vụ Active Healthcheck của API Gateway.
+6. THE Service SHALL tích hợp cơ chế Fail-Safe: Registry client không crash ứng dụng nếu Redis tạm thời mất kết nối khi khởi chạy.

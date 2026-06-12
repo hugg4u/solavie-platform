@@ -99,3 +99,14 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 1. THE Gateway SHALL định tuyến tất cả các request tới các microservices nghiệp vụ nội bộ thông qua các đối tượng Upstream ảo thay vì hostname/port tĩnh.
 2. THE Gateway Sync Daemon SHALL quét định kỳ danh sách IP:Port từ các Redis Sets của từng dịch vụ hoạt động để cập nhật danh sách targets của Upstream tương ứng trong cấu hình Kong.
 3. THE Gateway Sync Daemon SHALL tự động thực hiện reload cấu hình qua API `/config` của Kong nếu phát hiện sự thay đổi targets.
+
+
+---
+
+## Service Discovery (Self-Registration) & Health Endpoint (Tối ưu hóa)
+1. THE Service SHALL tự phát hiện IP card mạng nội bộ khi khởi chạy theo độ ưu tiên: Biến môi trường `CONTAINER_IP` > Quét các interface card mạng vật lý của OS > Fallback kết nối UDP fake đến `8.8.8.8`.
+2. THE Service SHALL tự động đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:gateway` khi startup.
+3. THE Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:gateway:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Service SHALL tự động xóa IP của mình trên Redis Set và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
+5. THE Service SHALL cung cấp API endpoint `/health` (hoặc `/healthz`) trả về HTTP 200 OK để phục vụ Active Healthcheck của API Gateway.
+6. THE Service SHALL tích hợp cơ chế Fail-Safe: Registry client không crash ứng dụng nếu Redis tạm thời mất kết nối khi khởi chạy.

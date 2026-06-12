@@ -213,3 +213,13 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] AC 11.3: Kiểm tra tính đúng đắn của việc tự động tiêm (inject) các headers bảo mật (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) và kiểm duyệt chữ ký HMAC trên luồng SSE.
 - [x] AC 11.4: Xác minh header `X-Accel-Buffering: no` được bảo toàn nguyên vẹn khi đi qua Gateway.
 - [x] AC 11.5: Xác minh Gateway từ chối kết nối MCP SSE với HTTP 401/403 nếu thiếu token hoặc token không hợp lệ.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

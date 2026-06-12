@@ -324,3 +324,13 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [ ] AC 22.7: Viết unit tests kiểm tra lỗi kết nối Redis, cache miss background sync và kiểm tra in-memory cache hits trong `test_rbac_and_metrics.py`.
 
 
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

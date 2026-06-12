@@ -132,11 +132,22 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 
 ---
 
+### Đề xuất 4: Tối ưu hóa Service Discovery & API Gateway
+
+Để chuẩn bị cho hệ thống vận hành an toàn và tin cậy ở môi trường Product (scale multi-instance), hệ thống Solavie đã thiết lập lộ trình tối ưu hóa API Gateway và cơ chế phát hiện dịch vụ tự động:
+1.  **Kong Gateway chạy ở chế độ DB-Mode:** Loại bỏ chế độ DB-less để tránh việc phải liên tục reload file YAML tĩnh gây nghẽn CPU và gián đoạn kết nối. Các cập nhật targets của Upstream sẽ được ghi nhận trực tiếp vào Database và có hiệu lực tức thời thông qua REST Admin API.
+2.  **Kong Native Healthchecks:** Cấu hình Active và Passive Healthchecks trực tiếp trên các Upstream của Kong. Thiết lập cơ chế tự động cô lập (Circuit Breaker) các node lỗi ngay lập tức mà không cần chờ daemon đồng bộ cập nhật.
+3.  **Sync Daemon Bất đồng bộ (Async):** Viết lại daemon đồng bộ `sync_registry.py` sử dụng cơ chế `asyncio` để truy vấn Redis và cập nhật targets song song, tối ưu hóa I/O khi hệ thống scale lên hàng trăm instances.
+4.  **Cải tiến thuật toán lấy IP:** Cập nhật Registry Client ở các microservices để ưu tiên nhận diện IP động từ biến môi trường `CONTAINER_IP` hoặc quét card mạng vật lý của OS trước khi thực hiện fallback kết nối ngoài (UDP 8.8.8.8), đảm bảo hoạt động tốt trong mạng kín.
+
+---
+
 
 ## 4. MA TRẬN PHÂN TÍCH RỦI RO KIẾN TRÚC TRONG THỰC TẾ
 
 | Rủi ro kiến trúc | Tác động | Giải pháp phòng ngừa & Tối ưu |
 |------------------|----------|-------------------------------|
+| **Trễ nhịp đồng bộ của Service Discovery tự chế khiến request lỗi (W8)** | **Nghiêm trọng (High)** | Kích hoạt Active/Passive Healthcheck và cơ chế `retries` (tối thiểu 5 lần) trực tiếp trên Upstream của Kong để Gateway tự động ngắt node lỗi và định tuyến lại request tức thời mà không gây lỗi cho Client. |
 | **Tấn công Leo thang Đặc quyền (Privilege Escalation) do thiếu check Realm Master (W1)** | **Nghiêm trọng (Critical)** | Cấu hình `KONG_MASTER_REALM_TENANT_ID` và cập nhật `handler.lua` kiểm tra nghiêm ngặt `tenant_id` của Master Realm trước khi cấp quyền wildcard `*` cho các role `system`/`system_admin`. (Đã triển khai vá lỗi ở Gateway). |
 | **Nghẽn cổng IO do tệp tin video nặng** | **Cao (Medium)** | Media Processor giới hạn tệp video khảo sát tối đa 100MB. Cấu hình luồng ghi đệm SSD thay vì ghi RAM để tránh crash container do OOM. |
 | **Keycloak sập hiệu năng khi số lượng Realms tăng vượt quá 100 (W5)** | **Nghiêm trọng (High)** | Lập kế hoạch di trú kiến trúc từ Multi-realm sang Keycloak Organizations (v26+) khi số tenant vượt ngưỡng 100 để gom về 1 realm chia sẻ clients, cô lập theo org_id. |

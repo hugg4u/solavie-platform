@@ -111,3 +111,13 @@ This document tracks the implementation checklist for **SCHEDULER Service** base
 - [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
 - [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (Spring Boot).
 - [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

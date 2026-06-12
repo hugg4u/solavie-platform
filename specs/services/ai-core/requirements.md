@@ -201,3 +201,14 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 
 
 
+
+
+---
+
+## Service Discovery (Self-Registration) & Health Endpoint (Tối ưu hóa)
+1. THE Service SHALL tự phát hiện IP card mạng nội bộ khi khởi chạy theo độ ưu tiên: Biến môi trường `CONTAINER_IP` > Quét các interface card mạng vật lý của OS > Fallback kết nối UDP fake đến `8.8.8.8`.
+2. THE Service SHALL tự động đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:ai-core` khi startup.
+3. THE Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:ai-core:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Service SHALL tự động xóa IP của mình trên Redis Set và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
+5. THE Service SHALL cung cấp API endpoint `/health` (hoặc `/healthz`) trả về HTTP 200 OK để phục vụ Active Healthcheck của API Gateway.
+6. THE Service SHALL tích hợp cơ chế Fail-Safe: Registry client không crash ứng dụng nếu Redis tạm thời mất kết nối khi khởi chạy.

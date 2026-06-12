@@ -405,3 +405,16 @@ Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request t
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `observability`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

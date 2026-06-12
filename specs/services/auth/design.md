@@ -454,3 +454,16 @@ Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request t
 3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
 4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `auth:roles:read`).
    - Hỗ trợ wildcard: `*` (Super Admin bypass), `auth:*` (Service bypass), và `auth:roles:*` (Resource bypass).
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

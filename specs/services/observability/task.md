@@ -99,3 +99,13 @@ This document tracks the implementation checklist for **OBSERVABILITY Service** 
 - [ ] AC 6.2: THE Observability_Service SHALL lưu trữ các sự kiện kiểm toán này vào cơ sở dữ liệu chuyên biệt (ClickHouse hoặc Elasticsearch).
 - [ ] AC 6.3: THE Observability_Service SHALL áp dụng cơ chế idempotent và commit thủ công (`enable.auto.commit = false`) để tránh ghi lặp sự kiện.
 - [ ] AC 6.4: THE Observability_Service SHALL hỗ trợ API truy vấn logs kiểm toán phân trang, cách ly theo `tenant_id` từ header Gateway.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

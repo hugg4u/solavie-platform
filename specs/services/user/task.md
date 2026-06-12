@@ -117,3 +117,13 @@ Tài liệu này theo dõi tiến độ triển khai của **User Service** (qu�
 - [ ] Cấu hình cơ chế manual offset commit để tránh mất dữ liệu và retry khi ghi nhận vào PostgreSQL gặp lỗi.
 - [ ] Thiết lập Prometheus metrics và dashboards giám sát trạng thái Kafka producer/consumer.
 
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.
