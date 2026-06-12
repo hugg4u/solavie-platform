@@ -1,12 +1,11 @@
 import os
 import sys
-import time
+import asyncio
 import logging
 import json
 from datetime import datetime, timezone
-import redis
-import requests
-import yaml
+import redis.asyncio as aioredis
+import httpx
 
 # Setup logging
 logging.basicConfig(
@@ -18,13 +17,11 @@ logger = logging.getLogger("solavie.gateway.sync")
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis-master-1")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 KONG_ADMIN_URL = os.environ.get("KONG_ADMIN_URL", "http://solavie-gateway:8001")
-KONG_CONFIG_PATH = os.environ.get("KONG_CONFIG_PATH", "/etc/kong/kong.yml")
-GATEWAY_FALLBACK_TARGET = os.environ.get("GATEWAY_FALLBACK_TARGET", "127.0.0.1:8000")
-POLL_INTERVAL = int(os.environ.get("REGISTRY_SYNC_POLL_INTERVAL", 5))  # Run sync check dynamically via env
+POLL_INTERVAL = int(os.environ.get("REGISTRY_SYNC_POLL_INTERVAL", 5))
 
 SERVICES_MAP = {
     "ai-core": "ai-core-upstream",
-    "user-service": "user-service-upstream",
+    "user": "user-service-upstream",
     "tenant-config": "tenant-config-upstream",
     "chatbot": "chatbot-upstream",
     "knowledge-base": "knowledge-base-upstream",
@@ -41,16 +38,28 @@ SERVICES_MAP = {
     "messaging": "messaging-upstream"
 }
 
-# Initialize Redis client once at module level
-redis_url = f"redis://{REDIS_HOST}:{REDIS_PORT}"
-try:
-    from redis.cluster import RedisCluster
-    r_client = RedisCluster.from_url(redis_url, decode_responses=True)
-except Exception as e:
-    # Fallback to standard Redis client
-    r_client = redis.Redis.from_url(redis_url, decode_responses=True)
+r_client = None
+_node_clients = {}
 
-def log_target_update(action: str, target: str, status: str, redis_count: int, kong_count: int, upstream_name: str = "ai-core-upstream"):
+async def call_redis(method_name: str, *args, **kwargs):
+    try:
+        method = getattr(r_client, method_name)
+        return await method(*args, **kwargs)
+    except Exception as e:
+        err_class = type(e).__name__
+        if err_class in ("MovedError", "AskError"):
+            parts = str(e).split()
+            if len(parts) >= 2:
+                node_addr = parts[1]
+                global _node_clients
+                if node_addr not in _node_clients:
+                    _node_clients[node_addr] = aioredis.from_url(f"redis://{node_addr}", decode_responses=True)
+                
+                method = getattr(_node_clients[node_addr], method_name)
+                return await method(*args, **kwargs)
+        raise
+
+def log_target_update(action: str, target: str, status: str, redis_count: int, kong_count: int, upstream_name: str):
     log_data = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "level": "info" if status == "success" else "error",
@@ -67,120 +76,100 @@ def log_target_update(action: str, target: str, status: str, redis_count: int, k
     }
     print(json.dumps(log_data))
 
-def sync_cycle(r_client) -> None:
-    # 1. Read current kong.yml config
-    if not os.path.exists(KONG_CONFIG_PATH):
-        # Log error if file missing
-        log_target_update("sync_complete", "none", "failure", 0, 0, "all")
-        return
-        
-    try:
-        with open(KONG_CONFIG_PATH, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
-    except Exception as e:
-        log_target_update("sync_complete", "none", "failure", 0, 0, "all")
-        return
-
-    upstreams = config.get("upstreams", [])
-    config_changed = False
+async def sync_service(client: httpx.AsyncClient, service_name: str, upstream_name: str):
+    set_key = f"registry:service:{service_name}"
     
-    # 2. Iterate through each service in SERVICES_MAP
-    for service_name, upstream_name in SERVICES_MAP.items():
-        set_key = f"registry:service:{service_name}"
+    # Fetch members from Redis set
+    try:
+        members = await call_redis("smembers", set_key)
+    except Exception as e:
+        logger.error(f"Error fetching Redis smembers for {service_name}: {str(e)}")
+        return
         
-        # Fetch members from Redis set
+    active_targets = []
+    for member in members:
+        # Check if the TTL node key exists
+        node_key = f"registry:service:{service_name}:node:{member}"
         try:
-            members = r_client.smembers(set_key)
-        except Exception as e:
-            # Skip if connection fails for this check, log but proceed
-            print(f"Error fetching Redis smembers for {service_name}: {str(e)}", file=sys.stderr)
-            continue
+            exists = await call_redis("exists", node_key)
+        except Exception:
+            exists = False
             
-        active_targets = []
-        for member in members:
-            # Check if the TTL node key exists
-            node_key = f"registry:service:{service_name}:node:{member}"
+        if exists:
+            active_targets.append(member)
+        else:
+            # Clean up expired target from Set
             try:
-                exists = r_client.exists(node_key)
+                await call_redis("srem", set_key, member)
             except Exception:
-                exists = False
-                
-            if exists:
-                active_targets.append(member)
-            else:
-                # Clean up expired target from Set
-                try:
-                    r_client.srem(set_key, member)
-                except Exception:
-                    pass
-                log_target_update("remove_target", member, "success", len(active_targets), len(active_targets), upstream_name)
-        
-        # Sort lists to compare easily
-        active_targets.sort()
-        
-        # Find the upstream block in the config
-        target_upstream = None
-        for u in upstreams:
-            if u.get("name") == upstream_name:
-                target_upstream = u
-                break
-                
-        if not target_upstream:
-            # If the upstream is not defined in kong.yml, skip
-            continue
-            
-        # Filter out placeholder targets (weight = 0)
-        current_targets = [t.get("target") for t in target_upstream.get("targets", []) if t.get("weight", 0) > 0]
-        current_targets.sort()
-        
-        # Check if there are changes
-        if active_targets != current_targets:
-            added = set(active_targets) - set(current_targets)
-            removed = set(current_targets) - set(active_targets)
-            
-            # Update targets list in YAML structure
-            if not active_targets:
-                # If empty, add placeholder target with weight 0
-                target_upstream["targets"] = [{"target": GATEWAY_FALLBACK_TARGET, "weight": 0}]
-            else:
-                target_upstream["targets"] = [{"target": target, "weight": 100} for target in active_targets]
-                
-            config_changed = True
-            
-            # Log individual additions and removals
-            for addr in added:
-                log_target_update("add_target", addr, "success", len(active_targets), len(active_targets), upstream_name)
-            for addr in removed:
-                log_target_update("remove_target", addr, "success", len(active_targets), len(active_targets), upstream_name)
-                
-            log_target_update("sync_complete", "all", "success", len(active_targets), len(active_targets), upstream_name)
+                pass
+            log_target_update("remove_target_redis", member, "success", len(active_targets), len(active_targets), upstream_name)
+    
+    # Fetch active targets currently registered in Kong for this upstream
+    kong_targets = []
+    try:
+        url = f"{KONG_ADMIN_URL}/upstreams/{upstream_name}/targets"
+        response = await client.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json().get("data", [])
+            kong_targets = [t["target"] for t in data if t.get("weight", 0) > 0]
+        elif response.status_code == 404:
+            # Upstream does not exist in Kong yet, skip sync
+            return
+        else:
+            logger.warning(f"Kong returned status {response.status_code} for upstream {upstream_name}")
+            return
+    except Exception as e:
+        logger.error(f"Failed to fetch Kong active targets for {upstream_name}: {str(e)}")
+        return
 
-    # 3. If any configuration has changed, write back to kong.yml and reload Kong
-    if config_changed:
+    active_targets_set = set(active_targets)
+    kong_targets_set = set(kong_targets)
+
+    # 1. Add targets to Kong that are in Redis but not in Kong
+    to_add = active_targets_set - kong_targets_set
+    for target in to_add:
         try:
-            with open(KONG_CONFIG_PATH, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, sort_keys=False)
-                
-            # POST config reload to Kong Admin API
-            with open(KONG_CONFIG_PATH, 'rb') as f:
-                response = requests.post(f"{KONG_ADMIN_URL}/config", files={"config": f}, timeout=10)
-                
-            if response.status_code not in (200, 201):
-                log_target_update("sync_complete", "all", "failure", 0, 0, "all")
+            url = f"{KONG_ADMIN_URL}/upstreams/{upstream_name}/targets"
+            response = await client.post(url, json={"target": target, "weight": 100}, timeout=5)
+            if response.status_code in (200, 201):
+                log_target_update("add_target", target, "success", len(active_targets), len(kong_targets) + 1, upstream_name)
+            else:
+                log_target_update("add_target", target, "failure", len(active_targets), len(kong_targets), upstream_name)
         except Exception as e:
-            log_target_update("sync_complete", "all", "failure", 0, 0, "all")
+            logger.error(f"Failed to add target {target} to Kong upstream {upstream_name}: {str(e)}")
 
-def sync_targets():
+    # 2. Delete targets from Kong that are in Kong but no longer in Redis
+    to_remove = kong_targets_set - active_targets_set
+    for target in to_remove:
+        try:
+            url = f"{KONG_ADMIN_URL}/upstreams/{upstream_name}/targets/{target}"
+            response = await client.delete(url, timeout=5)
+            if response.status_code in (200, 204):
+                log_target_update("remove_target", target, "success", len(active_targets), len(active_targets), upstream_name)
+            else:
+                log_target_update("remove_target", target, "failure", len(active_targets), len(active_targets), upstream_name)
+        except Exception as e:
+            logger.error(f"Failed to delete target {target} from Kong upstream {upstream_name}: {str(e)}")
+
+async def sync_cycle():
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for service_name, upstream_name in SERVICES_MAP.items():
+            tasks.append(sync_service(client, service_name, upstream_name))
+        await asyncio.gather(*tasks)
+
+async def sync_targets_loop():
     while True:
         try:
-            sync_cycle(r_client)
+            await sync_cycle()
         except Exception as e:
             # Fallback error logger
             log_data = {
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "level": "error",
                 "service": "kong-registry-sync",
-                "message": f"Error in sync registry loop: {str(e)}",
+                "message": f"Error in async sync registry loop: {str(e)}",
                 "upstream": "all",
                 "action": "sync_error",
                 "target": "none",
@@ -188,16 +177,44 @@ def sync_targets():
             }
             print(json.dumps(log_data), file=sys.stderr)
             
-        time.sleep(POLL_INTERVAL)
+        await asyncio.sleep(POLL_INTERVAL)
 
-if __name__ == "__main__":
-    # Log starting event
+async def main():
+    global r_client
     startup_log = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "level": "info",
         "service": "kong-registry-sync",
-        "message": "Starting Solavie Gateway Registry Sync Daemon...",
+        "message": "Starting Async Solavie Gateway Registry Sync Daemon...",
         "status": "success"
     }
     print(json.dumps(startup_log))
-    sync_targets()
+    
+    redis_url = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+    r_client = aioredis.from_url(redis_url, decode_responses=True)
+            
+    # Force initialize the Redis client to prevent race conditions during async gather
+    try:
+        await call_redis("ping")
+        init_log = {
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "level": "info",
+            "service": "kong-registry-sync",
+            "message": "Successfully initialized Redis connection pool with Cluster redirect support.",
+            "status": "success"
+        }
+        print(json.dumps(init_log))
+    except Exception as e:
+        err_log = {
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "level": "error",
+            "service": "kong-registry-sync",
+            "message": f"Failed to initialize Redis connection: {str(e)}",
+            "status": "failure"
+        }
+        print(json.dumps(err_log), file=sys.stderr)
+        
+    await sync_targets_loop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

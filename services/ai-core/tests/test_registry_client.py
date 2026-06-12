@@ -40,7 +40,14 @@ async def test_register_failure():
         
         success = await client.register()
         assert success is False
-        assert client._running is False
+        assert client._running is True  # Fail-safe keeps the client running for self-healing
+        
+        # Cleanup heartbeat task to prevent warnings
+        client._heartbeat_task.cancel()
+        try:
+            await client._heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
 @pytest.mark.asyncio
 async def test_deregister():

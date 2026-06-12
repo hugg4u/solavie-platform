@@ -16,9 +16,29 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
   }
 
   /**
-   * Lấy IP nội bộ sử dụng UDP socket ảo
+   * Lấy IP nội bộ theo độ ưu tiên: CONTAINER_IP -> OS interfaces -> UDP fake
    */
   private async getInternalIp(): Promise<string> {
+    // 1. Priority 1: Check CONTAINER_IP from environment
+    if (process.env.CONTAINER_IP) {
+      return process.env.CONTAINER_IP;
+    }
+
+    // 2. Priority 2: Scan OS Network Interfaces
+    try {
+      const interfaces = os.networkInterfaces();
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name] || []) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            return iface.address;
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to scan OS network interfaces: ${err.message}`);
+    }
+
+    // 3. Priority 3: Fallback to UDP fake connection
     try {
       return await new Promise<string>((resolve, reject) => {
         const socket = dgram.createSocket('udp4');
@@ -49,16 +69,7 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
         });
       });
     } catch (err: any) {
-      this.logger.warn(`Failed to resolve IP via UDP socket: ${err.message}. Falling back to OS network interfaces.`);
-      
-      const interfaces = os.networkInterfaces();
-      for (const name of Object.keys(interfaces)) {
-        for (const iface of interfaces[name] || []) {
-          if (iface.family === 'IPv4' && !iface.internal) {
-            return iface.address;
-          }
-        }
-      }
+      this.logger.warn(`Failed to resolve IP via UDP socket: ${err.message}. Defaulting to localhost.`);
       return '127.0.0.1';
     }
   }
@@ -70,6 +81,26 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
     this.nodeIp = await this.getInternalIp();
     const nodeValue = `${this.nodeIp}:${this.nodePort}`;
     const nodeKey = `${this.redisKey}:node:${nodeValue}`;
+
+    const startHeartbeat = (client: any) => {
+      this.heartbeatInterval = setInterval(async () => {
+        try {
+          await client.setEx(nodeKey, 15, 'alive');
+          await client.sAdd(this.redisKey, nodeValue);
+        } catch (hbErr: any) {
+          this.logger.error({
+            message: `Heartbeat failed: ${hbErr.message}`,
+            action: 'heartbeat',
+            node_ip: this.nodeIp,
+            node_port: this.nodePort,
+            status: 'error',
+            context: {
+              redis_key: this.redisKey,
+            },
+          });
+        }
+      }, 5000);
+    };
 
     try {
       const client = this.redisService.getClient();
@@ -95,28 +126,12 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
         },
       });
 
-      // 4. Bắt đầu luồng gửi Heartbeat mỗi 5 giây
-      this.heartbeatInterval = setInterval(async () => {
-        try {
-          await client.setEx(nodeKey, 15, 'alive');
-          await client.sAdd(this.redisKey, nodeValue);
-        } catch (hbErr: any) {
-          this.logger.error({
-            message: `Heartbeat failed: ${hbErr.message}`,
-            action: 'heartbeat',
-            node_ip: this.nodeIp,
-            node_port: this.nodePort,
-            status: 'error',
-            context: {
-              redis_key: this.redisKey,
-            },
-          });
-        }
-      }, 5000);
+      // 4. Bắt đầu luồng gửi Heartbeat
+      startHeartbeat(client);
 
     } catch (err: any) {
       this.logger.error({
-        message: `Failed to register service node: ${err.message}`,
+        message: `Failed to register service node (Fail-safe activated): ${err.message}`,
         action: 'register',
         node_ip: this.nodeIp,
         node_port: this.nodePort,
@@ -125,6 +140,12 @@ export class ServiceRegistryClient implements OnApplicationBootstrap, BeforeAppl
           redis_key: this.redisKey,
         },
       });
+      
+      // Khởi chạy heartbeat loop kể cả khi có lỗi ban đầu để tự phục hồi
+      const client = this.redisService.getClient();
+      if (client) {
+        startHeartbeat(client);
+      }
     }
   }
 

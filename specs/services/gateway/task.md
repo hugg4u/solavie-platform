@@ -218,8 +218,8 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 ---
 
 ## Service Discovery & Health API Tasks
-- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
-- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
-- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
-- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
-- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.
+- [x] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [x] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [x] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [x] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [x] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.
