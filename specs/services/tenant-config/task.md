@@ -30,7 +30,7 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 2: Validation Schema
 > *User Story: Là một Tenant Admin, tôi muốn hệ thống kiểm tra tính hợp lệ của giá trị cấu hình trước khi lưu.*
 - [ ] AC 2.1: Triển khai NestJS `ValidationPipe` với class-validator để kiểm tra kiểu dữ liệu và giá trị biên của cấu hình.
-- [ ] AC 2.2: Validate giới hạn của các trường số thực, số nguyên, enum trong 5 categories (ví dụ: `confidence_threshold` trong khoảng `[0.60, 0.95]`, `offline_mode_behavior` thuộc enum hợp lệ).
+- [ ] AC 2.2: Validate giới hạn của các trường số thực, số nguyên, enum trong 5 categories (ví dụ: `confidence_threshold` trong khoảng `[0.60, 0.95]`, `offline_mode_behavior` thuộc enum hợp lệ, `cost_limit_usd` >= 0.0 hoặc null, `cost_alert_threshold_percent` từ [50, 100], `cost_limit_policy` thuộc enum ['notify_only', 'auto_downgrade', 'block']).
 - [ ] AC 2.3: Validate định dạng whitelist Custom MCP SSE Servers (`sse_url` phải có schema http/https hợp lệ, phòng tránh SSRF).
 - [ ] AC 2.4: Trả về HTTP 422 kèm danh sách chi tiết các lỗi validation nếu phát hiện giá trị không hợp lệ.
 - [ ] AC 2.5: Ràng buộc kiểu Boolean: Kiểm tra strict true/false, không chấp nhận chuỗi `"true"`/`"false"` hoặc số `1`/`0`.
@@ -55,7 +55,7 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 5: Default Config & Default Roles Initialization khi Tenant mới
 > *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình và các vai trò mặc định hợp lý.*
 - [ ] AC 5.1: Đăng ký lắng nghe sự kiện tạo tenant mới từ hệ thống (qua Kafka/RabbitMQ hoặc nội bộ).
-- [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, ...).
+- [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, `cost_limit_usd: null`, `cost_alert_threshold_percent: 80`, `cost_limit_policy: notify_only` ...).
 - [ ] AC 5.3: Triển khai luồng gieo mầm (seed) 4 vai trò mặc định (`admin`, `manager`, `agent`, `viewer`) cùng phân quyền mặc định tương ứng vào bảng `roles` và `role_permissions` của PostgreSQL.
 - [ ] AC 5.4: Đồng bộ danh sách quyền mặc định của 4 vai trò này lên Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` (được sắp xếp alphabet tăng dần).
 - [ ] AC 5.5: Giới hạn thời gian tạo mặc định hoàn tất trong vòng < 5 giây từ khi nhận sự kiện.
@@ -71,6 +71,7 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 7: Cấu hình Chatbot & AI (ai_kb)
 - [ ] AC 7.1: Cho phép cấu hình các API keys của LLM Providers, thực hiện mã hóa đối xứng AES-256-GCM sử dụng `ENCRYPTION_KEY` trước khi lưu vào DB.
 - [ ] AC 7.2: Quản lý whitelist các SSE MCP Server, kiểm tra định dạng và validate an toàn đầu vào cho `sse_url` để chặn tấn công SSRF.
+- [ ] AC 7.3: Cho phép cấu hình hạn mức chi phí LLM (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`) và chính sách xử lý (`cost_limit_policy`) trong `ai_kb` category, tự động kích hoạt đồng bộ qua Redis và Pub/Sub.
 
 ### Task 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
 - [ ] AC 8.1: Cho phép cấu hình object `working_hours` kiểm soát khung giờ làm việc chi tiết của từng ngày trong tuần.

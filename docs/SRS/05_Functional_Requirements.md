@@ -1018,11 +1018,16 @@
 - **Đầu ra:** Cấu hình mới được áp dụng tại AI Core và cache Redis cũ bị xóa bỏ (< 5 giây).
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
-
-### FR-AI-009: Cảnh báo chi phí vượt hạn mức (Cost Alert)
-- **Mô tả:** AI Core Service **PHẢI** liên tục theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs`. Hệ thống **PHẢI** đối chiếu chi phí này với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của Tenant). Khi chi phí sử dụng thực tế đạt **80%** hạn mức, AI Core Service **PHẢI** tự động kích hoạt cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời thông báo qua hệ thống Notification hoặc tự động hạ cấp xuống mô hình AI rẻ tiền hơn để kiểm soát ngân sách.
-- **Đầu vào:** Bản ghi log chi phí `llm_usage_logs` của 30 ngày qua, cấu hình limits của Tenant.
-- **Đầu ra:** Metric cảnh báo phát đi, thông báo cảnh báo và kích hoạt chiến lược hạ cấp mô hình.
+### FR-AI-009: Cảnh báo chi phí và Thực thi chính sách ngân sách (Cost Alert & Policy Enforcement)
+- **Mô tả:** AI Core Service **PHẢI** liên tục theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs`. Hệ thống **PHẢI** đối chiếu chi phí này với hạn mức chi phí (`cost_limit_usd`), ngưỡng phần trăm cảnh báo (`cost_alert_threshold_percent`) và chính sách kiểm soát chi phí (`cost_limit_policy`) được Tenant Admin chủ động cấu hình trong `ai_kb_config` (lưu ở Redis cache `tenant:{tenant_id}:limits`).
+    - Khi chi phí sử dụng thực tế đạt hoặc vượt ngưỡng cảnh báo ($\text{cost\_limit\_usd} \times \frac{\text{cost\_alert\_threshold\_percent}}{100}$), AI Core Service **PHẢI** tự động kích hoạt cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời gửi thông báo cảnh báo qua hệ thống Notification.
+    - Khi chi phí sử dụng thực tế vượt quá $100\%$ hạn mức `cost_limit_usd`, AI Core Service **PHẢI** thực thi chính sách đã được cấu hình trong `cost_limit_policy`:
+        *   `notify_only`: Tiếp tục xử lý request bình thường và chỉ ghi log/cảnh báo hệ thống.
+        *   `auto_downgrade`: Tự động chuyển hướng toàn bộ yêu cầu LLM sang mô hình rẻ tiền hơn được định nghĩa trong `fallback_model` của cấu hình Tenant, hoặc mô hình mặc định giá rẻ hệ thống (ví dụ: `gpt-4o-mini`).
+        *   `block`: Từ chối toàn bộ các yêu cầu gọi LLM mới, trả về lỗi HTTP 429 (Resource Exhausted) để bảo vệ ngân sách của Tenant.
+    - Nếu Tenant không cấu hình hạn mức này (`cost_limit_usd` là `null`), hệ thống **PHẢI** bỏ qua bước kiểm tra và không áp đặt bất kỳ giới hạn hay cảnh báo chi phí mặc định nào.
+- **Đầu vào:** Bản ghi log chi phí `llm_usage_logs` của 30 ngày qua, cấu hình limits của Tenant (`cost_limit_usd`, `cost_alert_threshold_percent`, `cost_limit_policy`) từ Redis cache.
+- **Đầu ra:** Phát metric cảnh báo lên Prometheus, gửi thông báo qua Notification Service, và thực thi chặn (trả về HTTP 429) hoặc hạ cấp mô hình tùy theo cấu hình chính sách khi chạm/vượt hạn mức.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-069
 

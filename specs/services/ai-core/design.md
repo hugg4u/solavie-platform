@@ -667,10 +667,70 @@ PRICING_REGISTRY = {
 
 # Cost Alert Logic (Requirement 5 AC 4):
 # Accumulated_30d_Cost = Sum(Usage_Logs.cost_usd where created_at >= now() - 30 days)
-# Threshold_Limit = Tenant_limits.cost_limit_usd
-# IF Accumulated_30d_Cost >= 0.80 * Threshold_Limit:
-#     Trigger Cost Alert Signal (Log error, emit alert metrics, fallback to cheaper model or notify Admin)
+# Threshold_Limit = tenant_limits.cost_limit_usd (đọc từ Redis key tenant:{tenant_id}:limits)
+# Warning_Threshold = tenant_limits.cost_alert_threshold_percent (mặc định 80)
+# Policy = tenant_limits.cost_limit_policy (mặc định notify_only)
+
+# IF Threshold_Limit IS NOT NULL:
+#     IF Accumulated_30d_Cost >= (Warning_Threshold / 100.0) * Threshold_Limit:
+#         Trigger Cost Alert Signal (Log error, emit alert metrics, send notification via Notification Service)
+#     IF Accumulated_30d_Cost >= Threshold_Limit:
+#         IF Policy == 'block':
+#             Deny LLM request (Raise ResourceExhausted / HTTP 429)
+#         ELSE IF Policy == 'auto_downgrade':
+#             Downgrade LLM primary_model to tenant's fallback_model (or system default cheap model like gpt-4o-mini)
+#         ELSE IF Policy == 'notify_only':
+#             Proceed normally (Log warning and continue execution)
 ```
+
+## Redis Resiliency & Multi-tier Fallback Design (MỚI)
+
+Để tối ưu hóa hiệu năng truy xuất và triệt tiêu khả năng sập hệ thống (Single Point of Failure) khi Redis bị lỗi kết nối hoặc quá tải, `LLMGateway` áp dụng thiết kế cache 3 tầng:
+
+### 1. Sơ đồ khối Cache đa tầng (Multi-tier Cache Blocks)
+
+```
++-----------------------------------------------------------+
+|                      LLMGateway API                       |
++-----------------------------------------------------------+
+                              |
+                     [1. Đọc Local Cache]
+                              |
+             +----------------+----------------+
+             |                                 |
+         [Cache Hit]                      [Cache Miss]
+             |                                 |
+      (Trả về ~0ms)                  [2. Đọc Redis Cache]
+                                               |
+                             +-----------------+-----------------+
+                             |                                   |
+                         [Cache Hit]                         [Redis Down]
+                             |                                   |
+                       (Lưu Local Cache)                 (Fail-Open Mode)
+                                                                 |
+                                                +----------------+----------------+
+                                                |                                 |
+                                        [Đọc Local Cache cũ]              [Đọc Database/API]
+```
+
+### 2. Thuật toán Xử lý Lỗi & Tự Phục hồi (Algorithm & Self-Healing)
+
+#### A. Hàm Lấy Accumulated Cost & Check Limit:
+1. Đọc từ Local Memory Cache `self._local_limits_cache` và `self._local_accumulated_cost_cache` trước.
+2. Nếu hit và chưa hết hạn (TTL 10s), trả về kết quả ngay lập tức.
+3. Nếu cache miss hoặc hết hạn, thực hiện đọc Redis key `tenant:{tenant_id}:limits` và `tenant:{tenant_id}:accumulated_cost`.
+   - **Xử lý sự cố (Redis Down):** Khối đọc Redis được bọc trong block `try-except Exception`. Nếu quăng lỗi kết nối, hệ thống ghi log warning, sử dụng giá trị cũ từ Local Cache (nếu có, bất chấp hết hạn - Grace Period) hoặc trả về giá trị mặc định (fail-open) để tránh crash API.
+   - **Xử lý Cache Miss limits (limits_raw is None):** Hệ thống trả về cấu hình limits trống (không giới hạn), đồng thời kích hoạt một background task bất đồng bộ `asyncio.create_task(fetch_and_sync_config(tenant_id))` nếu không có task sync nào đang chạy (`tenant_id` không nằm trong `self._active_sync_tasks`).
+
+#### B. Hàm Lấy Cấu hình Định tuyến (get_routing):
+1. Đọc từ Local Memory Cache `self._local_routes_cache` (TTL 30s).
+2. Nếu cache miss, đọc từ Redis key `{tenant_uuid}:config:llm_model_routing:{use_case}`.
+3. Nếu Redis miss hoặc down, truy vấn trực tiếp bảng `llm_route_configs` trong PostgreSQL, cập nhật vào Local Cache và tiếp tục xử lý.
+
+#### C. Hàm Lấy API Keys (get_provider_credentials):
+1. Đọc từ Local Memory Cache `self._local_credentials_cache` (TTL 30s).
+2. Nếu cache miss, đọc từ Redis key `{tenant_uuid}:config:api_keys:{provider}`.
+3. Nếu Redis miss hoặc down, truy vấn bảng `api_key_configs` trong PostgreSQL, giải mã AES-256 in-memory và lưu vào Local Cache.
 
 ## Correctness Properties
 

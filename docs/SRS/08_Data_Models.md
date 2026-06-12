@@ -429,6 +429,9 @@ Dưới đây là mô tả chi tiết kiểu dữ liệu và ràng buộc của 
 | `auto_handoff_on_negative` | Boolean | NOT NULL | Tự động chuyển Agent khi khách giận dữ | `true` |
 | `ai_vision_invoice_reading` | Boolean | NOT NULL | Bật tính năng OCR đọc ảnh hóa đơn tự động | `true` |
 | `rag_relevance_threshold` | Numeric | Range: `[0.0, 1.0]` | Ngưỡng điểm tìm kiếm tri thức RAG để bot phản hồi | `0.50` |
+| `cost_limit_usd` | Numeric | Range: `[0.0, 100000.0]`, NULL | Hạn mức chi phí LLM tối đa của Tenant trong 30 ngày (USD). Mặc định null là không giới hạn | `null` |
+| `cost_alert_threshold_percent` | Integer | Range: `[50, 100]` | Ngưỡng phần trăm chi phí tích lũy để kích hoạt cảnh báo ngân sách | `80` |
+| `cost_limit_policy` | String | Enum: `['notify_only', 'auto_downgrade', 'block']` | Chính sách xử lý khi chi phí tích lũy vượt quá 100% hạn mức cost_limit_usd | `'notify_only'` |
 | `security_comments_notif.dms_max_storage_mb` | Integer | Range: `[100, 100000]` | Hạn mức dung lượng lưu trữ tối đa của Tenant (Megabytes) | `5000` |
 | `security_comments_notif.dms_max_file_versions` | Integer | Range: `[1, 20]` | Số lượng phiên bản lưu trữ tối đa của một tệp | `5` |
 

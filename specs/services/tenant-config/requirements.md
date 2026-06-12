@@ -42,6 +42,9 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
    - kb_chunk_size: số nguyên trong khoảng [128, 1024]
    - kb_chunk_overlap_percentage: số thực trong khoảng [5, 30]
    - rag_relevance_threshold: số thực trong khoảng [0.0, 1.0]
+   - cost_limit_usd: số thực trong khoảng [0.0, 100000.0] hoặc giá trị null (không giới hạn)
+   - cost_alert_threshold_percent: số nguyên trong khoảng [50, 100]
+   - cost_limit_policy: một trong các giá trị: notify_only, auto_downgrade, block
    - offline_mode_behavior: một trong các giá trị: lead_capture, ai_warning, offline_msg
    - handoff_routing_algorithm: một trong: round_robin, least_busy, queue_claim, hybrid
    - manual_to_auto_timeout_hours: số thực trong khoảng [1, 24]
@@ -98,6 +101,9 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
    - auto_handoff_on_negative: true
    - ai_vision_invoice_reading: true
    - rag_relevance_threshold: 0.50
+   - cost_limit_usd: null
+   - cost_alert_threshold_percent: 80
+   - cost_limit_policy: notify_only
    - offline_mode_behavior: lead_capture
    - handoff_routing_algorithm: hybrid
    - manual_to_auto_timeout_hours: 2
@@ -140,6 +146,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 8. THE Tenant_Config SHALL tự động gửi thông báo đồng bộ cấu hình qua kênh Redis Pub/Sub `config.updates` ngay khi Admin lưu thay đổi để AI Core cập nhật.
 9. THE Tenant_Config SHALL quản lý cấu hình danh sách các Custom MCP SSE Servers được phê duyệt (mcp_server_whitelist) dưới dạng danh sách JSON objects. Mỗi MCP Server trong danh sách chứa: server_name, sse_url, status (active/inactive), description, và danh sách custom_headers (để xác thực/giao tiếp an toàn).
 10. THE Tenant_Config SHALL validate định dạng sse_url của các Custom MCP Servers (bắt buộc bắt đầu bằng http:// hoặc https:// và kết thúc bằng /mcp hoặc tương tự), đồng thời chặn các ký tự lạ để phòng tránh SSRF và Command Injection.
+11. THE Tenant_Config SHALL cho phép cấu hình hạn mức chi phí LLM tối đa của Tenant trong 30 ngày (cost_limit_usd) dưới dạng số thực >= 0.0 hoặc null, ngưỡng phần trăm cảnh báo ngân sách (cost_alert_threshold_percent) từ [50, 100], và chính sách kiểm soát chi phí (cost_limit_policy) thuộc một trong các giá trị ['notify_only', 'auto_downgrade', 'block']. Khi cấu hình thay đổi, hệ thống phải thực hiện hot-reload cập nhật xuống Redis cache key `{tenant_id}:config:ai_kb` và thông báo qua kênh Redis Pub/Sub `config.updates`.
 
 ### Requirement 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
 

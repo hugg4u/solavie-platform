@@ -806,7 +806,13 @@ Quy trình kiểm duyệt tin nhắn chạy song song trên Chatbot Service và 
 *   **Giải pháp:**
     1.  Áp dụng **Prompt Caching** (như Claude Prompt Caching) để lưu trữ system prompts và cơ sở dữ liệu tri thức tĩnh của Tenant, giúp giảm tới 50% chi phí input tokens.
     2.  Giới hạn cứng: Cấu hình Max Iterations = 5 cho ReAct agent loop. Giới hạn tối đa 10,000 tokens cho mỗi phiên chat của khách hàng.
-    3.  Tích hợp cơ chế cảnh báo ngân sách (Cost Alert / Budget Alerting) trong AI Core: Theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs` và đối chiếu với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong limits config). Khi chi phí thực tế đạt **80%** hạn mức, hệ thống sẽ tự động kích hoạt tín hiệu cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời thông báo qua hệ thống Notification hoặc tự động hạ cấp xuống mô hình AI rẻ tiền hơn để kiểm soát ngân sách.
+    3.  Tích hợp cơ chế kiểm soát và cảnh báo ngân sách (Cost Alert & Policy Enforcement) trong AI Core: Theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs` và đối chiếu với hạn mức chi phí (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`) cùng chính sách kiểm soát chi phí (`cost_limit_policy`) được Tenant Admin chủ động cấu hình trong `ai_kb_config`.
+        - Khi chi phí tích lũy đạt hoặc vượt ngưỡng cảnh báo ($\text{cost\_limit\_usd} \times \frac{\text{cost\_alert\_threshold\_percent}}{100}$), hệ thống sẽ tự động kích hoạt tín hiệu cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời thông báo qua hệ thống Notification.
+        - Khi chi phí tích lũy đạt hoặc vượt $100\%$ hạn mức `cost_limit_usd`, hệ thống thực thi chính sách đã được cấu hình:
+            *   `notify_only`: Tiếp tục xử lý request bình thường và chỉ ghi log/cảnh báo.
+            *   `auto_downgrade`: Tự động chuyển hướng toàn bộ yêu cầu LLM sang mô hình rẻ tiền hơn (cấu hình trong `fallback_model` của Tenant hoặc fallback mặc định của hệ thống).
+            *   `block`: Từ chối toàn bộ các yêu cầu gọi LLM mới, trả về lỗi HTTP 429 (Resource Exhausted) để bảo vệ ngân sách.
+        - Nếu Tenant không cấu hình hạn mức này (`cost_limit_usd` là `null`), hệ thống sẽ bỏ qua và không áp đặt bất kỳ giới hạn hay cảnh báo chi phí mặc định nào.
 
 ### 7.4. Đảm bảo nhất quán dữ liệu trong kiến trúc phân tán (Distributed Consistency)
 *   **Mô tả:** Khi một hành động bị lỗi ở service phía sau (ví dụ: đăng bài lỗi ở Facebook) nhưng service phía trước đã lưu trạng thái thành công, dẫn đến sự sai lệch dữ liệu giữa Dashboard của user và thực tế.
@@ -819,6 +825,13 @@ Quy trình kiểm duyệt tin nhắn chạy song song trên Chatbot Service và 
 *   **Giải pháp:**
     1.  Triển khai **PostgreSQL RLS** ở mức hạ tầng (Database Level) làm lớp bảo vệ cuối cùng. Bất kỳ kết nối database nào khởi tạo từ service đều phải chạy câu lệnh gán context `SET app.current_tenant_id = '...'` trước khi truy vấn dữ liệu.
     2.  Viết bộ kiểm tra bảo mật tự động (Security Linting/Static Analysis) trong CI/CD để quét mã nguồn và ngăn chặn các truy vấn SQL không có điều kiện WHERE liên quan tới `tenant_id`.
+
+### 7.6. Sự cố sập Redis hoặc quá tải kết nối cache (Redis Resilience & Cache Fallback)
+*   **Mô tả:** Redis là thành phần lưu trữ các cấu hình hoạt động nóng của Tenant (Routing, API Keys, Cost Limits, Semantic Cache). Nếu Redis bị sập (down) hoặc nghẽn pool kết nối do tải cao, toàn bộ request LLM API sẽ crash (lỗi 500) và làm sập chatbot nếu code không được thiết kế chịu lỗi.
+*   **Giải pháp:**
+    1.  Triển khai **Local In-Memory Cache (Tầng 1)** ngay trong RAM của process dịch vụ với thời gian tồn tại (TTL) ngắn (10s - 30s) làm bộ đệm trước khi gọi Redis. Việc này giúp giảm 95% request mạng tới Redis và triệt tiêu độ trễ mạng trong luồng chatbot.
+    2.  Triển khai chế độ **Fail-Open (Tầng 2)**: Bọc toàn bộ các lệnh tương tác Redis bằng `try-except`. Nếu xảy ra lỗi kết nối Redis, hệ thống ghi nhận cảnh báo mức warning và tự động chuyển hướng đọc trực tiếp từ database PostgreSQL cục bộ (đối với routes/keys) hoặc bỏ qua kiểm tra (đối với cost limits), đảm bảo API LLM vẫn phục vụ bình thường.
+    3.  Cơ chế **Self-Healing (Tầng 3)**: Khi limits bị cache miss trong Redis, hệ thống trả về cấu hình limits trống và kích hoạt một background task bất đồng bộ kéo lại cấu hình từ Tenant Config Service để nạp lại cache, không gây tăng độ trễ (latency) cho request hiện tại.
 
 ---
 

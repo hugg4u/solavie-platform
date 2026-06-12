@@ -70,7 +70,13 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 1. THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback.
 2. THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider.
 3. THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất.
-4. THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức.
+4. THE AI_Core SHALL kiểm tra và thực thi chính sách ngân sách LLM của Tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant (tính tổng từ `llm_usage_logs`) và đối chiếu với hạn mức chi phí (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`), và chính sách xử lý (`cost_limit_policy`) được đồng bộ trong Redis cache key `tenant:{tenant_id}:limits`.
+    - IF `cost_limit_usd` không tồn tại hoặc là `null`, THE AI_Core SHALL bỏ qua toàn bộ bước kiểm tra này.
+    - WHEN chi phí thực tế đạt hoặc vượt ngưỡng cảnh báo ($\text{cost\_limit\_usd} \times \frac{\text{cost\_alert\_threshold\_percent}}{100}$), THE AI_Core SHALL phát tín hiệu cảnh báo (Cost Alert Signal): ghi log error, gửi Prometheus metric và đẩy thông báo qua Notification Service.
+    - WHEN chi phí thực tế đạt hoặc vượt $100\%$ hạn mức `cost_limit_usd`, THE AI_Core SHALL thực thi chính sách:
+        - `notify_only`: Tiếp tục xử lý request LLM bình thường và chỉ ghi nhận cảnh báo.
+        - `auto_downgrade`: Tự động thay đổi mô hình LLM chính sang mô hình rẻ hơn trong `fallback_model` của Tenant, hoặc mô hình mặc định rẻ nhất hệ thống.
+        - `block`: Từ chối yêu cầu và trả về lỗi HTTP 429 (Resource Exhausted).
 5. THE AI_Core SHALL expose metrics cho Prometheus.
 
 ### Requirement 6: Prompt Management
@@ -146,6 +152,19 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 6. IF độ tương đồng ngữ nghĩa < 0.92, THEN hệ thống SHALL ghi nhận là **Cache Miss**, thực hiện luồng ReAct Agent bình thường, đồng thời tăng Prometheus metric `ai_core_semantic_cache_misses_total`.
 7. ON Cache Miss, sau khi Agent sinh câu trả lời thành công, hệ thống SHALL kích hoạt một background task (chạy bất đồng bộ qua FastAPI BackgroundTasks) để lưu câu hỏi, câu trả lời, và vector embeddings mới vào Redis cache với khóa `{tenant_id}:semantic_cache:{hash_cau_hoi}` và TTL mặc định là 86,400 giây (24 giờ).
 8. THE AI_Core SHALL cô lập dữ liệu cache tuyệt đối giữa các tenants thông qua metadata filter `tenant_id` trong truy vấn `FT.SEARCH`, ngăn chặn hoàn toàn rò rỉ dữ liệu chéo tenant.
+
+### Requirement 12: Redis Resiliency & Multi-tier Cache (MỚI)
+
+**User Story:** Là hệ thống, tôi muốn việc đọc/ghi cấu hình luôn hoạt động ổn định và có thời gian phản hồi gần như 0ms ngay cả khi máy chủ Redis gặp sự cố kết nối, quá tải hoặc downtime.
+
+#### Acceptance Criteria
+1. THE AI_Core SHALL tích hợp bộ nhớ cache cục bộ trong tiến trình (Local Memory Cache) hoạt động như tầng đệm thứ nhất cho các thông tin: LLM Routing (TTL 30s), API Credentials (TTL 30s), Tenant Limits (TTL 10s), và Accumulated Cost (TTL 10s).
+2. THE AI_Core SHALL kiểm tra Local Cache trước tiên cho mọi request đọc cấu hình. Nếu cache hit và chưa hết hạn, hệ thống trả về cấu hình ngay lập tức (O(1) in-memory, latency ~0ms), loại bỏ hoàn toàn các network roundtrip tới Redis.
+3. THE AI_Core SHALL bọc toàn bộ các tương tác (đọc/ghi) với Redis trong block xử lý lỗi `try-except` an toàn. Khi xảy ra lỗi kết nối Redis (`ConnectionError`, `TimeoutError`), hệ thống PHẢI ghi log warning và kích hoạt chế độ **Fail-Open**:
+   - Đối với định tuyến và thông tin API keys: Tự động truy vấn trực tiếp từ database PostgreSQL cục bộ (đã được đồng bộ trước đó).
+   - Đối với giới hạn chi phí (Cost Limits) của Tenant: Cho phép request đi qua bình thường (fail-open) hoặc sử dụng dữ liệu cũ đã hết hạn từ Local Cache (Grace Period) thay vì trả về lỗi HTTP 500 làm sập API.
+4. THE AI_Core SHALL thực hiện cơ chế tự phục hồi (Self-Healing) khi gặp tình huống Cache Miss limits trong Redis (limits_raw is None) bằng cách kích hoạt một background task bất đồng bộ (`asyncio.create_task`) gọi API của Tenant Config Service để nạp lại cache. Request hiện tại PHẢI đi qua ngay lập tức dưới dạng fail-safe mà không bị block chờ sync.
+5. THE AI_Core SHALL ngăn chặn việc tạo background sync trùng lặp cho cùng một Tenant bằng cách kiểm soát trạng thái tác vụ qua biến in-memory `_active_sync_tasks`.
 
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của AI Core Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.

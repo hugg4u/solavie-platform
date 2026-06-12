@@ -71,7 +71,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 5.1: THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback
 - [x] AC 5.2: THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider
 - [x] AC 5.3: THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất
-- [x] AC 5.4: THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức
+- [x] AC 5.4: THE AI_Core SHALL kiểm tra và thực thi chính sách ngân sách LLM của Tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant (tính tổng từ `llm_usage_logs`) và đối chiếu với hạn mức chi phí (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`), và chính sách xử lý (`cost_limit_policy`) được đồng bộ trong Redis cache key `tenant:{tenant_id}:limits`.
+        - Khi chi phí đạt hoặc vượt ngưỡng cảnh báo: kích hoạt cảnh báo (log error, Prometheus metric, Notification).
+        - Khi chi phí đạt hoặc vượt 100% hạn mức: thực thi block (trả về HTTP 429), auto_downgrade (hạ cấp sang fallback model), hoặc notify_only (chỉ tiếp tục cảnh báo).
 - [x] AC 5.5: THE AI_Core SHALL expose metrics cho Prometheus
 
 ### Task 6: 6: Prompt Management
@@ -308,4 +310,17 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
   - `get_ticket_status` -> `crm:tickets:read`
 - [x] **21.5**: Đăng ký Circuit Breakers cho các remote tool mới này trong `TOOL_BREAKERS` tại `services/ai-core/tools/executor.py`.
 - [x] **21.6**: Viết pytest để kiểm tra độ chính xác của mcp_mapping và thực thi RBAC.
+
+### Task 22: Redis Resiliency & Multi-tier Fallback (MỚI)
+> *User Story: Là hệ thống, tôi muốn việc đọc/ghi cấu hình luôn hoạt động ổn định và có thời gian phản hồi gần như 0ms ngay cả khi máy chủ Redis gặp sự cố kết nối, quá tải hoặc downtime.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 22.1: Khai báo và khởi tạo Local Cache (`_local_routes_cache`, `_local_credentials_cache`, `_local_limits_cache`, `_local_accumulated_cost_cache`) trong `LLMGateway.__init__` của `services/ai-core/gateway/router.py`.
+- [ ] AC 22.2: Nâng cấp `_get_accumulated_cost` đọc từ Local Cache trước (TTL 10s), bọc try-except Redis và fallback tính toán trực tiếp từ Postgres DB.
+- [ ] AC 22.3: Nâng cấp `check_cost_limit` và `get_routing` đọc limits từ Local Cache (TTL 10s), bọc try-except Redis và fallback bỏ qua / dùng local cache cũ.
+- [ ] AC 22.4: Triển khai Non-blocking Background Sync khi limits cache miss (`limits_raw is None`) bằng `asyncio.create_task(fetch_and_sync_config)` có kiểm soát trùng lặp qua `self._active_sync_tasks`.
+- [ ] AC 22.5: Nâng cấp `_lookup_credentials` đọc API credentials từ Local Cache (TTL 30s), bọc try-except Redis và fallback trực tiếp từ Postgres.
+- [ ] AC 22.6: Cập nhật `check_and_trigger_cost_alert` trong `services/ai-core/api/v1/endpoints/completions.py` bọc try-except khi đọc Redis limits.
+- [ ] AC 22.7: Viết unit tests kiểm tra lỗi kết nối Redis, cache miss background sync và kiểm tra in-memory cache hits trong `test_rbac_and_metrics.py`.
+
 
