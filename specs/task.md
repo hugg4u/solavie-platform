@@ -60,10 +60,10 @@ This master checklist tracks the development and deployment of the entire Solavi
 - [ ] **Step 5: End-to-End System Integration Testing**
   - [ ] Trigger mock message inflow -> Chatbot processing -> RAG retrieval -> Guardrails -> CRM Lead auto-update.
   - [ ] Audit tenant isolation at every network request and database transaction.
-- [ ] **Step 6: Service Discovery & Gateway Routing Optimization**
-  - [ ] Cấu hình Active/Passive Healthcheck và Circuit Breaker trên Kong.
-  - [ ] Chuyển Kong sang DB-mode và nâng cấp Sync Daemon sang Async (gọi REST Admin API thay vì reload YAML).
-  - [ ] Cải tiến giải thuật IP Discovery Fallback và cung cấp endpoint `/health` cho 20 microservices.
+- [x] **Step 6: Service Discovery & Gateway Routing Optimization** ✅
+  - [x] Cấu hình Active/Passive Healthcheck và Circuit Breaker trên Kong.
+  - [x] Chuyển Kong sang DB-mode và nâng cấp Sync Daemon sang Async (gọi REST Admin API thay vì reload YAML).
+  - [x] Cải tiến giải thuật IP Discovery Fallback và cung cấp endpoint `/health` cho 20 microservices.
 
 ## Done When
 

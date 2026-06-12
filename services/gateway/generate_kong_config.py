@@ -113,6 +113,17 @@ def build_upstream_config(name: str) -> Dict[str, Any]:
                     "http_failures": 2,
                     "timeouts": 2
                 }
+            },
+            "passive": {
+                "type": "http",
+                "healthy": {
+                    "successes": 1
+                },
+                "unhealthy": {
+                    "http_failures": 3,
+                    "timeouts": 2,
+                    "tcp_failures": 2
+                }
             }
         },
         "targets": [
@@ -425,7 +436,7 @@ def build_kong_config(public_key_pem: str) -> Dict[str, Any]:
                     "name": "messaging-ws",
                     "paths": ["/ws"],
                     "strip_path": False,
-                    "protocols": ["ws", "wss"],
+                    "protocols": ["http", "https"],
                     "tags": ["scope:messaging"]
                 }
             ]

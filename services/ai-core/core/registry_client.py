@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import logging
 import json
@@ -23,13 +24,28 @@ class ServiceRegistryClient:
         self._running = False
 
     def _get_internal_ip(self) -> str:
+        # 1. Priority 1: Check CONTAINER_IP from environment
+        container_ip = os.environ.get("CONTAINER_IP")
+        if container_ip:
+            return container_ip
+
+        # 2. Priority 2: Scan OS Network Interfaces
+        try:
+            hostname = socket.gethostname()
+            ips = socket.gethostbyname_ex(hostname)[2]
+            for ip in ips:
+                if not ip.startswith("127.") and not ip.startswith("169.254"):
+                    return ip
+        except Exception:
+            pass
+
+        # 3. Priority 3: Fallback to UDP fake connection
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            # UDP fake connection to discover local IP, no packet is sent
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
         except Exception as e:
-            logger.warning(f"Failed to auto-detect internal IP: {e}. Defaulting to localhost.")
+            logger.warning(f"Failed to auto-detect internal IP via UDP: {e}. Defaulting to 127.0.0.1.")
             ip = "127.0.0.1"
         finally:
             s.close()
@@ -37,6 +53,9 @@ class ServiceRegistryClient:
 
     async def register(self) -> bool:
         """Registers the node and starts the heartbeat loop."""
+        self._running = True
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        
         try:
             # 1. Check/Add to Redis Set
             await redis_client.sadd(self.set_key, self.node_value)
@@ -58,16 +77,13 @@ class ServiceRegistryClient:
                 }
             }
             logger.info(json.dumps(log_data))
-
-            self._running = True
-            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
             return True
         except Exception as e:
             log_data = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "level": "error",
                 "service": self.service_name,
-                "message": f"Failed to register service node: {e}",
+                "message": f"Failed to register service node (Fail-safe activated): {e}",
                 "action": "register",
                 "node_ip": self.ip,
                 "node_port": self.port,
@@ -128,7 +144,6 @@ class ServiceRegistryClient:
                 await redis_client.setex(self.node_key, 15, "alive")
                 await redis_client.sadd(self.set_key, self.node_value)
                 
-                # Success log can be kept at debug level to avoid spamming info level
                 log_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "level": "debug",
