@@ -26,6 +26,14 @@
 - **Mô tả:** Mỗi microservice trong hệ thống **PHẢI** có khả năng xử lý tối thiểu 1,000 yêu cầu đồng thời trên giây (Requests Per Second - RPS) trong điều kiện tài nguyên tiêu chuẩn (2 Core CPU, 4GB RAM).
 - **Phép đo:** Tải kiểm thử (Load testing) bằng công cụ K6 hoặc Locust.
 
+### NFR-PER-005: Độ trễ của bộ viết lại câu hỏi (Query Rewriter Latency)
+- **Mô tả:** Tác vụ viết lại câu hỏi (Query Rewriting) tại AI Core Service khi hội thoại ở chế độ nhiều lượt (multi-turn) **PHẢI** có độ trễ trung bình (overhead latency) dưới 50 mili-giây (ms) nhờ cơ chế cache Redis.
+- **Phép đo:** Khoảng thời gian đo lường và log ghi nhận trong module `QueryRewriter`.
+
+### NFR-PER-006: Độ tươi của dữ liệu phân tích (Analytics Data Freshness)
+- **Mô tả:** Độ trễ từ khi sự kiện hội thoại chatbot hoàn tất phát ra cho đến khi dữ liệu được Analytics Service tiêu thụ, phân tích và phản ánh trên dashboard **PHẢI** dưới 5 phút (freshness < 5 minutes).
+- **Phép đo:** Độ chênh lệch giữa trường `timestamp` của sự kiện và thời điểm dữ liệu xuất hiện trên API `/api/v1/rag-performance`.
+
 ---
 
 ## 6.2. Khả năng mở rộng (Scalability - NFR-SCA)
@@ -60,7 +68,8 @@
 - **Mô tả:** Hệ thống **PHẢI** ngăn chặn tuyệt đối hiện tượng rò rỉ dữ liệu chéo giữa các Tenants (Data Leakage). 
 - **Giải pháp:**
   - Ở tầng cơ sở dữ liệu Postgres: Áp dụng PostgreSQL Row-Level Security (RLS) bắt buộc trên tất cả các bảng. Mọi truy vấn SQL từ ứng dụng **PHẢI** thực thi dưới context `tenant_id` của phiên làm việc.
-  - Ở tầng Vector DB (Qdrant): Mọi câu lệnh tìm kiếm ngữ cảnh **PHẢI** áp dụng metadata filter `tenant_id`.
+  - Ở tầng Vector DB (Qdrant): Mọi câu lệnh tìm kiếm ngữ cảnh **PHẢI** áp dụng metadata filter `tenant_id`. Bất kỳ yêu cầu tìm kiếm nào thiếu filter `tenant_id` đều bị chặn cứng ở tầng Knowledge Base.
+  - Ở tầng Analytics DB (TimescaleDB): Mọi câu lệnh SQL truy vấn và ghi dữ liệu metrics **PHẢI** đi kèm điều kiện `tenant_id` để phân tách dữ liệu tuyệt đối giữa các khách hàng doanh nghiệp.
   - Ở tầng Object Storage (MinIO): Lưu trữ tệp tách biệt theo cấu trúc thư mục `{tenant_id}/...`.
 
 ### NFR-SEC-002: Mã hóa dữ liệu truyền tải (Data in Transit)
@@ -75,6 +84,10 @@
 ### NFR-SEC-005: Xác thực Chữ ký Quyền hạn Downstream (Downstream Permission Signature Verification)
 - **Mô tả:** Để ngăn chặn hoàn toàn nguy cơ giả mạo Header (Header Spoofing) trong mạng nội bộ, tất cả các microservices nghiệp vụ (downstream services) khi nhận request **PHẢI** xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng cách tính toán lại chữ ký từ các header `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và khóa bí mật `GATEWAY_SIGNING_SECRET`. Bất kỳ request nào không khớp chữ ký **PHẢI** bị từ chối ngay lập tức với mã lỗi `403 Forbidden`. Thời gian xử lý của lớp bảo vệ này **PHẢI** dưới 2 mili-giây (ms) để không ảnh hưởng đến hiệu năng chung của hệ thống.
 - **Phép đo:** Tracing log của middleware/guard đo bằng OpenTelemetry.
+
+### NFR-SEC-006: Xác thực HMAC cho API Analytics
+- **Mô tả:** Toàn bộ cuộc gọi API đến Analytics Service thông qua Gateway **PHẢI** đi qua bộ lọc xác thực chữ ký HMAC-SHA256 sử dụng khóa bí mật chung `GATEWAY_SIGNING_SECRET`. Bất kỳ sai lệch nào về chữ ký hoặc thiếu headers xác thực **PHẢI** dẫn đến việc từ chối yêu cầu tức thì với mã lỗi `403 Forbidden`.
+- **Phép đo:** Tỷ lệ từ chối request không hợp lệ trong unit và integration tests.
 
 ---
 

@@ -60,6 +60,19 @@ Dịch vụ thu thập metrics, engagement tracking, AI-powered insights, report
 2. THE ANALYTICS_Service SHALL thực hiện kiểm tra chữ ký số HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET` để xác thực request được gửi trực tiếp từ API Gateway tin cậy.
 3. THE ANALYTICS_Service SHALL thực hiện kiểm tra quyền in-memory O(1) dựa trên HTTP Header `X-User-Permissions` truyền từ Gateway. Định dạng quyền của dịch vụ tuân theo cấu trúc `analytics:{resource}:{action}` hỗ trợ ký tự đại diện `*` (Super Admin), `analytics:*` (Toàn quyền trên service), và `analytics:{resource}:*` (Toàn quyền trên tài nguyên).
 
+
+### Requirement 6: Knowledge Gap & RAG Performance Tracking (MỚI - Giai đoạn 2)
+
+**User Story:** Là quản trị viên hệ thống, tôi muốn theo dõi hiệu suất RAG của chatbot và nhận diện các khoảng trống tri thức (Knowledge Gaps) để cải thiện chất lượng câu trả lời của AI.
+
+#### Acceptance Criteria
+1. THE Analytics_Service SHALL consume events từ Kafka topic `chatbot.conversation.completed` chứa các chỉ số chất lượng RAG.
+2. THE Analytics_Service SHALL lưu trữ các metrics RAG vào TimescaleDB hypertable `rag_metrics` bao gồm: similarity score, grounding score, latency, confidence, cache hits.
+3. THE Analytics_Service SHALL thực thi kiểm tra tính duy nhất (idempotency) của event dựa trên `event_id` để tránh tính toán sai lệch khi Kafka gửi lặp.
+4. THE Analytics_Service SHALL cung cấp API `GET /api/v1/knowledge-gaps` trả về top 20 câu hỏi không tìm thấy tri thức (similarity < 0.50) hoặc bị handoff do độ tin cậy thấp, nhóm theo nội dung câu hỏi và sắp xếp theo tần suất xuất hiện giảm dần.
+5. THE Analytics_Service SHALL cung cấp API `GET /api/v1/rag-performance` trả về hiệu năng tổng quan của RAG (độ tương đồng trung bình, tỉ lệ grounding thành công, tỉ lệ cache hit, tỉ lệ handoff).
+6. Dữ liệu phân tích RAG SHALL cập nhật mới nhất trong vòng dưới 5 phút (data freshness < 5 minutes).
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs và SSE endpoints của Analytics Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `analytics`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Analytics Service.

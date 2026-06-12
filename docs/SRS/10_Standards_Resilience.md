@@ -173,6 +173,20 @@ Nhằm mục đích triệt tiêu các lỗi sập hệ thống (HTTP 500) khi d
   - Khi Redis hoạt động bình thường nhưng bị thiếu cấu hình limits (Cache Miss): request hiện tại vẫn đi qua bình thường (fail-safe).
   - Hệ thống tự động tạo một background task bất đồng bộ (`asyncio.create_task`) gọi API của `Tenant Config Service` để kéo lại cấu hình và nạp lại vào Redis + Database, đảm bảo tính nhất quán dữ liệu mà không làm tăng độ trễ mạng của khách hàng hiện tại.
 
+### 10.6.8. Khả năng tự phục hồi của Consumer và Service Discovery (RagMetrics Consumer & Registry Client)
+
+Để đảm bảo tính liên tục của dữ liệu phân tích và tính ổn định của hệ thống đăng ký dịch vụ động khi có sự cố mạng hoặc sập dịch vụ trung gian:
+
+1. **Khả năng phục hồi của `RagMetricsConsumer`:**
+   - **Idempotency (Kiểm soát trùng lặp):** Consumer **PHẢI** kiểm tra khóa `event_id` trong Redis hoặc TimescaleDB trước khi ghi nhận để lọc bỏ các sự kiện trùng lặp do cơ chế retry ở phía producer (at-least-once delivery).
+   - **Manual Offset Commit (Xác nhận thủ công):** Consumer **PHẢI** cấu hình tắt chế độ tự động commit offset (`enable.auto.commit = false`). Hệ thống chỉ thực hiện commit offset lên Kafka sau khi dữ liệu đã được ghi xuống TimescaleDB thành công. Điều này triệt tiêu hoàn toàn nguy cơ mất mát dữ liệu khi container bị dừng đột ngột giữa chừng.
+   - **Dead Letter Queue (DLQ):** Khi gặp các bản tin bị lỗi định dạng JSON (malformed) hoặc lỗi logic nghiệp vụ không thể tự sửa đổi, Consumer **PHẢI** đẩy bản tin đó sang Kafka DLQ topic `chatbot.conversation.completed.dlq` và ghi log warning kèm stacktrace để phục vụ điều tra, tránh làm nghẽn toàn bộ luồng tiêu thụ.
+
+2. **Cơ chế Fail-Safe của `ServiceDiscoveryClient`:**
+   - Khi `Analytics Service` khởi động, nó tự đăng ký vào Redis Registry.
+   - Nếu kết nối tới Redis Registry bị ngắt (Redis downtime): Registry Client **PHẢI** bắt lỗi, chuyển sang chế độ tự hoạt (Local Standalone Mode) và tiếp tục phục vụ các tác vụ tính toán metrics nghiệp vụ bình thường. Kong API Gateway sẽ tự động sử dụng cơ chế fallback DNS để chuyển tiếp traffic trực tiếp tới host port của service mà không gây downtime.
+   - Khi Redis hoạt động trở lại, Registry Client **PHẢI** tự động kết nối lại (auto-reconnect) và đăng ký lại thông tin của mình.
+
 ---
 
 ## 10.7. Chính sách lưu trữ và dọn dẹp dữ liệu (Data Retention & Archiving Policy)

@@ -40,7 +40,7 @@ graph TB
 
     subgraph "Java Reliability Services (Spring Boot)"
         SCHED["Scheduler Quartz (Port 8003)"]
-        ANALYTICS["Analytics TimescaleDB (Port 8006)"]
+        ANALYTICS["Analytics Service (Port 8006)"]
         CAMPAIGN["Campaign Service (Port 8007)"]
     end
 
@@ -48,6 +48,7 @@ graph TB
         Kafka["Apache Kafka (Message Broker)"]
         Redis["Redis 7 (Caching, Pub/Sub & Sessions)"]
         PG["PostgreSQL (Per-service DB)"]
+        Timescale["TimescaleDB (Analytics Time-Series)"]
         Qdrant["Qdrant (Vector DB)"]
         MinIO["MinIO (S3 Object Storage)"]
     end
@@ -70,16 +71,19 @@ graph TB
     CC -->|HTTPS| FB & ZALO & TIKTOK
 
     CC & DMS & SHORT & MED -->|Publish Event| Kafka
-    MSG & CRM & ANALYTICS & NOTIF & COMMENT & CONF & DMS & SHORT & MED -->|Consume/Publish| Kafka
+    MSG & CRM & NOTIF & COMMENT & CONF & DMS & SHORT & MED -->|Consume/Publish| Kafka
     SCHED & CONTENT & CAMPAIGN -->|Publish Event| Kafka
+    AI -->|Publish Conversation Completed| Kafka
+    ANALYTICS -->|Consume Conversation Completed| Kafka
 
     AllServices[All Services] -->|REST/gRPC| PG
     KB -->|REST| Qdrant
     AllServices -->|TCP| Redis
     CONTENT & KB & DMS & MED -->|S3 API| MinIO
+    ANALYTICS -->|Write/Read Metrics| Timescale
     
     CONF -->|Cache & Pub/Sub| Redis
-    CB & MSG & CONTENT & CC & COMMENT & CRM & DMS & SHORT -->|Read Config Cache| Redis
+    CB & MSG & CONTENT & CC & COMMENT & CRM & DMS & SHORT & AI & ANALYTICS -->|Read Config Cache| Redis
 ```
 
 ---

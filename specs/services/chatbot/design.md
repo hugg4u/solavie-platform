@@ -178,6 +178,8 @@ message ChatResponse {
   string block_reason = 8;
   bool breakpoint_pending = 9;
   string breakpoint_id = 10;
+  float max_similarity_score = 11;
+  string handoff_reason = 12;
 }
 
 enum Action {
@@ -239,6 +241,8 @@ class ChatState(TypedDict):
     sentiment: str
     response: str
     action: Literal["reply", "handoff", "clarify", "lead_capture", "breakpoint"]
+    max_similarity_score: float
+    handoff_reason: Optional[str]
     
     # Sliding Window Memory
     summary: Optional[str]          # Auto-summarization of old messages
@@ -444,6 +448,8 @@ CREATE TABLE chatbot_logs (
     model_used VARCHAR(100),
     tokens_used INT,
     tokens_cached INT,
+    max_similarity_score FLOAT,
+    handoff_reason VARCHAR(100),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

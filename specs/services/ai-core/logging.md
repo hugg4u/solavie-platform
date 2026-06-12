@@ -87,6 +87,63 @@
 }
 ```
 
+
+### Query Rewriter Log Format (MỚI)
+```json
+{
+  "timestamp": "2026-06-12T14:00:00.123Z",
+  "level": "info",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Query rewritten successfully",
+  "action": "query_rewritten",
+  "context": {
+    "original_query": "Loại đó giá bao nhiêu?",
+    "standalone_query": "Giá pin lithium của Solavie là bao nhiêu?",
+    "query_rewritten": true,
+    "latency_ms": 32,
+    "model_used": "gpt-4o-mini"
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-06-12T14:00:02.123Z",
+  "level": "warn",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Query rewrite failed, falling back to original query",
+  "action": "rewrite_fallback",
+  "context": {
+    "original_query": "Loại đó giá bao nhiêu?",
+    "error_message": "LLM connection timeout after 5s",
+    "latency_ms": 5002
+  }
+}
+```
+
+### Conversation Event Publisher Log Format (MỚI)
+```json
+{
+  "timestamp": "2026-06-12T14:00:05.123Z",
+  "level": "info",
+  "service": "ai-core",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Conversation event published to Kafka",
+  "action": "conversation_event_published",
+  "context": {
+    "event_id": "event-uuid",
+    "topic": "chatbot.conversation.completed",
+    "partition": 2,
+    "offset": 4012
+  }
+}
+```
+
 ### Log Levels
 | Level | Khi nào dùng | Ví dụ |
 |-------|-------------|-------|

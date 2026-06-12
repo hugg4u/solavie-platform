@@ -166,6 +166,26 @@ This document tracks the implementation checklist for **KNOWLEDGE-BASE Service**
 - [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
 
 
+### Task 9: Expose Similarity Score (Giai đoạn 1)
+> *User Story: Là AI system, tôi muốn các API search trả về độ tương đồng lớn nhất một cách rõ ràng để hỗ trợ việc đánh giá chất lượng RAG.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 9.1: Cập nhật API search và Reranker để luôn trả về `max_similarity_score` trong response payload.
+- [ ] AC 9.2: Đảm bảo score này phản ánh đúng kết quả sau Rerank.
+
+### Task 10: Hard Validation for Tenant Filter (Giai đoạn 1)
+> *User Story: Là Tenant Admin, tôi muốn chắc chắn rằng kết quả tìm kiếm của tôi luôn được cô lập hoàn toàn với các tenant khác.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 10.1: Triển khai kiểm tra bắt buộc `tenant_id` trong mọi payload request tìm kiếm và upload.
+- [ ] AC 10.2: Thực hiện validate nghiêm ngặt filter `tenant_id` trong truy vấn Qdrant; từ chối xử lý và ném lỗi 400/403 nếu thiếu hoặc không khớp.
+
+### Task 11: Low Similarity Logging (Giai đoạn 2)
+> *User Story: Là hệ thống, tôi muốn ghi nhận log warning khi các lượt tìm kiếm có độ tương đồng quá thấp để hỗ trợ phát hiện khoảng trống tri thức.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 11.1: Khi `max_similarity_score < 0.50` (hoặc ngưỡng cấu hình của tenant), ghi nhận log level WARN kèm theo thông tin `tenant_id`, `query`, và `similarity_score`.
+
 ---
 
 ## Service Discovery & Health API Tasks

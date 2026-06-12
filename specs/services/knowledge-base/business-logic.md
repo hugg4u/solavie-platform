@@ -332,6 +332,10 @@ async def search_with_cache(query: str, tenant_id: str, top_k: int = 5):
       Chỉ cần tăng version (INCR {tenant_id}:kb_version). Toàn bộ cache cũ của tenant
       sẽ tự động bị vô hiệu hoá trên hot-path mà không gây block Redis bằng lệnh SCAN + DEL.
     """
+    # 0. Hard validation tenant_id
+    if not tenant_id or tenant_id.strip() == "":
+        raise ValueError("tenant_id validation failed: missing tenant_id")
+
     # 1. Lấy phiên bản cache của tenant
     version_key = f"{tenant_id}:kb_version"
     kb_version = await redis.get(version_key)
@@ -346,13 +350,33 @@ async def search_with_cache(query: str, tenant_id: str, top_k: int = 5):
     # 3. Đọc cache
     cached = await redis.get(cache_key)
     if cached:
-        return json.loads(cached)  # Cache hit: ~1ms thay vì ~30ms
+        data = json.loads(cached)
+        # Ghi log cảnh báo nếu similarity từ cache thấp
+        max_score = data.get("max_similarity_score", 0.0)
+        if max_score < 0.50:
+            logger.warning(
+                f"[Cached] Low RAG similarity detected. Tenant: {tenant_id}, "
+                f"Query: '{query}', Max Score: {max_score}"
+            )
+        return data  # Cache hit: ~1ms thay vì ~30ms
 
-    results = await hybrid_search(query, tenant_id, top_k)
+    results, max_similarity_score = await hybrid_search(query, tenant_id, top_k)
+
+    # 3.5. Ghi log cảnh báo nếu độ tương đồng thực tế thấp
+    if max_similarity_score < 0.50:
+        logger.warning(
+            f"Low RAG similarity detected. Tenant: {tenant_id}, "
+            f"Query: '{query}', Max Score: {max_similarity_score}"
+        )
+
+    response_payload = {
+        "results": results,
+        "max_similarity_score": max_similarity_score
+    }
 
     # 4. Lưu cache
-    await redis.setex(cache_key, 1800, json.dumps(results))
-    return results
+    await redis.setex(cache_key, 1800, json.dumps(response_payload))
+    return response_payload
 
 async def invalidate_tenant_cache(tenant_id: str):
     """Tăng số version để vô hiệu hoá toàn bộ cache tìm kiếm của tenant ngay lập tức."""

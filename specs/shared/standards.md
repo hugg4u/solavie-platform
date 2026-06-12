@@ -88,7 +88,6 @@ Tất cả service-to-service errors dùng format chung:
 }
 ```
 
-**Error types:**
 | Type | HTTP | Retriable |
 |------|------|-----------|
 | validation_error | 400 | No |
@@ -98,6 +97,7 @@ Tất cả service-to-service errors dùng format chung:
 | rate_limited | 429 | Yes (after Retry-After) |
 | service_unavailable | 503 | Yes |
 | timeout | 504 | Yes |
+| publisher_failure | 503 | Yes (bọc retry trong publisher) |
 | internal_error | 500 | Maybe |
 
 **AI Core Tool Executor:** Tool errors PHẢI trả structured object, KHÔNG trả string để LLM không hiểu nhầm là data.
@@ -240,5 +240,33 @@ Java services dùng Spring Actuator: `/actuator/health`, `/actuator/prometheus`
    - Comment Manager Service: `comment-manager`
    - Notification Service: `notification`
    - Channel Connector Service: `channel-connector`
+
+
+## 12. Kafka Event Streaming Standard (MỚI)
+
+Để đảm bảo các dịch vụ trao đổi thông điệp bất đồng bộ qua Kafka nhất quán và tin cậy, toàn bộ hệ thống phải tuân thủ các quy tắc sau:
+
+### 12.1 Naming Convention cho Kafka Topics
+Tên các topic bắt buộc phải tuân theo cấu trúc phân cấp bằng dấu chấm:
+`{domain_hoac_service_name}.{resource_name}.{action_name_hoac_state}`
+
+**Ví dụ:**
+- `chatbot.conversation.completed` (Chatbot kết thúc lượt hội thoại RAG)
+- `channel.message.received` (Nhận tin nhắn mới từ social channel)
+- `content.published` (Bài viết được đăng thành công)
+
+### 12.2 Cấu hình Topic mặc định (Production Baseline)
+- **Partitions:** Tối thiểu 6 partitions để phân tải song song tốt.
+- **Replication Factor:** Tối thiểu 2 trong môi trường production/staging để đảm bảo High Availability.
+- **Retention Time:** Mặc định 7 ngày (`retention.ms = 604800000`) để cho phép replay dữ liệu khi có sự cố.
+- **Partition Key:** Mọi message được gửi lên Kafka bắt buộc phải chỉ định **key** là `tenant_id` (hoặc prefix của tenant) để đảm bảo:
+  - Tất cả tin nhắn của cùng một tenant được định tuyến về cùng một partition và xử lý theo đúng thứ tự thời gian gửi (Strict Ordering).
+
+### 12.3 Tiêu chuẩn Publisher Failures & Resiliency
+Khi một dịch vụ (Publisher) không thể gửi tin nhắn lên Kafka (do broker sập, timeout, network error):
+- **Retry Policy:** Thực hiện retry tối đa 3 lần với cơ chế exponential backoff (1s, 2s, 4s).
+- **Error Response:** Trả về structured error dạng `"error_type": "publisher_failure"` với HTTP 503 cho client nếu gọi sync.
+- **Background Publisher (Fire-and-Forget):** Nếu gọi async, ghi nhận lỗi vào Dead Letter Log/Queue của chính service đó và nâng cảnh báo thông qua Prometheus metric `publisher_failures_total` mà không được phép làm crash tiến trình chính.
+
 
 

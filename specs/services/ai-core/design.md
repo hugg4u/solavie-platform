@@ -15,8 +15,9 @@ Xem **Architecture**, **gRPC Interface**, **REST API**, và **Model Routing Conf
 | gRPC | grpcio + grpcio-tools |
 | Database | PostgreSQL 16 |
 | ORM | SQLAlchemy 2 + asyncpg |
-| Cache | Redis (prompt cache) |
+| Cache | Redis (prompt cache, query rewrite cache, semantic cache) |
 | Circuit Breaker | pybreaker (với cấu hình loại trừ lỗi client và timeout động per-provider) |
+| Message Broker | Kafka (events streaming) |
 | Testing | pytest + pytest-asyncio |
 
 ## Architecture
@@ -27,11 +28,13 @@ graph TB
         GRPC_S["gRPC Server (50052)"]
         REST["FastAPI (8005)"]
         ROUTER["Model Router"]
+        QUERY_REWRITER["Query Rewriter"]
         SEM_CACHE["Semantic Cache Manager"]
         OPT["Token Optimizer"]
         CACHE["Prompt Cache"]
         CB["Circuit Breaker"]
         LOG["Usage Logger"]
+        PUB["Conversation Event Publisher"]
     end
 
     subgraph "LLM Providers"
@@ -43,6 +46,7 @@ graph TB
     subgraph "Storage"
         PG["PostgreSQL"]
         REDIS_STACK["Redis Stack"]
+        KAFKA["Kafka (chatbot.conversation.completed)"]
     end
 
     Chatbot -->|gRPC| GRPC_S
@@ -58,13 +62,16 @@ graph TB
     SEM_CACHE -.-->|hit| GRPC_S & REST
     
     %% Luồng Cache Miss
-    SEM_CACHE -->|miss| OPT
+    SEM_CACHE -->|miss| QUERY_REWRITER
+    QUERY_REWRITER -->|query rewrite cache| REDIS_STACK
+    QUERY_REWRITER --> OPT
     OPT --> CACHE
     CACHE -->|miss| CB
     CB --> OPENAI & ANTHROPIC & LOCAL
     
     LOG --> PG
     CACHE --> REDIS_STACK
+    PUB -->|publish| KAFKA
 ```
 
 ## gRPC Interface (Server)
@@ -234,6 +241,38 @@ MODEL_ROUTING = {
     ...
 }
 ```
+
+## Query Rewriter Module
+
+Query Rewriter là một module trung gian trong AI Core thực hiện việc tiền xử lý hội thoại khi use_case là `chatbot` và có lịch sử hội thoại dài hơn 1 tin nhắn (số tin nhắn >= 2). Module này có nhiệm vụ viết lại câu hỏi phụ thuộc ngữ cảnh thành một câu truy vấn độc lập (**Standalone Query**), giúp cải thiện đáng kể độ chính xác của bước tìm kiếm tri thức (RAG retrieval) ở phía sau.
+
+### 1. Kiến trúc luồng xử lý (Processing Flow)
+- **Kiểm tra điều kiện:** Chỉ kích hoạt khi `use_case == "chatbot"` và `messages` có ít nhất 2 tin nhắn. Nếu không thỏa mãn, bỏ qua (bypass) và trả về câu hỏi gốc.
+- **Kiểm tra cache:** Tạo cache key bằng MD5 hash của lịch sử hội thoại + câu hỏi hiện tại. Truy vấn Redis. Nếu cache hit, trả về ngay kết quả đã lưu.
+- **LLM Call:** Nếu cache miss, gọi LLM model rẻ nhất (cấu hình trong dynamic routing config của tenant) để thực hiện viết lại câu hỏi theo prompt template.
+- **Cập nhật cache:** Lưu standalone query vào Redis với TTL là 3600s (1 giờ).
+- **Fallback:** Nếu có bất kỳ lỗi nào xảy ra trong quá trình gọi LLM, ghi log warning và trả về câu hỏi gốc của user thay vì làm gián đoạn cuộc hội thoại.
+
+### 2. Prompt Template
+```
+Bạn là một trợ lý tối ưu hóa câu truy vấn.
+Dựa vào lịch sử đàm thoại bên dưới, hãy viết lại câu hỏi cuối cùng 
+thành một câu HOÀN CHỈNH, TỰ CHỨA (không cần đọc lịch sử mới hiểu được).
+
+Quy tắc:
+- Giữ nguyên ngôn ngữ (tiếng Việt/Anh)
+- Chỉ trả về câu hỏi viết lại, KHÔNG giải thích
+- Nếu câu hỏi đã rõ ràng, trả về nguyên gốc
+
+Lịch sử: {history_str}
+Câu hỏi cuối: {current_question}
+Câu hỏi viết lại:
+```
+
+### 3. Redis Cache Schema
+- **Key:** `query_rewrite:{tenant_id}:{md5(history_str + current_question)}`
+- **Value:** Chuỗi Standalone Query (String)
+- **TTL:** 3600 giây (1 giờ)
 
 ## Semantic Cache Architecture (Redis Stack Vector Search)
 

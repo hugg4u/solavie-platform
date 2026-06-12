@@ -60,6 +60,8 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 5. THE Knowledge_Base SHALL trả về top-K results (configurable, default 20)
 6. THE Knowledge_Base SHALL cache kết quả tìm kiếm trên Redis và áp dụng cơ chế Cache Versioning (tăng số version khi có thay đổi tài liệu) để vô hiệu hóa cache cũ mà không gây block Redis bằng lệnh SCAN.
 7. THE Knowledge_Base SHALL tự động chuyển đổi sang Local Embedding Fallback (sử dụng FastEmbed cục bộ để sinh vector 384 chiều) và thực hiện truy vấn trên trường vector `local_fastembed` của Qdrant nếu API OpenAI chính bị lỗi hoặc timeout.
+8. THE Knowledge_Base SHALL luôn trả về giá trị `max_similarity_score` trong kết quả tìm kiếm (phản ánh độ tương đồng cao nhất sau Reranking).
+9. THE Knowledge_Base SHALL bắt buộc kiểm tra và validate nghiêm ngặt sự hiện diện của bộ lọc `tenant_id` trong mọi truy vấn Qdrant; từ chối xử lý và trả về mã lỗi 400 Bad Request / 403 Forbidden nếu thiếu hoặc không khớp với tenant của user thực hiện truy vấn.
 
 ### Requirement 5: Reranking
 

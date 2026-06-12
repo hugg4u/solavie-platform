@@ -135,6 +135,70 @@ Hệ thống giao tiếp với các phần mềm bên ngoài thông qua các API
   - *Response (302 Found / Redirect):*
     - Redirect tới link trực tiếp CDN (nếu Public) hoặc URL dạng: `https://minio.tenant.com/solavie/dms/file.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...&X-Amz-Expires=900` (nếu Private).
 
+#### 4. API Thống kê & Giám sát chất lượng RAG (Analytics Service - Port 3009)
+- **GET** `/api/v1/rag-performance`
+  - *Mô tả:* Lấy thông số thống kê hiệu năng RAG (độ tương đồng trung bình, điểm grounding trung bình, tỷ lệ cache hit, v.v.).
+  - *Headers:* 
+    - `X-Tenant-ID: <TENANT_ID>`
+    - `X-User-ID: <USER_ID>`
+    - `X-User-Permissions: analytics:metrics:read`
+    - `X-Permissions-Signature: <HMAC_SIGNATURE>`
+  - *Params:*
+    - `start_date`: Định dạng `YYYY-MM-DD` (Bắt buộc)
+    - `end_date`: Định dạng `YYYY-MM-DD` (Bắt buộc)
+    - `granularity`: `daily` hoặc `hourly`
+  - *Response (200 OK):*
+    ```json
+    {
+      "tenant_id": "tenant-solavie-99a",
+      "start_date": "2026-06-01",
+      "end_date": "2026-06-07",
+      "metrics": [
+        {
+          "time": "2026-06-01T00:00:00Z",
+          "avg_similarity": 0.78,
+          "avg_grounding": 0.89,
+          "cache_hit_rate": 0.42,
+          "total_conversations": 150
+        }
+      ]
+    }
+    ```
+  - *Response (403 Forbidden):* `{"status": "error", "message": "Signature verification failed"}`
+
+- **GET** `/api/v1/knowledge-gaps`
+  - *Mô tả:* Lấy danh sách các câu hỏi người dùng có độ tương đồng RAG thấp hoặc dẫn đến handoff, đã được gom nhóm ngữ nghĩa (semantic clustering). Kết quả được cache Redis 5 phút.
+  - *Headers:* 
+    - `X-Tenant-ID: <TENANT_ID>`
+    - `X-User-ID: <USER_ID>`
+    - `X-User-Permissions: analytics:metrics:read`
+    - `X-Permissions-Signature: <HMAC_SIGNATURE>`
+  - *Params:*
+    - `start_date`: Định dạng `YYYY-MM-DD` (Bắt buộc)
+    - `end_date`: Định dạng `YYYY-MM-DD` (Bắt buộc)
+    - `min_frequency`: Tần suất tối thiểu xuất hiện câu hỏi (Mặc định 3)
+    - `limit`: Giới hạn số nhóm trả về (Mặc định 10)
+  - *Response (200 OK):*
+    ```json
+    {
+      "tenant_id": "tenant-solavie-99a",
+      "gaps": [
+        {
+          "cluster_id": "gap-cluster-01",
+          "representative_query": "Bảo hành pin mặt trời Solavie bao lâu?",
+          "sample_queries": [
+            "Pin solar được bảo hành mấy năm?",
+            "Thời hạn bảo hành pin mặt trời là bao lâu?"
+          ],
+          "frequency": 12,
+          "avg_similarity": 0.32,
+          "last_triggered_at": "2026-06-12T14:00:00Z"
+        }
+      ]
+    }
+    ```
+  - *Response (403 Forbidden):* `{"status": "error", "message": "Forbidden - Missing permission analytics:metrics:read"}`
+
 ### 7.2.2. Định nghĩa gRPC Services nội bộ
 Các dịch vụ nội bộ yêu cầu tốc độ phản hồi cao sử dụng gRPC. Ví dụ dưới đây là file định nghĩa Protocol Buffers (.proto) của luồng Chatbot:
 
@@ -169,6 +233,7 @@ message ChatMessageResponse {
   float confidence_score = 2; // Điểm tin cậy của chatbot
   string action_directive = 3; // Lệnh điều khiển đặc biệt: "NONE", "HANDOFF", "OCR_INVOICE"
   bool is_final = 4;          // Đánh dấu kết thúc stream
+  float max_similarity_score = 5; // Điểm tương đồng RAG lớn nhất tìm được
 }
 
 message HealthRequest {}

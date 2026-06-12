@@ -108,6 +108,48 @@ This document tracks the implementation checklist for **ANALYTICS Service** base
 - [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
 
 
+### Task 22: Database Migration for RAG Metrics (Giai đoạn 2)
+> *User Story: Là DBA, tôi muốn bảng lưu trữ metrics chất lượng RAG được tối ưu hóa cho TimescaleDB để lưu trữ và truy vấn nhanh dữ liệu chuỗi thời gian.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 22.1: Tạo file Flyway migration `V2__add_rag_metrics_table.sql` định nghĩa cấu trúc bảng `rag_metrics`.
+- [ ] AC 22.2: Thiết lập TimescaleDB hypertable cho bảng `rag_metrics` dựa trên trường `time`.
+- [ ] AC 22.3: Đánh chỉ mục (index) tối ưu trên `tenant_id`, `chatbot_action`, `rag_similarity` (với filter `rag_similarity < 0.50` cho các câu hỏi bị gap).
+
+### Task 23: RagMetrics Kafka Consumer (Giai đoạn 2)
+> *User Story: Là hệ thống, tôi muốn tiêu thụ sự kiện kết thúc hội thoại từ Kafka để cập nhật cơ sở dữ liệu.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 23.1: Xây dựng `RagMetricsConsumer` lắng nghe topic `chatbot.conversation.completed`.
+- [ ] AC 23.2: Thực hiện kiểm tra tính duy nhất (idempotency check) chống trùng lặp bằng cách check sự tồn tại của `event_id` trước khi ghi DB.
+- [ ] AC 23.3: Deserialize payload JSON và gọi `RagMetricsService` để lưu trữ thông tin.
+
+### Task 24: RagMetrics & KnowledgeGap Services (Giai đoạn 2)
+> *User Story: Là hệ thống, tôi muốn có các service xử lý nghiệp vụ lưu trữ và phân tích khoảng trống tri thức.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 24.1: Xây dựng entity `RagMetric` và repository tương ứng.
+- [ ] AC 24.2: Xây dựng `RagMetricsService` tính toán các thông số hiệu năng trung bình (RAG performance).
+- [ ] AC 24.3: Xây dựng `KnowledgeGapService` thực hiện native query tìm kiếm top 20 câu hỏi có similarity < 0.50 hoặc chatbot_action = handoff, sắp xếp theo tần suất xuất hiện giảm dần.
+- [ ] AC 24.4: Cache kết quả Knowledge Gap trên Redis trong vòng 5 phút (TTL 300s).
+
+### Task 25: REST Controllers & Security Integration (Giai đoạn 2)
+> *User Story: Là admin, tôi muốn truy vấn danh sách Knowledge Gap và RAG Performance qua REST API an toàn.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 25.1: Tạo các endpoint `GET /api/v1/knowledge-gaps` và `GET /api/v1/rag-performance`.
+- [ ] AC 25.2: Tích hợp bộ lọc HMAC Signature verification filter để xác thực request gửi từ Gateway.
+- [ ] AC 25.3: Thực hiện phân quyền kiểm tra in-memory O(1) quyền `analytics:metrics:read` (hỗ trợ wildcard).
+
+### Task 26: Unit & Integration Tests (Giai đoạn 2)
+**Acceptance Criteria Implementation:**
+- [ ] AC 26.1: Viết test `RagMetricsConsumerTest` kiểm thử consumer và idempotency.
+- [ ] AC 26.2: Viết test `KnowledgeGapServiceTest` kiểm thử SQL logic nhóm câu hỏi và Redis cache.
+- [ ] AC 26.3: Viết test `SecurityAndControllerTest` xác thực chữ ký HMAC thành công/thất bại, và chặn truy cập trái phép.
+
+### Task 27: MCP Tool Extension (Giai đoạn 2)
+- [ ] AC 27.1: Đăng ký thêm thông số hoặc cấu hình tool `analytics_query` trong McpController để hỗ trợ truy vấn các chỉ số RAG mới.
+
 ---
 
 ## Service Discovery & Health API Tasks

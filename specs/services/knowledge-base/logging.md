@@ -14,7 +14,7 @@
     "dense_results": 20,
     "sparse_results": 15,
     "reranked_top_k": 5,
-    "top_score": 0.89,
+    "max_similarity_score": 0.89,
     "latency_ms": 8,
     "cache_hit": false
   }
@@ -27,7 +27,7 @@
 | ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | Qdrant unreachable, embedding API fail, document parse fail | `"Qdrant connection refused"` |
 | WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
-| WARN | Low search scores, embedding batch partial fail, slow query | `"Search: all scores < 0.5, likely irrelevant"` |
+| WARN | Low search scores, embedding batch partial fail, low similarity | `"Low RAG similarity detected. Tenant: tenant-uuid, Query: '...', Max Score: 0.42"` |
 | INFO | Document uploaded, search completed, embedding batch done | `"Document indexed: 45 chunks, 12s"` |
 | DEBUG | Chunk content, embedding vectors (truncated), rerank scores | `"Rerank scores: [0.89, 0.76, 0.71, 0.65, 0.52]"` |
 

@@ -155,7 +155,9 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 | **Database chính bị chậm do phình to dữ liệu** | **Cao (Medium)** | Thực thi triệt để Data Retention Policy: logs cũ hơn 30 ngày và tin nhắn cũ hơn 90 ngày bắt buộc phải dọn dẹp sạch khỏi database hoạt động để đưa sang file Parquet trên S3. |
 | **Độ trễ đồng nhất thông tin phân quyền giữa các Kong Workers (W3)** | **Trung bình (Medium)** | Thiết lập cơ chế Cache Versioning trên Redis kết hợp Pub/Sub để phát tín hiệu xóa L1 local cache của từng Worker ngay khi phân quyền thay đổi, giảm trễ xuống < 5s. |
 | **Sập đổ dây chuyền (Cascade Failure) khi Config Service offline (W6)** | **Trung bình (Medium)** | Áp dụng Circuit Breaker cho API Fallback của Gateway, tự động chuyển sang degraded mode (dùng L1 local cache cũ) thay vì trả về 503 Fail-Secure ngay lập tức. |
-| **Mất mát dữ liệu hoặc quá tải RAM trên Redis Stack do RediSearch Index (W7)** | **Cao (Medium)** | Thiết lập cấu hình giới hạn kích thước memory tối đa cho index vector và sử dụng thuật toán HNSW với parameters phù hợp (M=16, ef_construction=200) để cân bằng giữa RAM tiêu thụ và độ chính xác search. |
+| **Mất mát dữ liệu hoặc quá tải RAM trên Redis Stack do RediSearch Index (W7)** | **Cao (Medium)** | Thiết lập cấu hình giới hạn kích thước memory tối đa cho index vector và sử dụng thuật toán HNSW với parameters phù hợp (M=16, ef_construction=200) to cân bằng giữa RAM tiêu thụ và độ chính xác search. |
+| **Phình to dung lượng dữ liệu metrics trên TimescaleDB (MỚI)** | **Cao (Medium)** | Thực thi chính sách dọn dẹp dữ liệu (Data Retention) định kỳ 90 ngày. Di chuyển dữ liệu metrics cũ sang Cold Storage dưới dạng file nén Parquet trên MinIO S3 để giải phóng không gian lưu trữ và tối ưu hiệu năng truy vấn. |
+| **Trùng lặp sự kiện RAG metrics do lỗi mạng hoặc retry của Kafka (MỚI)** | **Trung bình (Medium)** | Áp dụng cơ chế kiểm tra trùng lặp (Idempotent Consumer) dựa trên trường `event_id` (UUID) duy nhất của từng bản ghi trước khi thực hiện ghi dữ liệu vào TimescaleDB. |
 
 ---
 
@@ -167,7 +169,7 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 
 ---
 
-## 6. PHÂN TÍCH TÍNH CHỊU LỖI VÀ AN TOÀN DỮ LIỆU CỦA 6 LUỒNG KAFKA
+## 6. PHÂN TÍCH TÍNH CHỊU LỖI VÀ AN TOÀN DỮ LIỆU CỦA 7 LUỒNG KAFKA
 
 Việc chuyển đổi và thiết lập cơ chế Event-Driven qua Apache Kafka mang lại các thuộc tính chịu lỗi và an toàn dữ liệu vượt trội cho hệ thống Solavie, giải quyết triệt để các rủi ro của cơ chế Redis Pub/Sub thô trước đây:
 
@@ -191,6 +193,10 @@ Việc chuyển đổi và thiết lập cơ chế Event-Driven qua Apache Kafka
 
 6. **Luồng 6: Audit Logs (`audit.events`)**
    * **Độ bền dữ liệu tối đa:** Log bảo mật được ghi nhận bất đồng bộ qua Kafka, không làm ảnh hưởng đến hiệu năng của business transactions. Ngay cả khi cụm ClickHouse/Elasticsearch lưu trữ log bị sập, Kafka broker vẫn lưu trữ logs an toàn để ghi nhận lại sau khi hệ thống lưu trữ phục hồi.
+
+7. **Luồng 7: RAG Quality Metrics (`chatbot.conversation.completed`) [MỚI]**
+   * **Độ chịu lỗi & Tách biệt tải:** Sau khi Chatbot AI sinh câu trả lời, sự kiện hội thoại hoàn thành (bao gồm các chỉ số similarity score, grounding score, latency) được AI Core đẩy lên Kafka topic. Việc này được thực hiện bất đồng bộ (fire-and-forget), hoàn toàn không ảnh hưởng đến thời gian phản hồi của cuộc chat trực tuyến.
+   * **Bảo đảm xử lý tuần tự & Idempotency:** partition key của topic được đặt là `tenant_id` để đảm bảo thứ tự thời gian của các sự kiện thuộc cùng một tenant được bảo toàn trên cùng một partition. Consumer tại Analytics Service xử lý dữ liệu và sử dụng `event_id` làm khóa duy nhất để lọc trùng lặp khi ghi vào TimescaleDB.
 
 ### 6.2. Các cơ chế đảm bảo an toàn & vận hành cụ thể
 * **Manual Offset Commit:** Các consumer được cấu hình `enable.auto.commit = false`. Offset chỉ được commit sau khi consumer đã ghi nhận dữ liệu thành công vào database hoặc dịch vụ đích. Nếu có lỗi xảy ra trong quá trình xử lý, message sẽ không bị mất và sẽ được xử lý lại (At-least-once delivery).

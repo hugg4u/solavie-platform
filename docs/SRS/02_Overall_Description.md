@@ -25,7 +25,7 @@ graph LR
 
     subgraph "MKT Platform (Hệ thống)"
         GW["API Gateway"]
-        CORE["16 Microservices"]
+        CORE["18 Microservices"]
         INFRA["6 Infrastructure Components"]
     end
 
@@ -121,6 +121,7 @@ mindmap
       Dashboard thống kê
       Agent Performance
       ROI Chiến dịch
+      RAG Quality & Knowledge Gaps
       Observability Stack
     Cấu hình Tập trung
       Config per Tenant

@@ -232,6 +232,35 @@ This document tracks the implementation checklist for **CHATBOT Service** based 
 - [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
 
 
+### Task 22: gRPC Proto & Similarity Score Integration (Giai đoạn 1)
+> *User Story: Là chatbot, tôi muốn nhận và xử lý độ tương đồng từ tri thức thu được từ Knowledge Base.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 22.1: Cập nhật file protobuf `proto/chatbot.proto` và `proto/ai_core.proto` để hỗ trợ truyền tải `max_similarity_score` từ KB search.
+- [ ] AC 22.2: Compile lại protobuf files và cập nhật gRPC client/server.
+- [ ] AC 22.3: Nhận `max_similarity_score` từ AI Core response và truyền tải về cho Client.
+
+### Task 23: Multi-turn Integration Tests (Giai đoạn 1)
+> *User Story: Là developer, tôi muốn chạy kiểm thử đa lượt chat để đảm bảo Query Rewriter hoạt động đúng.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 23.1: Viết test case giả lập cuộc hội thoại 3 lượt chat (hỏi -> đáp -> hỏi tiếp dùng từ thay thế).
+- [ ] AC 23.2: Verify câu hỏi thứ 2 và thứ 3 được viết lại (rewritten) chính xác, tham chiếu đến đối tượng ở câu hỏi 1.
+
+### Task 24: Chatbot Action Tagging (Giai đoạn 2)
+> *User Story: Là chatbot, tôi muốn gắn thẻ hành động cho mỗi lượt trả lời để hệ thống phân tích đo lường.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 24.1: Xác định và gán `chatbot_action` cho từng phản hồi (`reply`, `handoff`, `clarify`, `lead_capture`).
+- [ ] AC 24.2: Truyền action tag này sang AI Core gRPC request hoặc trả về trong response.
+
+### Task 25: Handoff Reason Logging (Giai đoạn 2)
+> *User Story: Là agent, tôi muốn biết lý do chính xác tại sao chatbot chuyển giao cuộc gọi sang cho người.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 25.1: Ghi nhận `handoff_reason` chi tiết (ví dụ: `confidence_low`, `sentiment_angry`, `nli_grounding_violation`, `rag_no_docs_found`, `timeout`).
+- [ ] AC 25.2: Viết unit tests kiểm tra từng kịch bản handoff và đảm bảo lý do được truyền tải đúng.
+
 ---
 
 ## Service Discovery & Health API Tasks

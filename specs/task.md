@@ -47,6 +47,7 @@ This master checklist tracks the development and deployment of the entire Solavi
   - [x] Verify local database migrations and OIDC realm config import flows.
 - [ ] **Step 2: Shared Library & Protobuf compilation**
   - [ ] Set up compile tasks for shared gRPC Protobuf files (`proto/chatbot.proto`, `proto/ai_core.proto`).
+  - [ ] Cập nhật và compile gRPC protobuf files hỗ trợ truyền tải `max_similarity_score` từ KB search.
   - [ ] Create shared validation schemas and error handler packages.
 - [x] **Step 3: Gateway Routing & Plugin verification** ✅
   - [x] Route all path prefixes: `/api/v1/auth` to Keycloak, `/api/v1/chatbot` to Chatbot, etc.
@@ -59,6 +60,8 @@ This master checklist tracks the development and deployment of the entire Solavi
   - [ ] Check Redis pub/sub replication of inbox notifications across Gateway replicas.
 - [ ] **Step 5: End-to-End System Integration Testing**
   - [ ] Trigger mock message inflow -> Chatbot processing -> RAG retrieval -> Guardrails -> CRM Lead auto-update.
+  - [ ] Kiểm tra tích hợp Query Rewriting trong các cuộc hội thoại đa lượt (multi-turn chatbot).
+  - [ ] Xác minh Kafka topic `chatbot.conversation.completed` event schema và logic ingestion của Analytics Service.
   - [ ] Audit tenant isolation at every network request and database transaction.
 - [x] **Step 6: Service Discovery & Gateway Routing Optimization** ✅
   - [x] Cấu hình Active/Passive Healthcheck và Circuit Breaker trên Kong.

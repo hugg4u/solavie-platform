@@ -18,7 +18,9 @@
     "language": "vi",
     "latency_ms": 1200,
     "model_used": "gpt-4o-mini",
-    "rag_docs_found": 3
+    "rag_docs_found": 3,
+    "max_similarity_score": 0.89,
+    "handoff_reason": null
   }
 }
 ```
@@ -29,7 +31,7 @@
 | ERROR | Security shared secret configuration missing | `"GATEWAY_SIGNING_SECRET is not configured"` |
 | ERROR | AI Core timeout, Knowledge Base unreachable, LangGraph error | `"AI Core gRPC timeout: 5000ms"` |
 | WARN | Signature validation failure, permission denied, unauthorized access attempt | `"HMAC signature verification failed: signature mismatch"` |
-| WARN | Low confidence handoff, no RAG docs found, retry | `"Handoff: confidence 0.42, no relevant docs"` |
+| WARN | Low confidence handoff, no RAG docs found, NLI violation | `"Handoff: confidence 0.42, reason: rag_no_docs_found, max_similarity: 0.38"` |
 | INFO | Intent classified, response generated, handoff executed | `"Reply sent: faq, confidence 0.85, 1200ms"` |
 | DEBUG | Full prompt, RAG documents, LangGraph state transitions | `"Graph state: classify → retrieve → generate"` |
 

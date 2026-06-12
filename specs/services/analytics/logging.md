@@ -18,6 +18,42 @@
 }
 ```
 
+
+### RAG Event Ingestion Log Format (MỚI)
+```json
+{
+  "timestamp": "2026-06-12T14:10:00.123Z",
+  "level": "info",
+  "service": "analytics",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Successfully consumed and stored RAG metric event",
+  "action": "rag_event_ingestion_success",
+  "context": {
+    "event_id": "event-uuid",
+    "conversation_id": "conversation-uuid",
+    "rag_similarity": 0.87,
+    "chatbot_action": "reply"
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-06-12T14:10:05.123Z",
+  "level": "error",
+  "service": "analytics",
+  "trace_id": "abc123def456",
+  "tenant_id": "tenant-uuid",
+  "message": "Failed to consume RAG metric event from Kafka",
+  "action": "rag_event_ingestion_failure",
+  "context": {
+    "error_message": "Invalid JSON format: missing tenant_id",
+    "raw_payload": "{\"event_id\":\"...\"}"
+  }
+}
+```
+
 ## Log Levels
 | Level | Khi nào | Ví dụ |
 |-------|---------|-------|

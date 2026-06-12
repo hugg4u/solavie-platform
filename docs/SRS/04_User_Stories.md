@@ -1080,19 +1080,61 @@
 
 ---
 
-## 4.14. Tổng hợp User Stories (Cập nhật v1.5.0)
+### US-078: Xem báo cáo hiệu suất RAG
+**As a** Tenant Admin,
+**I want to** xem các biểu đồ thống kê hiệu suất RAG (như độ tương đồng trung bình, tỉ lệ grounding, tỉ lệ trúng cache),
+**So that** tôi có thể đánh giá và cải thiện chất lượng câu trả lời của Chatbot.
+
+**Acceptance Criteria:**
+- **Given** Tenant Admin đã đăng nhập và có quyền `analytics:metrics:read`, **When** mở trang Phân tích RAG, **Then** hệ thống hiển thị biểu đồ phân tích (avg similarity, grounding rate, cache hit rate) theo khoảng thời gian được chọn.
+
+**Priority:** 🟡 Should Have | **Story Points:** 5
+**Liên kết:** UC-39, FR-ANA-005
+
+---
+
+### US-079: Xem danh sách khoảng trống tri thức
+**As a** Tenant Admin,
+**I want to** xem danh sách các câu hỏi mà chatbot không trả lời tốt (do similarity thấp hoặc phải handoff) được gom nhóm tự động theo ngữ nghĩa,
+**So that** tôi biết cần bổ sung tài liệu tri thức nào còn thiếu vào cơ sở dữ liệu.
+
+**Acceptance Criteria:**
+- **Given** Tenant Admin đã đăng nhập, **When** xem trang Khoảng trống tri thức, **Then** hệ thống hiển thị danh sách top 20 nhóm câu hỏi kèm tần suất xuất hiện và đề xuất bổ sung tài liệu.
+- **Given** người dùng nhấn vào nhóm câu hỏi, **When** mở rộng, **Then** hiển thị danh sách các câu hỏi gốc của khách hàng thuộc nhóm đó.
+
+**Priority:** 🟡 Should Have | **Story Points:** 8
+**Liên kết:** UC-40, FR-ANA-003, FR-ANA-004, FR-ANA-005
+
+---
+
+### US-080: Tối ưu hóa câu hỏi dựa trên ngữ cảnh
+**As a** Khách hàng nhắn tin với chatbot,
+**I want to** chatbot hiểu được các câu hỏi ngắn gọn liên quan đến lịch sử hội thoại trước đó mà không bắt tôi phải nhập lại đầy đủ thông tin,
+**So that** trải nghiệm hội thoại được tự nhiên và nhanh chóng.
+
+**Acceptance Criteria:**
+- **Given** lịch sử hội thoại >= 2 câu, **When** tôi gửi câu hỏi chứa đại từ thay thế (ví dụ: "Loại đó giá bao nhiêu?"), **Then** AI Core tự động viết lại thành câu hỏi độc lập (ví dụ: "Giá pin lithium của Solavie là bao nhiêu?") để RAG tìm kiếm chính xác.
+- **Given** câu hỏi đầu tiên của hội thoại, **When** tôi gửi tin nhắn, **Then** hệ thống bỏ qua bước viết lại (bypass) để giảm độ trễ.
+- **Given** LLM viết lại gặp lỗi, **When** xử lý, **Then** hệ thống tự động fallback sử dụng câu hỏi gốc để tìm kiếm.
+
+**Priority:** 🔴 Must Have | **Story Points:** 8
+**Liên kết:** UC-41, FR-AI-016, FR-AI-017, FR-AI-018
+
+---
+
+## 4.14. Tổng hợp User Stories (Cập nhật v1.7.0)
 
 | Epic | Số US | Must Have | Should Have | Could Have |
 |------|-------|-----------|-------------|------------|
 | Identity & Access | 5 | 4 | 1 | 0 |
 | Channel Management | 5 | 3 | 2 | 0 |
 | Messaging & Inbox | 10 | 6 | 3 | 1 |
-| AI Chatbot | 6 | 3 | 3 | 0 |
+| AI Chatbot | 7 | 4 | 3 | 0 |
 | Knowledge Base | 2 | 2 | 0 | 0 |
 | Content & Scheduler | 7 | 3 | 3 | 1 |
 | CRM & Contact | 4 | 3 | 1 | 0 |
 | Campaign | 3 | 0 | 2 | 1 |
-| Analytics | 2 | 0 | 1 | 1 |
+| Analytics | 4 | 0 | 3 | 1 |
 | Tenant Config | 2 | 2 | 0 | 0 |
 | Comment Management | 2 | 0 | 2 | 0 |
 | Document Management (DMS)| 6 | 3 | 3 | 0 |
@@ -1103,9 +1145,9 @@
 | Lead Scoring & CRM+ | 3 | 3 | 0 | 0 |
 | Security & Compliance | 2 | 2 | 0 | 0 |
 | AI Cost Optimization | 1 | 1 | 0 | 0 |
-| **Tổng** | **77** | **42** | **31** | **4** |
+| **Tổng** | **80** | **43** | **33** | **4** |
 
-**Tổng Story Points ước lượng:** ~455 SP
+**Tổng Story Points ước lượng:** ~476 SP
 
 ---
 

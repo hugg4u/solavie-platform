@@ -324,7 +324,34 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [ ] AC 22.7: Viết unit tests kiểm tra lỗi kết nối Redis, cache miss background sync và kiểm tra in-memory cache hits trong `test_rbac_and_metrics.py`.
 
 
+### Task 23: Query Rewriter Module (Giai đoạn 1)
+> *User Story: Là chatbot, tôi cần câu hỏi của khách hàng được viết lại dưới dạng độc lập (Standalone Query) chứa đầy đủ ngữ cảnh để tìm kiếm chính xác trong Knowledge Base.*
 
+**Acceptance Criteria Implementation:**
+- [ ] AC 23.1: Xây dựng QueryRewriter trong `gateway/query_rewriter.py` thực hiện logic viết lại câu hỏi.
+- [ ] AC 23.2: Skip bước rewrite nếu `len(messages) < 2` (câu đầu tiên trong cuộc hội thoại).
+- [ ] AC 23.3: Cache kết quả rewrite vào Redis với key `query_rewrite:{tenant_id}:{md5(history_str + current_question)}` và TTL 3600s.
+- [ ] AC 23.4: Triển khai cơ chế Fallback: Nếu gọi LLM rewrite bị lỗi/timeout, ghi nhận log warning (`rewrite_fallback`) và trả về câu hỏi gốc của user.
+
+### Task 24: Conversation Event Publisher (Giai đoạn 2)
+> *User Story: Là hệ thống, tôi muốn các sự kiện hội thoại chatbot hoàn thành được xuất bản lên Kafka topic để làm dữ liệu phân tích chất lượng RAG.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 24.1: Định nghĩa Pydantic schema `ConversationEvent` trong `schemas/analytics.py` chứa đầy đủ thông tin: event_id, tenant_id, conversation_id, user_query, standalone_query, query_rewritten, scores (similarity, grounding, confidence), chatbot_action, handoff_reason, cache_hit, model_used, latency_ms.
+- [ ] AC 24.2: Xây dựng `ConversationEventPublisher` trong `core/analytics_publisher.py` bọc `AIOKafkaProducer`.
+- [ ] AC 24.3: Thực hiện publish tin nhắn bất đồng bộ sang Kafka topic `chatbot.conversation.completed`, sử dụng `tenant_id` làm partition key.
+- [ ] AC 24.4: Thiết lập cơ chế retry exponential backoff (1s, 2s, 4s) tối đa 3 lần; nếu lỗi ghi log DLQ và nâng metric `publisher_failures_total`.
+
+### Task 25: Router & Lifespan Integration (Giai đoạn 1 & 2)
+**Acceptance Criteria Implementation:**
+- [ ] AC 25.1: Tích hợp `QueryRewriter` vào `LLMGateway.complete()` trong `gateway/router.py`, thay thế câu hỏi cuối bằng standalone query trước khi search KB.
+- [ ] AC 25.2: Tích hợp `ConversationEventPublisher` vào `LLMGateway.complete()` để gửi sự kiện bất đồng bộ (fire-and-forget).
+- [ ] AC 25.3: Cấu hình bắt đầu/dừng kết nối Kafka producer trong lifespan handler của FastAPI (`main.py`).
+
+### Task 26: Unit & Integration Tests (Giai đoạn 1 & 2)
+**Acceptance Criteria Implementation:**
+- [ ] AC 26.1: Tạo unit tests `tests/test_query_rewriter.py` kiểm chứng bypass, caching, tenant isolation và fallback.
+- [ ] AC 26.2: Tạo unit tests `tests/test_analytics_publisher.py` kiểm chứng event schema, thành công, retry và log khi publisher fail.
 
 ---
 

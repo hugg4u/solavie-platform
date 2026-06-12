@@ -222,8 +222,8 @@ async def retrieve_knowledge(state: ChatState) -> dict:
     Flow:
     1. Call KB hybrid search API
     2. KB thực hiện: vector search + BM25 + rerank
-    3. Trả về top-5 documents
-    4. Kiểm tra quality: nếu top score < 0.5 → không có info → handoff
+    3. Trả về top-5 documents kèm max_similarity_score của cả đợt search.
+    4. Kiểm tra quality: nếu max_similarity_score < 0.5 → không có info → handoff
     """
     response = await http_client.post(
         f"{KB_URL}/api/v1/search",
@@ -234,18 +234,23 @@ async def retrieve_knowledge(state: ChatState) -> dict:
         }
     )
     
-    results = response.json()["results"]
+    data = response.json()
+    results = data.get("results", [])
+    max_similarity_score = data.get("max_similarity_score", 0.0)
     
-    # Quality check: nếu không tìm được gì relevant
-    if not results or results[0]["score"] < 0.5:
+    # Quality check: nếu không tìm được gì relevant hoặc max_similarity_score < 0.50
+    if not results or max_similarity_score < 0.50:
         return {
             "context_docs": [],
             "retrieval_quality": "no_relevant_docs",
+            "max_similarity_score": max_similarity_score,
+            "handoff_reason": "rag_no_docs_found"
         }
     
     return {
         "context_docs": results,
         "retrieval_quality": "good",
+        "max_similarity_score": max_similarity_score
     }
 ```
 
@@ -330,12 +335,16 @@ def evaluate_and_decide(state: ChatState) -> dict:
     confidence = state["confidence"]
     response = state["response"]
     
+    # Check if handoff was already triggered in previous node (e.g. no docs found)
+    if state.get("handoff_reason") == "rag_no_docs_found":
+        return {"action": "handoff", "handoff_reason": "rag_no_docs_found"}
+        
     # Force handoff conditions
     if confidence < 0.7:
-        return {"action": "handoff"}
+        return {"action": "handoff", "handoff_reason": "confidence_low"}
     
     if not response or len(response.strip()) < 5:
-        return {"action": "handoff"}
+        return {"action": "handoff", "handoff_reason": "empty_response"}
     
     # Check for "I don't know" patterns
     dont_know_patterns = [
@@ -343,10 +352,14 @@ def evaluate_and_decide(state: ChatState) -> dict:
         "i'm not sure", "không rõ", "chưa có thông tin",
     ]
     if any(p in response.lower() for p in dont_know_patterns):
-        return {"action": "handoff"}
+        return {"action": "handoff", "handoff_reason": "confidence_low"}
+        
+    # Check for NLI grounding validation status (if applicable)
+    if state.get("grounding_score") is not None and state["grounding_score"] < 0.80:
+        return {"action": "handoff", "handoff_reason": "nli_grounding_violation"}
     
     # All checks passed → reply
-    return {"action": "reply"}
+    return {"action": "reply", "handoff_reason": None}
 ```
 
 ### Node 7: Chitchat Response
@@ -427,6 +440,8 @@ async def process_with_timeout(state: ChatState) -> ChatResponse:
             action=Action.HANDOFF,
             intent="timeout",
             sentiment="unknown",
+            max_similarity_score=0.0,
+            handoff_reason="timeout",
         )
     except Exception as e:
         # Any error → handoff (safe fallback)
@@ -437,6 +452,8 @@ async def process_with_timeout(state: ChatState) -> ChatResponse:
             action=Action.HANDOFF,
             intent="error",
             sentiment="unknown",
+            max_similarity_score=0.0,
+            handoff_reason="error",
         )
 ```
 

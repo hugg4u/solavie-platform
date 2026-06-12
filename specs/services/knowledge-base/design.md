@@ -191,6 +191,10 @@ class ChunkingConfig:
 
 ```python
 async def hybrid_search(query: str, tenant_id: str, top_k: int = 5, bypass_rerank_threshold: float = 0.92):
+    # 0. Hard validation tenant_id
+    if not tenant_id or tenant_id.strip() == "":
+        raise ValueError("tenant_id is strictly required for data isolation")
+
     # 1. Embed query (with Local FastEmbed Fallback and Vector Field Routing)
     vector_field = "openai"
     try:
@@ -238,8 +242,9 @@ async def hybrid_search(query: str, tenant_id: str, top_k: int = 5, bypass_reran
 
     # 5. Rerank Bypass Check:
     # Kiểm tra trực tiếp độ tương đồng cosine lớn nhất của Dense Search (tránh check trên điểm RRF luôn < 0.1)
-    if dense_results and dense_results[0].score >= bypass_rerank_threshold:
-        return deduplicate_parent_chunks(merged)[:top_k]
+    max_score = dense_results[0].score if dense_results else 0.0
+    if dense_results and max_score >= bypass_rerank_threshold:
+        return deduplicate_parent_chunks(merged)[:top_k], max_score
         
     # 6. Rerank top-20 → top-5 (Rerank first, then deduplicate)
     reranked = await reranker.rank(
@@ -247,7 +252,9 @@ async def hybrid_search(query: str, tenant_id: str, top_k: int = 5, bypass_reran
         documents=merged[:20],
         top_k=top_k * 2 # Fetch slightly more to account for duplicates
     )
-    return deduplicate_parent_chunks(reranked)[:top_k]
+    
+    max_rerank_score = reranked[0].score if reranked else 0.0
+    return deduplicate_parent_chunks(reranked)[:top_k], max_rerank_score
 ```
 
 ## Performance Targets

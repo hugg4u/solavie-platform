@@ -172,6 +172,7 @@ Các communication patterns giữa 18 services được mô tả qua Protocol Ma
 | `channel.comment.received` | Channel Connector | Comment Manager, Analytics | CommentEvent |
 | `messaging.conversation.created` | Messaging | CRM | ConversationEvent |
 | `messaging.handoff.requested` | Messaging/Chatbot | Notification | HandoffEvent |
+| `chatbot.conversation.completed` | AI Core | Analytics | ConversationCompletedEvent |
 | `content.approved` | Content | Scheduler | ContentEvent |
 | `content.published` | Content | Analytics, Campaign | PublishEvent |
 | `scheduler.post.due` | Scheduler | Channel Connector | ScheduleEvent |
@@ -204,12 +205,35 @@ service ChatbotService {
   rpc StreamResponse(ChatRequest) returns (stream ChatChunk);
 }
 
+message ChatResponse {
+  string response_text = 1;
+  float confidence_score = 2;
+  string intent = 3;
+  string sentiment = 4;
+  int32 action = 5;
+  string language_detected = 6;
+  bool guardrail_blocked = 7;
+  string block_reason = 8;
+  bool breakpoint_pending = 9;
+  string breakpoint_id = 10;
+  float max_similarity_score = 11;
+  string handoff_reason = 12;
+}
+
 // proto/ai_core.proto
 service AICore {
   rpc Complete(CompletionRequest) returns (CompletionResponse);
   rpc StreamComplete(CompletionRequest) returns (stream CompletionChunk);
   rpc Embed(EmbedRequest) returns (EmbedResponse);
   rpc RunAgent(AgentRequest) returns (AgentResponse);  // ReAct agent
+}
+
+message CompletionResponse {
+  string content = 1;
+  float confidence = 2;
+  float max_similarity_score = 3;
+  string handoff_reason = 4;
+  int32 tokens_used = 5;
 }
 ```
 

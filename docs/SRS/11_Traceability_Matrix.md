@@ -56,11 +56,15 @@
 | **FR-CB-011** | Tự động tóm tắt tin nhắn lịch sử | UC-10 | US-019 | BRD §3 | TC-CB-011 | 🟡 Đang dev |
 | **FR-CB-012** | Khóa Chatbot sau Lead Capture | UC-12 | US-068 | BRD §3 | TC-CB-012 | 🟡 Đang dev |
 | **FR-CB-013** | Chào khách bằng tên MXH | UC-10 | US-018 | BRD §3 | TC-CB-013 | 🟢 Lên kế hoạch |
+| **FR-CB-014** | Ghi nhận và gắn tag Chatbot Action | UC-10 | US-079 | BRD §3 | TC-CB-014 | 🟡 Đang dev |
+| **FR-CB-015** | Log chi tiết Handoff Reason | UC-08 | US-080 | BRD §3 | TC-CB-015 | 🟡 Đang dev |
 | **FR-KB-001** | Upload tài liệu PDF/DOCX <50MB | UC-13 | US-023 | BRD §3 | TC-KB-001 | 🔴 Hoạt động |
 | **FR-KB-002** | Phân đoạn Semantic Chunking | UC-13 | US-023 | BRD §3 | TC-KB-002 | 🔴 Hoạt động |
 | **FR-KB-003** | Embed vector lưu vào Qdrant với RLS | UC-13 | US-023 | BRD §3 | TC-KB-003 | 🔴 Hoạt động |
 | **FR-KB-004** | Tìm kiếm hỗn hợp Hybrid (Vector+BM25) | UC-14 | US-024 | BRD §3 | TC-KB-004 | 🔴 Hoạt động |
 | **FR-KB-005** | Reranking bge-reranker-v2-m3 | UC-14 | US-024 | BRD §3 | TC-KB-005 | 🔴 Hoạt động |
+| **FR-KB-006** | Trả về Similarity Score tối đa | UC-14 | US-024 | BRD §3 | TC-KB-006 | 🟡 Đang dev |
+| **FR-KB-007** | Xác thực Tenant ID nghiêm ngặt | UC-14 | US-024 | BRD §3 | TC-KB-007 | 🟡 Đang dev |
 | **FR-CNT-001** | Sinh nội dung tiếp thị đa phiên bản | UC-15 | US-025 | BRD §3 | TC-CNT-001 | 🔴 Hoạt động |
 | **FR-CNT-002** | Tích hợp brand voice của Tenant | UC-15 | US-025 | BRD §3 | TC-CNT-002 | 🔴 Hoạt động |
 | **FR-CNT-003** | Đánh giá Quality Score bài viết | UC-15 | US-026 | BRD §3 | TC-CNT-003 | 🟡 Đang dev |
@@ -100,6 +104,15 @@
 | **FR-ANL-001** | Ghi nhận metrics chuỗi thời gian | UC-23 | US-039 | BRD §8 | TC-ANL-001 | 🟡 Đang dev |
 | **FR-ANL-002** | Trực quan hóa biểu đồ Analytics | UC-23 | US-039 | BRD §8 | TC-ANL-002 | 🟡 Đang dev |
 | **FR-ANL-003** | Xuất báo cáo CSV/PDF | UC-23 | US-040 | BRD §8 | TC-ANL-003 | 🟢 Lên kế hoạch |
+| **FR-ANA-001** | Lắng nghe sự kiện hội thoại từ Kafka | UC-39 | US-079 | BRD §8 | TC-ANA-001 | 🟡 Đang dev |
+| **FR-ANA-002** | Lưu trữ RAG Metrics vào TimescaleDB | UC-39 | US-079 | BRD §8 | TC-ANA-002 | 🟡 Đang dev |
+| **FR-ANA-003** | Đảm bảo tính duy nhất (Idempotent Consumer) | UC-39 | US-079 | BRD §8 | TC-ANA-003 | 🟡 Đang dev |
+| **FR-ANA-004** | API thống kê hiệu năng RAG | UC-39 | US-079 | BRD §8 | TC-ANA-004 | 🟡 Đang dev |
+| **FR-ANA-005** | API phát hiện khoảng trống tri thức | UC-40 | US-080 | BRD §8 | TC-ANA-005 | 🟡 Đang dev |
+| **FR-ANA-006** | Bảo mật API bằng chữ ký HMAC | UC-02 | US-004 | BRD §8 | TC-ANA-006 | 🟡 Đang dev |
+| **FR-ANA-007** | Phân quyền Dynamic RBAC đối với Analytics | UC-02 | US-003 | BRD §8 | TC-ANA-007 | 🟡 Đang dev |
+| **FR-ANA-008** | Tự động đăng ký dịch vụ (Service Discovery) | UC-38 | US-041 | BRD §8 | TC-ANA-008 | 🟡 Đang dev |
+| **FR-ANA-009** | Báo cáo định kỳ và AI Insights | UC-41 | US-080 | BRD §8 | TC-ANA-009 | 🟡 Đang dev |
 | **FR-CFG-001** | Giao diện CRUD cấu hình Tenant | UC-24 | US-041 | BRD §8 | TC-CFG-001 | 🔴 Hoạt động |
 | **FR-CFG-002** | Đồng bộ cấu hình nóng qua Redis Pub/Sub| UC-24 | US-041 | BRD §8 | TC-CFG-002 | 🔴 Hoạt động |
 | **FR-CFG-003** | Thực hiện validate cấu hình đầu vào | UC-24 | US-042 | BRD §8 | TC-CFG-003 | 🔴 Hoạt động |
@@ -142,6 +155,9 @@
 | **FR-AI-012** | Tự động khởi tạo LLM config | UC-10 | US-018 | BRD §3 | TC-AI-012 | 🟡 Đang dev |
 | **FR-AI-014** | API /models động từ Registry | UC-10 | US-018 | BRD §3 | TC-AI-014 | 🟡 Đang dev |
 | **FR-AI-015** | Bộ nhớ đệm ngữ nghĩa (Semantic Cache) | UC-10 | US-018 | BRD §3 | TC-CACHE-001 | 🟡 Đang dev |
+| **FR-AI-016** | Query Rewriting cho Multi-turn | UC-10 | US-078 | BRD §3 | TC-AI-016 | 🟡 Đang dev |
+| **FR-AI-017** | Query Rewrite Cache | UC-10 | US-078 | BRD §3 | TC-AI-017 | 🟡 Đang dev |
+| **FR-AI-018** | Phát sự kiện Conversation Completed sang Kafka | UC-10 | US-079 | BRD §3 | TC-AI-018 | 🟡 Đang dev |
 | **FR-SEC-001** | Consent popup NĐ 13/2023 | UC-37 | US-076 | BRD §10 | TC-SEC-001 | 🟡 Đang dev |
 | **FR-SEC-002** | Right to Erasure (xóa dữ liệu KH) | UC-38 | US-077 | BRD §10 | TC-SEC-002 | 🟡 Đang dev |
 

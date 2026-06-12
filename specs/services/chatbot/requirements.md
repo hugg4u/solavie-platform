@@ -37,34 +37,36 @@ Dịch vụ chatbot AI "nhân sự số" 24/7 của Solavie — sử dụng Lang
 **User Story:** Là chatbot, tôi cần tìm thông tin chính xác từ knowledge base nội bộ của Solavie để trả lời, không tự bịa.
 
 #### Acceptance Criteria
-1. THE Chatbot_Service SHALL gọi Knowledge_Base Service để thực hiện hybrid search (dense + sparse)
-2. THE Chatbot_Service SHALL nhận top-5 relevant document chunks sau reranking từ Knowledge Base
-3. IF RAG relevance score của tất cả chunks < ngưỡng rag_relevance_threshold cấu hình (mặc định 0.5), THEN THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức thay vì trả lời
-4. THE Chatbot_Service SHALL truncate và nén context documents để tối ưu token budget trước khi gửi lên LLM
-5. THE Chatbot_Service SHALL gửi kèm top-5 chunks làm context cho AI Core khi generate response
+1. THE Chatbot_Service SHALL gọi Knowledge_Base Service để thực hiện hybrid search (dense + sparse) và nhận kèm theo giá trị `max_similarity_score` của kết quả tìm kiếm.
+2. THE Chatbot_Service SHALL nhận top-5 relevant document chunks sau reranking từ Knowledge Base.
+3. IF RAG `max_similarity_score` nhận được từ Knowledge Base < ngưỡng `rag_relevance_threshold` cấu hình của tenant (mặc định 0.5), THEN THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức thay vì trả lời.
+4. THE Chatbot_Service SHALL truncate và nén context documents để tối ưu token budget trước khi gửi lên LLM.
+5. THE Chatbot_Service SHALL gửi kèm top-5 chunks và `max_similarity_score` làm context cho AI Core khi generate response.
 
 ### Requirement 3: Response Generation
 
 **User Story:** Là khách hàng, tôi muốn nhận câu trả lời chính xác, tự nhiên và nhất quán với ngữ cảnh cuộc trò chuyện.
 
 #### Acceptance Criteria
-1. THE Chatbot_Service SHALL gọi AI_Core qua gRPC để generate response với context RAG và conversation history
-2. THE Chatbot_Service SHALL include compressed conversation history trong context để duy trì ngữ cảnh
-3. THE Chatbot_Service SHALL generate response bằng đúng ngôn ngữ khách hàng đang sử dụng
-4. Response generation SHALL hoàn thành trong < 1.5 giây (không tính streaming)
-5. THE Chatbot_Service SHALL hỗ trợ streaming response qua gRPC stream cho trải nghiệm realtime
+1. THE Chatbot_Service SHALL gọi AI_Core qua gRPC để generate response với context RAG và conversation history.
+2. THE Chatbot_Service SHALL include compressed conversation history trong context để duy trì ngữ cảnh.
+3. THE Chatbot_Service SHALL generate response bằng đúng ngôn ngữ khách hàng đang sử dụng.
+4. Response generation SHALL hoàn thành trong < 1.5 giây (không tính streaming).
+5. THE Chatbot_Service SHALL hỗ trợ streaming response qua gRPC stream cho trải nghiệm realtime.
 
 ### Requirement 4: Confidence Scoring & Handoff
 
 **User Story:** Là chủ doanh nghiệp, tôi muốn bot chỉ trả lời khi chắc chắn đúng, và chuyển ngay cho nhân viên khi không chắc.
 
 #### Acceptance Criteria
-1. THE Chatbot_Service SHALL tính confidence score (0.0-1.0) tổng hợp từ: intent confidence, RAG relevance score, NLI grounding score
-2. WHEN confidence >= ngưỡng confidence_threshold cấu hình (mặc định 0.70), THE Chatbot_Service SHALL gửi response cho khách hàng
-3. WHEN confidence < confidence_threshold, THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức và KHÔNG gửi response tự động
-4. WHEN sentiment score của tin nhắn khách hàng >= 0.60 (angry/negative), THE Chatbot_Service SHALL kích hoạt handoff khẩn cấp bỏ qua mọi bước xử lý tiếp theo
-5. IF AI_Core timeout > 5 giây, THEN THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức
-6. WHEN handoff được kích hoạt, THE Chatbot_Service SHALL gửi tin nhắn thông báo chờ cho khách (ví dụ: "Yêu cầu của bạn đang được chuyển đến nhân viên tư vấn...") trước khi chuyển giao
+1. THE Chatbot_Service SHALL tính confidence score (0.0-1.0) tổng hợp từ: intent confidence, RAG relevance score, NLI grounding score.
+2. WHEN confidence >= ngưỡng confidence_threshold cấu hình (mặc định 0.70), THE Chatbot_Service SHALL gửi response cho khách hàng.
+3. WHEN confidence < confidence_threshold, THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức và KHÔNG gửi response tự động.
+4. WHEN sentiment score của tin nhắn khách hàng >= 0.60 (angry/negative), THE Chatbot_Service SHALL kích hoạt handoff khẩn cấp bỏ qua mọi bước xử lý tiếp theo.
+5. IF AI_Core timeout > 5 giây, THEN THE Chatbot_Service SHALL kích hoạt handoff ngay lập tức.
+6. WHEN handoff được kích hoạt, THE Chatbot_Service SHALL gửi tin nhắn thông báo chờ cho khách (ví dụ: "Yêu cầu của bạn đang được chuyển đến nhân viên tư vấn...") trước khi chuyển giao.
+7. THE Chatbot_Service SHALL xác định và gán nhãn hành động `chatbot_action` cho mỗi phản hồi (`reply`, `handoff`, `clarify`, `lead_capture`) để phục vụ phân tích chất lượng.
+8. WHEN kích hoạt chuyển giao sang Agent, THE Chatbot_Service SHALL ghi nhận lý do `handoff_reason` chi tiết (`confidence_low`, `sentiment_angry`, `nli_grounding_violation`, `rag_no_docs_found`, `timeout`) vào metadata của cuộc trò chuyện và truyền sang AI Core gRPC request hoặc ghi log.
 
 ### Requirement 5: Multi-language Support
 

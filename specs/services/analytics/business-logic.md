@@ -375,8 +375,59 @@ public class McpController {
 }
 ```
 
----
+### Luồng 6: RAG Metrics Consumption (MỚI - Giai đoạn 2)
 
+#### Luồng hoạt động:
+1. **Lắng nghe sự kiện**: `RagMetricsConsumer` lắng nghe Kafka topic `chatbot.conversation.completed`.
+2. **Xác thực và chuyển đổi**: Nhận message dạng JSON string, chuyển đổi thành DTO `RagMetricEvent`.
+3. **Đảm bảo tính duy nhất (Idempotency)**: Kiểm tra `event_id` trong database. Nếu `event_id` đã tồn tại (do Kafka gửi lặp), bỏ qua sự kiện để tránh ghi trùng lặp dữ liệu metrics.
+4. **Lưu trữ**: Gọi `RagMetricsService` để lưu vào TimescaleDB hypertable `rag_metrics`.
+
+```java
+@KafkaListener(topics = "chatbot.conversation.completed")
+public void consumeRagEvent(ConsumerRecord<String, String> record) {
+    RagMetricEvent event = objectMapper.readValue(record.value(), RagMetricEvent.class);
+    
+    // Kiểm tra trùng lặp
+    if (ragMetricsRepository.existsByEventId(event.getEventId())) {
+        logger.info("Duplicate RAG event detected, skipping: {}", event.getEventId());
+        return;
+    }
+    
+    // Lưu vào DB
+    ragMetricsService.save(event);
+}
+```
+
+### Luồng 7: Knowledge Gap Detection (MỚI - Giai đoạn 2)
+
+#### Luồng hoạt động:
+1. **Quét dữ liệu**: Thực hiện quét các câu hỏi từ bảng `rag_metrics` trong vòng 30 ngày qua của tenant.
+2. **Thuật toán nhận diện khoảng trống tri thức**:
+   - Tìm những câu hỏi có `rag_similarity < 0.50` (không tìm thấy tài liệu phù hợp trong KB search).
+   - Hoặc câu hỏi dẫn đến hành động chuyển giao `chatbot_action = 'handoff'` do độ tin cậy thấp hoặc NLI không chứng thực được (`nli_grounding < 0.60`).
+   - Nhóm các câu hỏi tương tự nhau (Group by `standalone_query`).
+   - Đếm tần suất xuất hiện (`frequency`) của từng nhóm.
+   - Sắp xếp theo tần suất giảm dần để tìm ra top 20 khoảng trống tri thức cần bổ sung tài liệu.
+3. **Caching**: Kết quả truy vấn này được cache trên Redis trong vòng 5 phút (`TTL = 300s`) để tối ưu hóa performance khi có nhiều request đồng thời lên dashboard.
+
+#### SQL Query phát hiện Gaps:
+```sql
+SELECT 
+    standalone_query,
+    COUNT(*) as frequency,
+    AVG(rag_similarity) as avg_similarity,
+    AVG(nli_grounding) as avg_grounding
+FROM rag_metrics
+WHERE tenant_id = :tenant_id
+  AND time >= NOW() - INTERVAL '30 days'
+  AND (rag_similarity < 0.50 OR chatbot_action = 'handoff')
+GROUP BY standalone_query
+ORDER BY frequency DESC
+LIMIT 20;
+```
+
+---
 
 ## Zero-Trust Security & Dynamic RBAC Logic
 

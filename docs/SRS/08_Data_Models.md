@@ -401,9 +401,61 @@ Hệ thống sử dụng mô hình Database-per-service (Mỗi dịch vụ một
 | `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Thời gian tạo |
 | `updated_at` | TIMESTAMPTZ | DEFAULT NOW() | Thời gian cập nhật |
 
+### 8.2.8. Dịch vụ Thống kê & Phân tích (analytics_db)
+
+Dịch vụ sử dụng cơ sở dữ liệu chuỗi thời gian TimescaleDB để lưu trữ hiệu năng chatbot và phân tích các khoảng trống tri thức RAG. Bảng chính là hypertable `rag_metrics`.
+
+#### 1. Bảng `rag_metrics` (Lưu thông số hiệu năng và chất lượng RAG)
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| `time` | TIMESTAMPTZ | PRIMARY KEY (tổ hợp) | Thời điểm ghi nhận sự kiện (Mốc thời gian TimescaleDB) |
+| `event_id` | UUID | PRIMARY KEY (tổ hợp), UNIQUE | Định danh duy nhất sự kiện |
+| `tenant_id` | VARCHAR(50) | NOT NULL, INDEX | Định danh Tenant (RLS) |
+| `conversation_id`| UUID | NOT NULL | Định danh cuộc hội thoại |
+| `user_query` | TEXT | NOT NULL | Câu hỏi gốc của người dùng |
+| `standalone_query`| TEXT | NOT NULL | Câu hỏi sau khi đã viết lại |
+| `query_rewritten`| BOOLEAN | NOT NULL | Trạng thái có viết lại hay không |
+| `rag_similarity` | NUMERIC(3,2) | NOT NULL | Điểm tương đồng RAG lớn nhất |
+| `rag_docs_count` | INTEGER | NOT NULL | Số lượng chunks tài liệu tham chiếu |
+| `nli_grounding` | NUMERIC(3,2) | NOT NULL | Điểm Grounding xác thực NLI |
+| `confidence_score`| NUMERIC(3,2) | NOT NULL | Điểm tin cậy ý định chatbot |
+| `chatbot_action` | VARCHAR(20) | NOT NULL | Hành động gắn tag: `reply`, `handoff`, `clarify`, `lead_capture` |
+| `handoff_reason` | VARCHAR(50) | NULL | Lý do chuyển giao nếu action là `handoff` |
+| `cache_hit` | BOOLEAN | NOT NULL | Trạng thái trúng semantic cache |
+| `model_used` | VARCHAR(100) | NOT NULL | Mô hình LLM được sử dụng |
+| `latency_ms` | INTEGER | NOT NULL | Độ trễ xử lý (mili-giây) |
+
+*Chỉ mục bổ sung:*
+- Thiết lập Hypertable trên cột `time`: `SELECT create_hypertable('rag_metrics', 'time');`
+- Index `idx_rag_tenant` trên `(tenant_id, time DESC)`
+- Index `idx_rag_action` trên `(tenant_id, chatbot_action, time DESC)`
+- Index lọc `idx_rag_low_sim` trên `(tenant_id, rag_similarity)` WHERE `rag_similarity < 0.50`
+
+#### 2. Cấu trúc JSON Payload sự kiện `chatbot.conversation.completed`
+```json
+{
+  "event_id": "8fa53272-96b3-4f9e-a89c-c90ad73105ff",
+  "tenant_id": "tenant-solavie-99a",
+  "conversation_id": "e93fca10-1845-42bf-be45-b46198f12111",
+  "user_query": "Bảo hành pin thế nào?",
+  "standalone_query": "Chính sách bảo hành pin lithium Solavie thế nào?",
+  "query_rewritten": true,
+  "rag_similarity_score": 0.48,
+  "rag_docs_count": 3,
+  "nli_grounding_score": 0.0,
+  "confidence_score": 0.85,
+  "chatbot_action": "handoff",
+  "handoff_reason": "low_similarity",
+  "cache_hit": false,
+  "model_used": "gpt-4o-mini",
+  "latency_ms": 1250,
+  "timestamp": "2026-06-12T14:30:00Z"
+}
+```
+
 ---
 
-### 8.2.8. Redis Stack (Semantic Cache DB)
+### 8.2.9. Redis Stack (Semantic Cache DB)
 
 Hệ thống sử dụng Redis Stack làm cơ sở dữ liệu vector để lưu trữ và truy vấn ngữ nghĩa cho chatbot. Mỗi bản ghi cache được lưu trữ dưới dạng một Hash trên Redis DB 0.
 
@@ -481,6 +533,7 @@ graph TD
         P3[3.0 Chatbot LangGraph Processing]
         P4[4.0 Query Knowledge Base]
         P5[5.0 Output Message Delivery]
+        P6[6.0 Analytics & RAG Quality Consumer]
     end
 
     subgraph "Kho lưu trữ dữ liệu"
@@ -488,6 +541,7 @@ graph TD
         D2[(messaging_db)]
         D3[(qdrant_vector_db)]
         D4[(config_db)]
+        D5[(analytics_db - TimescaleDB)]
     end
 
     KH -->|Chat trên Messenger/Zalo| P1
@@ -509,6 +563,10 @@ graph TD
     P3 -->|Sinh câu trả lời / Handoff| P5
     P5 -->|Lưu tin nhắn trả lời| D2
     P5 -->|Gửi API ngoại vi| KH
+    
+    P3 -->|Phát sự kiện hoàn tất| K[("Kafka: chatbot.conversation.completed")]
+    K -->|Tiêu thụ sự kiện| P6
+    P6 -->|Kiểm tra trùng lặp & Lưu metrics| D5
 ```
 
 ---

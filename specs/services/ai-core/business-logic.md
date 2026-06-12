@@ -825,6 +825,24 @@ Total: 2 iterations, 1 tool call (nếu cache miss) hoặc 0 iterations, 0 tool 
    - Lưu Hash vào Redis với key `semantic_cache:{tenant_id}:{hash_val}` gồm các trường: `tenant_id`, `use_case`, `question`, `response`, và `vector` (nhị phân).
    - Thiết lập TTL 86400 giây (24 giờ).
 
+### Use Case: Chatbot với Query Rewriting (Giai đoạn 1)
+
+#### Luồng hoạt động chi tiết:
+1. **Nhận tin nhắn**: Chatbot gửi request chứa danh sách tin nhắn (`messages`) tới AI Core qua gRPC/REST.
+2. **Kiểm tra Điều kiện (Bypass checks)**:
+   - **Bypass 1 (Câu đầu tiên)**: Nếu `len(messages) < 2` (nghĩa là chỉ có 1 tin nhắn duy nhất của user, chưa có hội thoại trước đó), hệ thống bỏ qua bước rewrite và trả về nguyên gốc câu hỏi.
+   - **Bypass 2 (Standalone rõ ràng)**: Hệ thống sử dụng một bộ quy tắc nhẹ để xác định xem câu hỏi hiện tại có tự chứa đầy đủ ngữ cảnh hay không. Nếu có, bypass.
+3. **Tìm kiếm Cache**:
+   - Tạo MD5 hash từ `history_str` (chuỗi gộp của tối đa 5 tin nhắn gần nhất) + `current_question`.
+   - Kiểm tra Redis key `query_rewrite:{tenant_id}:{hash}`.
+   - **Cache Hit**: Lấy câu hỏi standalone đã được rewrite từ Redis và sử dụng làm query cho bước tìm kiếm tri thức (Knowledge Base search).
+   - **Cache Miss**: Tiếp tục sang bước tiếp theo.
+4. **Gọi LLM Rewrite**:
+   - Sử dụng model rẻ nhất trong route config của tenant (động từ LiteLLM registry) để sinh câu hỏi độc lập.
+   - **Fallback khi LLM lỗi**: Nếu cuộc gọi LLM rewrite bị timeout hoặc quăng exception, hệ thống ghi log warning (`rewrite_fallback`) và trả về nguyên văn câu hỏi hiện tại làm query tìm kiếm (không crash cả luồng xử lý).
+5. **Lưu Cache**: Ghi kết quả standalone query vào Redis với TTL = 3600s.
+6. **Thực hiện RAG Search**: Dùng standalone query để truy vấn hệ thống Knowledge Base.
+
 ### Use Case: Content Generation (ReAct Agent)
 
 ```

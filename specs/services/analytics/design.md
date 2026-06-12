@@ -36,6 +36,8 @@ POST   /api/v1/reports/generate         — Generate report (async)
 GET    /api/v1/reports/:id/download     — Download report file
 GET    /api/v1/analytics/mcp            — SSE connection endpoint for MCP Server
 POST   /api/v1/analytics/mcp/messages   — JSON-RPC message transport for MCP Server
+GET    /api/v1/knowledge-gaps           — Get detected knowledge gaps for RAG (HMAC + permission analytics:metrics:read)
+GET    /api/v1/rag-performance          — Get RAG quality and performance metrics (HMAC + permission analytics:metrics:read)
 ```
 
 ## Data Models
@@ -80,6 +82,31 @@ CREATE TABLE reports (
     status VARCHAR(20) DEFAULT 'generating',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- RAG quality metrics (TimescaleDB hypertable)
+CREATE TABLE rag_metrics (
+    time TIMESTAMPTZ NOT NULL,
+    tenant_id UUID NOT NULL,
+    conversation_id UUID NOT NULL,
+    event_id UUID NOT NULL,
+    user_query TEXT,
+    standalone_query TEXT,
+    query_rewritten BOOLEAN DEFAULT FALSE,
+    rag_similarity FLOAT, -- max cosine similarity từ KB search
+    rag_docs_count INT,
+    nli_grounding FLOAT, -- entailment score
+    confidence_score FLOAT,
+    chatbot_action VARCHAR(20), -- reply|handoff|clarify|lead_capture
+    handoff_reason TEXT,
+    cache_hit BOOLEAN DEFAULT FALSE,
+    model_used VARCHAR(100),
+    latency_ms INT
+);
+
+SELECT create_hypertable('rag_metrics', 'time');
+CREATE INDEX idx_rag_tenant ON rag_metrics(tenant_id, time DESC);
+CREATE INDEX idx_rag_action ON rag_metrics(tenant_id, chatbot_action, time DESC);
+CREATE INDEX idx_rag_low_sim ON rag_metrics(tenant_id, rag_similarity) WHERE rag_similarity < 0.50;
 ```
 
 ## Kafka Events Consumed
@@ -92,6 +119,8 @@ CREATE TABLE reports (
 | `campaign.event.*` | campaign metrics |
 | `messaging.handoff.requested` | handoff_rate |
 | `crm.lead.score.changed` | lead_conversion |
+| `chatbot.conversation.completed` | RAG quality metrics (similarity, grounding, latency, confidence, cache hits) |
+
 
 
 ## Model Context Protocol (MCP) Tools

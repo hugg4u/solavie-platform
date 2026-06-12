@@ -1566,6 +1566,101 @@ graph TB
 
 ---
 
+### UC-39: Xem phân tích hiệu suất RAG
+
+| Thuộc tính | Chi tiết |
+|-----------|---------|
+| **ID** | UC-39 |
+| **Tên** | Xem báo cáo hiệu suất RAG (RAG Performance Analytics) |
+| **Actor chính** | Tenant Admin, Manager |
+| **Actor phụ** | Analytics Service |
+| **Mô tả** | Xem các chỉ số thống kê về độ chính xác và chất lượng phản hồi RAG (độ tương đồng, tỷ lệ trúng cache, tỷ lệ grounding) |
+| **Preconditions** | Người dùng đã đăng nhập và có quyền `analytics:metrics:read` |
+| **Priority** | 🟡 Should Have |
+
+**Main Flow:**
+
+| Bước | Actor | Hệ thống |
+|------|-------|---------|
+| 1 | Truy cập trang "Phân tích RAG" trên Dashboard | Gửi request `GET /api/v1/rag-performance` kèm chữ ký HMAC |
+| 2 | | API Gateway kiểm tra chữ ký và phân quyền, chuyển tiếp tới Analytics Service |
+| 3 | | Analytics Service truy vấn TimescaleDB, lấy các chỉ số trung bình theo khoảng thời gian |
+| 4 | | Trả về dữ liệu: trung bình similarity, tỷ lệ grounding, tỷ lệ hit cache |
+| 5 | | Dashboard hiển thị các biểu đồ trực quan (line chart, gauge chart) |
+
+**Alternative Flows:**
+
+| ID | Điều kiện | Hành động |
+|----|----------|----------|
+| AF-39a | Lọc theo khoảng thời gian (7 ngày, 30 ngày) | Hệ thống tự động truy vấn lại và cập nhật dữ liệu biểu đồ |
+
+**Liên kết:** FR-ANA-005, US-078
+
+---
+
+### UC-40: Xem danh sách khoảng trống tri thức
+
+| Thuộc tính | Chi tiết |
+|-----------|---------|
+| **ID** | UC-40 |
+| **Tên** | Xem báo cáo khoảng trống tri thức (Knowledge Gap Discovery) |
+| **Actor chính** | Tenant Admin, Manager |
+| **Actor phụ** | Analytics Service |
+| **Mô tả** | Hiển thị danh sách các câu hỏi của khách hàng mà Chatbot không trả lời tốt (độ tương đồng thấp hoặc phải handoff) được gom nhóm ngữ nghĩa để bổ sung tri thức |
+| **Preconditions** | Người dùng đã đăng nhập và có quyền `analytics:metrics:read` |
+| **Priority** | 🟡 Should Have |
+
+**Main Flow:**
+
+| Bước | Actor | Hệ thống |
+|------|-------|---------|
+| 1 | Truy cập trang "Khoảng trống tri thức" | Gửi request `GET /api/v1/knowledge-gaps` kèm chữ ký HMAC |
+| 2 | | API Gateway chuyển tiếp yêu cầu sau khi xác thực phân quyền |
+| 3 | | Analytics Service đọc cache Redis (nếu còn hạn 5 phút) hoặc truy vấn TimescaleDB |
+| 4 | | Gom các câu hỏi có similarity < 0.50 hoặc handoff theo mức độ tương đồng ngữ nghĩa |
+| 5 | | Trả về danh sách top 20 nhóm câu hỏi kèm tần suất và gợi ý bổ sung tài liệu |
+| 6 | | Hiển thị bảng danh sách khoảng trống tri thức trên giao diện |
+
+**Liên kết:** FR-ANA-003, FR-ANA-004, FR-ANA-005, US-079
+
+---
+
+### UC-41: Tự động tối ưu hóa câu hỏi đa lượt
+
+| Thuộc tính | Chi tiết |
+|-----------|---------|
+| **ID** | UC-41 |
+| **Tên** | Tự động tối ưu hóa câu hỏi đa lượt (Query Rewriting) |
+| **Actor chính** | Hệ thống (tự động) |
+| **Actor phụ** | AI Core Service, Redis |
+| **Mô tả** | Khi cuộc trò chuyện đa lượt, hệ thống tự động viết lại câu hỏi có từ ngữ thay thế thành một câu hỏi độc lập đầy đủ thông tin để tìm kiếm RAG chính xác hơn |
+| **Preconditions** | Lịch sử cuộc trò chuyện có ít nhất 2 tin nhắn |
+| **Priority** | 🔴 Must Have |
+
+**Main Flow:**
+
+| Bước | Hệ thống |
+|------|---------|
+| 1 | Khách hàng gửi tin nhắn mới trong một cuộc hội thoại đang diễn ra |
+| 2 | AI Core kiểm tra số tin nhắn trong lịch sử, nếu >= 2 thì tính toán mã MD5 của ngữ cảnh |
+| 3 | Tra cứu Redis Cache `query_rewrite:{tenant_id}:{MD5}` |
+| 4 | **Cache Miss:** Gửi prompt yêu cầu viết lại câu hỏi sang LLM (mô hình chi phí thấp) |
+| 5 | LLM trả về câu hỏi độc lập (Standalone Query) |
+| 6 | Lưu câu hỏi độc lập vào Redis Cache với TTL 1 giờ |
+| 7 | Sử dụng câu hỏi độc lập này để tìm kiếm tri thức RAG trong Qdrant Vector DB |
+
+**Alternative Flows:**
+
+| ID | Điều kiện | Hành động |
+|----|----------|----------|
+| AF-41a | Cache Hit | Lấy câu hỏi độc lập từ Redis cache, bỏ qua cuộc gọi LLM |
+| AF-41b | Lỗi LLM khi viết lại câu hỏi | Tự động fallback: sử dụng câu hỏi gốc của khách hàng để tiếp tục tìm kiếm RAG |
+| AF-41c | Câu hỏi rõ ràng, không phụ thuộc ngữ cảnh | LLM trả về nguyên văn câu hỏi gốc |
+
+**Liên kết:** FR-AI-016, FR-AI-017, FR-AI-018, US-080
+
+---
+
 ## 3.3. Tổng hợp Use Cases
 
 | UC ID | Tên | Actor chính | Priority | FR liên kết |
@@ -1608,6 +1703,9 @@ graph TB
 | UC-36 | Lead Scoring | System | 🔴 Must | FR-CRM-015~017 |
 | UC-37 | Consent popup NĐ 13/2023 | Customer | 🔴 Must | FR-SEC-001 |
 | UC-38 | Right to Erasure | Agent/Admin | 🔴 Must | FR-SEC-002 |
+| UC-39 | Xem phân tích hiệu suất RAG | Admin, Manager | 🟡 Should | FR-ANA-005 |
+| UC-40 | Xem danh sách khoảng trống tri thức | Admin, Manager | 🟡 Should | FR-ANA-003~005 |
+| UC-41 | Tự động tối ưu hóa câu hỏi | System | 🔴 Must | FR-AI-016~018 |
 
 ---
 

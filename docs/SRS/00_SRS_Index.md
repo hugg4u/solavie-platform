@@ -29,6 +29,7 @@
 | 1.4.0 | 30/05/2026 | BA Team | Tối ưu hóa lõi AI: Phân tách Stateful Chatbot/Stateless AI Core, tích hợp rào chắn an toàn (Dual-layer Guardrails), Multi-tenant MCP Gateway, tối ưu hóa token (Prompt Caching & Summarization), và Human-in-the-loop có cấu hình. |
 | 1.5.0 | 30/05/2026 | BA Team | Rà soát và vá 12 lỗ hổng so với BRD (Gap Analysis Remediation): Bổ sung Consent NĐ 13/2023, Right to Erasure, Lead Scoring engine, tích hợp TikTok, CSAT survey và sửa các tham chiếu chéo lỗi trong RTM. |
 | 1.6.0 | 31/05/2026 | BA Team | Nâng cấp lõi AI Core: Bổ sung định tuyến mô hình động (Dynamic Model Routing), quản lý khóa API mã hóa đối xứng AES-256, và tích hợp bộ giả lập chi phí (Cost Simulator) |
+| 1.7.0 | 12/06/2026 | BA Team | **Đồng bộ hóa đặc tả RAG Quality & Query Rewriting:** Bổ sung các Use Cases, Functional Requirements và Data Models cho cơ chế Query Rewriting và Analytics Service giám sát chất lượng RAG. |
 
 ---
 

@@ -313,6 +313,20 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-019
 
+### FR-CB-014: Ghi nhận và gắn tag Chatbot Action
+- **Mô tả:** Chatbot Service **PHẢI** phân loại và gắn nhãn hành động `chatbot_action` cho từng phản hồi gửi cho khách hàng, bao gồm các nhãn: `reply` (trả lời bình thường), `handoff` (chuyển giao cho Agent), `clarify` (yêu cầu làm rõ), `lead_capture` (thu thập thông tin ngoài giờ).
+- **Đầu vào:** Trạng thái kết thúc của LangGraph execution node.
+- **Đầu ra:** Phản hồi chứa thông tin `chatbot_action`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-079
+
+### FR-CB-015: Log chi tiết Handoff Reason
+- **Mô tả:** Khi chatbot thực hiện chuyển giao cuộc hội thoại sang cho con người xử lý (handoff), Chatbot Service **PHẢI** ghi nhận chi tiết lý do chuyển giao `handoff_reason` (ví dụ: `low_similarity`, `user_request`, `angry_sentiment`, `error_fallback`).
+- **Đầu vào:** Sự kiện kích hoạt node handoff trong LangGraph.
+- **Đầu ra:** Log event và metadata chứa thông tin `handoff_reason`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-08, US-080
+
 ### FR-AI-001: Quản lý kết nối MCP động cho từng Tenant (Multi-tenant Custom MCP Host)
 - **Mô tả:** AI Core Service **PHẢI** đóng vai trò là một MCP Host Gateway. Khi Chatbot của Tenant gửi yêu cầu gọi công cụ, AI Core **PHẢI** đọc thông số cấu hình MCP Server của Tenant đó từ `config_db` (URL, credentials, v.v.), khởi tạo phiên kết nối MCP Client Session độc lập và thực thi công cụ tương ứng. Hệ thống **PHẢI** tự động tiêm/ghi đè thuộc tính `tenant_id` từ JWT xác thực vào tham số của công cụ trước khi gửi đến MCP Server, và chỉ cho phép kết nối tới các Custom MCP Server nội bộ (như `solar_calc`, `crm`, `om_ticket`) đã đăng ký trong whitelist.
 - **Đầu vào:** Tenant ID, Tool call request từ Chatbot.
@@ -370,6 +384,20 @@
 - **Mô tả:** Hệ thống **PHẢI** đưa top-20 chunks tìm kiếm được qua mô hình Reranker (ví dụ: `bge-reranker-v2-m3`) để đánh giá lại mức độ phù hợp thực tế và chọn ra top-5 chunks tốt nhất gửi lại cho Chatbot.
 - **Đầu vào:** Danh sách 20 chunks kết quả.
 - **Đầu ra:** Top-5 chunks tối ưu nhất kèm điểm tin cậy ngữ cảnh.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-14, US-024
+
+### FR-KB-006: Trả về Similarity Score tối đa
+- **Mô tả:** Khi nhận được yêu cầu tìm kiếm tri thức RAG từ Chatbot, Knowledge Base Service **PHẢI** tính toán và trả về độ tương đồng lớn nhất `max_similarity_score` từ các tài liệu tìm kiếm được (sau khi Reranking) trong API response payload.
+- **Đầu vào:** Văn bản truy vấn tìm kiếm tri thức.
+- **Đầu ra:** Điểm tương đồng tối đa `max_similarity_score` (giá trị float từ 0.0 đến 1.0) và các chunks tài liệu RAG tương ứng.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-14, US-024
+
+### FR-KB-007: Xác thực Tenant ID nghiêm ngặt
+- **Mô tả:** Để tránh rò rỉ dữ liệu tri thức giữa các tenant khác nhau, Knowledge Base Service **PHẢI** kiểm chứng nghiêm ngặt sự hiện diện của bộ lọc `tenant_id` trong mọi câu truy vấn gửi tới Qdrant Vector Database. Nếu thiếu bộ lọc này, request **PHẢI** bị từ chối xử lý và trả về mã lỗi `400 Bad Request`.
+- **Đầu vào:** Câu hỏi của khách hàng, `tenant_id` từ API request.
+- **Đầu ra:** Câu truy vấn an toàn gửi tới Qdrant hoặc trả về lỗi nếu thiếu `tenant_id`.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-14, US-024
 
@@ -1065,6 +1093,105 @@
 - **Đầu ra:** Câu trả lời tương ứng (từ Cache hoặc LLM) và trạng thái cache hit/miss được phản ánh qua metrics.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
+
+### FR-AI-016: Query Rewriting cho Multi-turn Conversation
+- **Mô tả:** AI Core **PHẢI** thực hiện viết lại câu hỏi người dùng (Query Rewriting) dựa trên lịch sử hội thoại trước khi thực hiện tìm kiếm tri thức RAG để giải quyết vấn đề đồng tham chiếu (coreference) và tỉnh lược từ.
+- **Ràng buộc:** 
+  - Bypass không xử lý nếu lịch sử hội thoại có dưới 2 tin nhắn hoặc câu hỏi hiện tại là câu hỏi độc lập (standalone query).
+  - Sử dụng mô hình LLM giá rẻ nhất để tối ưu chi phí.
+  - Trường hợp gọi LLM lỗi, **PHẢI** sử dụng cơ chế Fallback sử dụng chính câu hỏi gốc của người dùng.
+- **Đầu vào:** Tin nhắn hiện tại của người dùng, Lịch sử hội thoại.
+- **Đầu ra:** Câu hỏi đã được viết lại (standalone query).
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-078
+
+### FR-AI-017: Query Rewrite Cache
+- **Mô tả:** Để giảm thiểu độ trễ, AI Core **PHẢI** lưu kết quả viết lại câu hỏi vào Redis cache với TTL là 1 giờ (3600 giây). Key cache được mã hóa MD5 dựa trên tổ hợp `tenant_id` và nội dung lịch sử hội thoại.
+- **Đầu vào:** `tenant_id`, Lịch sử hội thoại.
+- **Đầu ra:** Đọc cache hit hoặc lưu cache mới sau khi LLM viết lại thành công.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-078
+
+### FR-AI-018: Phát sự kiện Conversation Completed sang Kafka
+- **Mô tả:** Khi một lượt hội thoại của chatbot hoàn tất, AI Core **PHẢI** phát sự kiện `chatbot.conversation.completed` dưới dạng JSON payload sang Kafka topic `chatbot.conversation.completed` phục vụ thống kê.
+- **Ràng buộc:** 
+  - Sự kiện **PHẢI** chứa đầy đủ thông tin: `event_id` (UUID), `tenant_id`, `conversation_id`, `user_query`, `standalone_query`, `query_rewritten`, `rag_similarity_score`, `chatbot_action`, `handoff_reason`, `latency_ms`, `timestamp`.
+  - Partition key của Kafka message **PHẢI** là `tenant_id` để đảm bảo thứ tự và cô lập dữ liệu.
+  - Cơ chế gửi **PHẢI** là fire-and-forget qua `asyncio.create_task` và hỗ trợ retry 3 lần bằng exponential backoff. Nếu lỗi thất bại hoàn toàn, log warning vào DLQ logger.
+- **Đầu vào:** Thông số chi tiết lượt hội thoại sau khi hoàn thành phản hồi.
+- **Đầu ra:** Message được ghi vào Kafka topic.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-079
+
+---
+
+## 5.9. Phân hệ Analytics & RAG Quality Monitoring (ANA)
+
+### FR-ANA-001: Lắng nghe sự kiện hội thoại hoàn tất từ Kafka
+- **Mô tả:** Analytics Service **PHẢI** lắng nghe (consume) và xử lý bất đồng bộ các sự kiện từ Kafka topic `chatbot.conversation.completed` gửi sang để ghi nhận kết quả và dữ liệu lượt hội thoại.
+- **Đầu vào:** Kafka Message Event từ topic `chatbot.conversation.completed`.
+- **Đầu ra:** Event payload được deserialize thành công thành dữ liệu nghiệp vụ `RagMetricEvent` DTO.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-39, US-079
+
+### FR-ANA-002: Lưu trữ RAG Metrics vào TimescaleDB
+- **Mô tả:** Analytics Service **PHẢI** lưu trữ các metrics của lượt hội thoại RAG (độ tương đồng RAG, điểm grounding NLI, cache hit/miss, loại hành động chatbot, lý do handoff, độ trễ và thời gian) vào bảng TimescaleDB hypertable `rag_metrics`.
+- **Đầu vào:** Dữ liệu `RagMetricEvent`.
+- **Đầu ra:** Bản ghi được thêm mới thành công vào database TimescaleDB `analytics_db`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-39, US-079
+
+### FR-ANA-003: Đảm bảo tính duy nhất (Idempotent Consumer)
+- **Mô tả:** Hệ thống **PHẢI** thực hiện kiểm tra trùng lặp sự kiện dựa trên thuộc tính `event_id` trong payload trước khi lưu vào DB. Nếu sự kiện với `event_id` đã tồn tại, hệ thống **PHẢI** bỏ qua không lưu lại (idempotency) để tránh sai lệch số liệu thống kê.
+- **Đầu vào:** `event_id` của sự kiện.
+- **Đầu ra:** Ghi nhận thành công hoặc bỏ qua sự kiện trùng lặp.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-39, US-079
+
+### FR-ANA-004: API thống kê hiệu năng RAG
+- **Mô tả:** Analytics Service **PHẢI** cung cấp API `GET /api/v1/rag-performance` để thống kê hiệu năng RAG của Tenant.
+- **Đầu vào:** Tham số `tenant_id`, `start_date`, `end_date`, `granularity` (daily/hourly).
+- **Đầu ra:** JSON payload trả về các chỉ số trung bình: độ tương đồng RAG, điểm grounding NLI, tỉ lệ cache hit, tổng số lượt chat.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-39, US-079
+
+### FR-ANA-005: API phát hiện khoảng trống tri thức (Knowledge Gap Detection)
+- **Mô tả:** Analytics Service **PHẢI** cung cấp API `GET /api/v1/knowledge-gaps` cho phép phát hiện các câu hỏi người dùng có độ tương đồng RAG thấp (`rag_similarity < 0.50`) hoặc cuộc gọi dẫn tới chuyển giao sang Agent (`chatbot_action == "handoff"`).
+- **Ràng buộc:** 
+  - Hệ thống **PHẢI** thực hiện gom nhóm (clustering) các câu hỏi trùng lặp hoặc tương tự nhau về mặt ngữ nghĩa (semantic clustering).
+  - Kết quả trả về **PHẢI** được lưu vào cache Redis với TTL là 5 phút để tránh thực hiện các câu truy vấn SQL nặng liên tục lên cơ sở dữ liệu.
+- **Đầu vào:** Tham số `tenant_id`, `start_date`, `end_date`, `min_frequency` (tần suất tối thiểu xuất hiện câu hỏi), `limit`.
+- **Đầu ra:** Danh sách các nhóm câu hỏi khách hàng hay hỏi nhưng chatbot chưa trả lời tốt (hoặc phải handoff) kèm theo số lượt xuất hiện.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-40, US-080
+
+### FR-ANA-006: Bảo mật API bằng chữ ký HMAC
+- **Mô tả:** Toàn bộ API truy cập thông số của Analytics Service (`/api/v1/knowledge-gaps`, `/api/v1/rag-performance`) **PHẢI** được bảo vệ bằng chữ ký HMAC-SHA256 được tạo và kiểm tra chéo dựa trên headers `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions` và signature `X-Permissions-Signature` để ngăn chặn giả mạo quyền truy cập.
+- **Đầu vào:** Signature header và thông tin User/Tenant.
+- **Đầu ra:** Cho phép xử lý API hoặc từ chối trả về lỗi `403 Forbidden` nếu chữ ký sai lệch.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-02, US-004
+
+### FR-ANA-007: Phân quyền Dynamic RBAC đối với Analytics
+- **Mô tả:** Analytics Service **PHẢI** phân tích header `X-User-Permissions` truyền từ Gateway xuống và kiểm tra sự tồn tại của quyền `analytics:metrics:read` trước khi phục vụ dữ liệu.
+- **Đầu vào:** `X-User-Permissions` HTTP header.
+- **Đầu ra:** Chấp nhận xử lý hoặc trả về lỗi `403 Forbidden`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-02, US-003
+
+### FR-ANA-008: Tự động đăng ký dịch vụ (Service Discovery)
+- **Mô tả:** Khi khởi động dịch vụ, Analytics Service **PHẢI** tự động đăng ký thông tin Host IP và Port vào Redis Service Registry với khóa `registry:service:analytics` và duy trì cập nhật heartbeat sau mỗi 5 giây. Khi dừng dịch vụ (graceful shutdown), Analytics Service **PHẢI** thực hiện gỡ đăng ký khỏi Redis.
+- **Đầu vào:** Trạng thái Lifecycle của ứng dụng Java Spring Boot.
+- **Đầu ra:** Bản ghi thông tin service trong Redis registry được thêm/xóa tương ứng.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-38 (Service Registry)
+
+### FR-ANA-009: Báo cáo định kỳ và AI Insights
+- **Mô tả:** Hệ thống **PHẢI** hỗ trợ tác vụ lập lịch định kỳ (Quartz Scheduler / Spring `@Scheduled`) chạy vào mỗi sáng thứ Hai lúc 8:00 AM để tổng hợp dữ liệu hiệu năng của tuần trước, tự động gọi AI Core Service để sinh ra nhận định phân tích thông minh (AI Weekly Insights) cho từng Tenant và lưu vào database.
+- **Đầu vào:** Dữ liệu RAG metrics tổng hợp tuần trước của Tenant.
+- **Đầu ra:** Bản ghi báo cáo tuần và nhận định AI được tạo, gửi thông báo qua Notification Service cho Tenant Admin.
+- **Mức độ ưu tiên:** 🟡 Should Have
+- **Truy vết:** UC-41
 
 ---
 
