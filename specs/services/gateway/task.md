@@ -132,16 +132,19 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 - [x] Tenant isolation (RLS / metadata filtering) is strictly enforced.
 
 ### Task 6: MCP Route Configuration (MỚI)
-- [ ] Cập nhật tệp cấu hình Kong `kong.yml` để định tuyến các đường dẫn MCP SSE:
-  - `/api/v1/mcp` về dịch vụ CRM (`http://crm:3003`)
-  - `/api/v1/kb/mcp` về dịch vụ Knowledge Base (`http://knowledge-base:8004`)
-  - `/api/v1/messaging/mcp` về dịch vụ Messaging (`http://messaging:3002`)
-  - `/api/v1/notification/mcp` về dịch vụ Notification (`http://notification:3004`)
-  - `/api/v1/comments/mcp` về dịch vụ Comment Manager (`http://comment-manager:3005`)
-  - `/api/v1/content/mcp` về dịch vụ Content (`http://content:8002`)
-  - `/api/v1/scheduler/mcp` về dịch vụ Scheduler (`http://scheduler:8003`)
-  - `/api/v1/analytics/mcp` về dịch vụ Analytics (`http://analytics:8006`)
-- [ ] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
+- [x] Cập nhật `generate_kong_config.py` để định tuyến các đường dẫn MCP SSE tới đối tượng Upstream ảo của từng service (thay vì DNS tĩnh):
+  - `/api/v1/mcp` về `crm-upstream`
+  - `/api/v1/kb/mcp` về `knowledge-base-upstream`
+  - `/api/v1/messaging/mcp` về `messaging-upstream`
+  - `/api/v1/notification/mcp` về `notification-upstream`
+  - `/api/v1/comments/mcp` về `comment-manager-upstream`
+  - `/api/v1/content/mcp` về `content-upstream`
+  - `/api/v1/scheduler/mcp` về `scheduler-upstream`
+  - `/api/v1/analytics/mcp` về `analytics-upstream`
+- [x] Định cấu hình tham số `connect_timeout = 60000`, `read_timeout = 60000`, `write_timeout = 60000` ms cho các Service đại diện cho các route này trong `generate_kong_config.py`.
+- [x] Định cấu hình gán nhãn Route scope động (`scope:<service_name>`) cho từng route tương ứng.
+- [x] Xác minh các endpoint SSE dưới các đường dẫn MCP đi qua các plugin bảo mật (OIDC JWT check, Rate Limiting per-tenant, X-Tenant-ID header injection).
+- [x] Đảm bảo HTTP Header `X-Accel-Buffering: no` được chuyển tiếp chuẩn xác từ downstream để bypass Nginx proxy buffering.
 
 ### Task 7: Dynamic RBAC & HMAC Signing Plugin (MỚI)
 - [x] Triển khai Lua plugin `dynamic-policy` xử lý trích xuất Keycloak roles và phân giải permissions từ các nguồn cache.
@@ -156,6 +159,7 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
 ### Task 8: Revocation & Suspension Blacklists (MỚI)
 - [x] Triển khai kiểm tra JTI Blacklist lưu trữ trong Redis key `blacklist:jti:{jti}` trong plugin `dynamic-policy` để từ chối các token đã bị thu hồi tức thời.
 - [x] Triển khai kiểm tra User Blacklist trong Redis key `blacklist:user:{user_id}` để từ chối các người dùng đang bị đình chỉ (Suspended).
+- [x] Xác thực tích hợp liên thông: Đảm bảo dữ liệu JTI/User Blacklist trong Redis được cập nhật bất đồng bộ thông qua các sự kiện Kafka từ topics `token.revoked` và `auth.events.user` qua Sync Worker.
 
 ---
 *Last updated: 2026-06-10 — All phases completed, including Keycloak Organizations integration, L1/L2 caching, Circuit Breaker, and Infrastructure-Agnostic Service Discovery.*
@@ -194,3 +198,28 @@ This document tracks the implementation checklist for **GATEWAY Service** based 
   - [x] Viết testcase unit test cho logic đồng bộ target.
   - [x] Chạy scale test và giả lập container crash, xác nhận Kong tự động chuyển hướng request sang target còn sống mà không có downtime.
 
+---
+
+## Shared Service Discovery Implementation Tasks (MỚI)
+
+### Task 10: Generalize Registry Sync Daemon & Upstreams Configuration
+- [x] AC 10.1: Cấu hình đối tượng upstreams ảo cho tất cả các backend services trong `generate_kong_config.py`.
+- [x] AC 10.2: Cập nhật `sync_registry.py` để duyệt qua bản đồ `SERVICES_MAP` và đồng bộ target cho đa dịch vụ.
+- [x] AC 10.3: Kiểm tra tính hoạt động của Sync Daemon khi scale up/down một service bất kỳ (ví dụ: `user-service`).
+
+### Task 11: MCP SSE Automated Verification (MỚI)
+- [x] AC 11.1: Thiết lập mock SSE server trong test suite để mô phỏng phản hồi từ một MCP Upstream Service.
+- [x] AC 11.2: Viết integration tests trong `test_gateway.py` xác minh kết nối SSE được định tuyến thành công và duy trì lâu dài.
+- [x] AC 11.3: Kiểm tra tính đúng đắn của việc tự động tiêm (inject) các headers bảo mật (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) và kiểm duyệt chữ ký HMAC trên luồng SSE.
+- [x] AC 11.4: Xác minh header `X-Accel-Buffering: no` được bảo toàn nguyên vẹn khi đi qua Gateway.
+- [x] AC 11.5: Xác minh Gateway từ chối kết nối MCP SSE với HTTP 401/403 nếu thiếu token hoặc token không hợp lệ.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

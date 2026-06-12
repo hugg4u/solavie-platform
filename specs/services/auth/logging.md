@@ -72,13 +72,30 @@ Auth Sync Worker chạy bằng Python xuất bản log stdout ở định dạng
 ```
 
 ## Alert Rules
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| HighSignatureFailures | sum(rate(auth_security_signature_failures_total[5m])) > 5 | critical (potential spoofing attempt or key mismatch) |
-| HighPermissionDenied | sum(rate(auth_security_permission_denied_total[5m])) > 10 | warning (user accessing forbidden resources) |
-| LoginErrorSpike | login_errors > 50 in 5m | critical (brute force?) |
-| KeycloakDown | health/ready fail > 30s | critical |
-| SessionOverload | active_sessions > 10000 | warning |
-| TokenRefreshFailing | token errors > 10 in 5m | warning |
-| OrganizationCreationFail | admin API errors | critical |
-| SyncWorkerFailure | sum(rate(sync_worker_errors_total[5m])) > 1 | critical |
+| Alert | Condition | Severity | Action/Description |
+|-------|-----------|----------|-------------------|
+| HighSignatureFailures | sum(rate(auth_security_signature_failures_total[5m])) > 5 | critical | potential spoofing attempt or key mismatch |
+| HighPermissionDenied | sum(rate(auth_security_permission_denied_total[5m])) > 10 | warning | user accessing forbidden resources |
+| LoginErrorSpike | login_errors > 50 in 5m | critical | brute force attack verification |
+| KeycloakDown | health/ready fail > 30s | critical | check keycloak container status |
+| SessionOverload | active_sessions > 10000 | warning | review resource consumption |
+| TokenRefreshFailing | token errors > 10 in 5m | warning | check token exchange logic |
+| OrganizationCreationFail | admin API errors | critical | check realm settings and admin credentials |
+| SyncWorkerFailure | sum(rate(sync_worker_errors_total[5m])) > 1 | critical | check Sync Worker process logs |
+| SyncWorkerKafkaLagHigh | `sum(auth_sync_worker_kafka_consumer_lag{topic="config.updates"}) > 100` | warning | check Kafka consumer partition lag |
+| SyncWorkerKafkaProduceErrors | `sum(rate(auth_sync_worker_kafka_produced_errors_total[5m])) > 1` | critical | check Kafka connection and authorization ACLs for auth.events.user |
+
+
+
+
+
+---
+
+## Service Discovery Audit Logs (Structured JSON)
+Mọi hoạt động đăng ký, heartbeat và hủy đăng ký phải xuất ra log JSON cấu trúc chuẩn:
+*   **Log Register Success:**
+    `{"timestamp": "ISO-8601", "level": "info", "service": "auth", "message": "Service node registration completed", "action": "register", "node_ip": "{ip}", "node_port": {port}, "status": "success"}`
+*   **Log Deregister Success:**
+    `{"timestamp": "ISO-8601", "level": "info", "service": "auth", "message": "Service node deregistration completed", "action": "deregister", "node_ip": "{ip}", "node_port": {port}, "status": "success"}`
+*   **Log Heartbeat Failure:**
+    `{"timestamp": "ISO-8601", "level": "warn", "service": "auth", "message": "Heartbeat failure: {error}", "action": "heartbeat_failure", "node_ip": "{ip}", "node_port": {port}, "status": "failure"}`

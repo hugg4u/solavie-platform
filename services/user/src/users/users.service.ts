@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException, Logger, Inject, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
 import { RedisService } from '../redis/redis.service';
@@ -10,9 +10,10 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { UserErrorCode, UserSuccessCode } from '../common/constants/user-codes';
 import { tenantContextStorage } from '../common/context/tenant-context';
+import { ClientKafka } from '@nestjs/microservices';
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   private readonly logger = new Logger(UsersService.name);
   private readonly keycloakUrl: string;
 
@@ -21,8 +22,18 @@ export class UsersService {
     private readonly keycloakAdmin: KeycloakAdminService,
     private readonly redis: RedisService,
     private readonly httpService: HttpService,
+    @Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientKafka,
   ) {
     this.keycloakUrl = process.env.KEYCLOAK_URL || 'http://keycloak:8080';
+  }
+
+  async onModuleInit() {
+    try {
+      await this.kafkaClient.connect();
+      this.logger.log('Successfully connected to Kafka broker from UsersService');
+    } catch (e) {
+      this.logger.error(`Failed to connect to Kafka broker: ${e.message}`);
+    }
   }
 
   /**
@@ -296,6 +307,22 @@ export class UsersService {
       // 2. Ghi nhận User ID vào Redis Blacklist để Gateway chặn đứng tức thì
       await this.redis.setEx(`blacklist:user:${targetUserId}`, 900, 'suspended');
 
+      // 2.5. Phát sự kiện bất đồng bộ qua Kafka để đồng bộ hóa liên thông
+      try {
+        this.kafkaClient.emit('auth.events.user', JSON.stringify({
+          event: 'user.disabled',
+          userId: targetUserId,
+          realm: 'solavie',
+        }));
+        
+        this.kafkaClient.emit('token.revoked', JSON.stringify({
+          jti: `suspended-jti-${targetUserId}`,
+          exp: Math.floor(Date.now() / 1000) + 900,
+        }));
+      } catch (err) {
+        this.logger.error(`Failed to publish suspend events to Kafka: ${err.message}`);
+      }
+
       // 3. Cập nhật trạng thái cục bộ sang SUSPENDED
       const updatedUser = await tx.user.update({
         where: { id: targetUserId },
@@ -325,6 +352,17 @@ export class UsersService {
       // 2. Xóa User ID khỏi Redis Blacklist
       const redisClient = this.redis.getClient();
       await redisClient.del(`blacklist:user:${targetUserId}`);
+
+      // 2.5. Phát sự kiện bất đồng bộ qua Kafka để đồng bộ hóa liên thông
+      try {
+        this.kafkaClient.emit('auth.events.user', JSON.stringify({
+          event: 'user.verified',
+          userId: targetUserId,
+          realm: 'solavie',
+        }));
+      } catch (err) {
+        this.logger.error(`Failed to publish unsuspend event to Kafka: ${err.message}`);
+      }
 
       // 3. Cập nhật trạng thái cục bộ sang ACTIVE
       const updatedUser = await tx.user.update({

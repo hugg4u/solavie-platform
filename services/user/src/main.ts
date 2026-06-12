@@ -1,13 +1,19 @@
+import './tracing';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { join } from 'path';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { existsSync } from 'fs';
+import { StructuredLoggerService } from './common/observability/structured-logger.service';
 
 async function bootstrap() {
-  // 1. Tạo HTTP application cho REST APIs với tùy chọn rawBody để xác thực Webhook
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const loggerService = new StructuredLoggerService();
+  // 1. Tạo HTTP application cho REST APIs với tùy chọn rawBody và custom logger
+  const app = await NestFactory.create(AppModule, { 
+    rawBody: true,
+    logger: loggerService,
+  });
 
   // Kích hoạt Graceful Shutdown
   app.enableShutdownHooks();
@@ -31,6 +37,19 @@ async function bootstrap() {
       url: '0.0.0.0:50058',
       package: 'solavie.user.v1',
       protoPath: protoPath,
+    },
+  });
+
+  // 3.5. Cấu hình Kafka Microservice
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.KAFKA,
+    options: {
+      client: {
+        brokers: [process.env.KAFKA_BROKER || 'kafka:9092'],
+      },
+      consumer: {
+        groupId: 'user-service-group',
+      },
     },
   });
 

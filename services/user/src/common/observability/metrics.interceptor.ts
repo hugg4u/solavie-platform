@@ -3,6 +3,7 @@ import { Observable, throwError } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
 import { MetricsService } from './metrics.service';
 import { Response, Request } from 'express';
+import { getTenantId } from '../context/tenant-context';
 
 @Injectable()
 export class MetricsInterceptor implements NestInterceptor {
@@ -26,7 +27,8 @@ export class MetricsInterceptor implements NestInterceptor {
       const method = request.method;
       // Tránh việc ghi nhận các ID thay đổi làm nổ dữ liệu (Path parameter explosion)
       const route = request.route?.path || request.path;
-      this.metricsService.recordRequest(method, route, statusCode, durationSeconds);
+      const tenantId = getTenantId() || 'unknown';
+      this.metricsService.recordRequest(method, route, statusCode, durationSeconds, tenantId);
     };
 
     return next.handle().pipe(

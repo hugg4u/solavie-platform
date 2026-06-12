@@ -45,9 +45,9 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 7. THE Gateway SHALL tự động gán quyền wildcard `*` cho vai trò `admin` nội bộ của tenant (chỉ có quyền trong phạm vi tenant của họ). Đối với vai trò `system` hoặc `system_admin`, THE Gateway SHALL chỉ tự động gán quyền wildcard `*` và cho phép bypass khi và chỉ khi `tenant_id` trích xuất từ JWT trùng khớp với Master Tenant ID (`solavie-system-master`); nếu vai trò `system` hoặc `system_admin` thuộc vai trò thuộc Organization thông thường, Gateway SHALL từ chối gán wildcard `*` và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
 8. THE Gateway SHALL áp dụng nguyên tắc **Fail-Secure**: Nếu người dùng có vai trò nhưng hệ thống Gateway không thể kết nối tới cả Redis và API Fallback để phân giải quyền, Gateway SHALL chặn request và trả về lỗi `503 Service Unavailable` thay vì cho qua với quyền mặc định.
 9. THE Gateway SHALL whitelist các webhook endpoints (không cần auth) và health check endpoints.
-10. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist.
+10. THE Gateway SHALL thực hiện thu hồi token tức thời thông qua kiểm tra JTI Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:jti:{jti}`), trả về `401 Unauthorized` nếu token nằm trong blacklist. Sự kiện thu hồi token (Token Revocation - Luồng 2) được phát đi từ User Service qua Kafka topic `token.revoked`, sau đó được Auth Service (Sync Worker) tiêu thụ (consume) và cập nhật vào Redis Blacklist.
 11. THE Gateway SHALL thực hiện kiểm tra tính hợp lệ của OAuth2 client scopes (Scope Validation) đối với các API request. Khi forward request đến một service nghiệp vụ cụ thể, Gateway phải xác minh Access Token chứa scope được chỉ định của service đó (ví dụ: route `/api/v1/campaigns` yêu cầu scope `campaign`). Nếu thiếu scope hợp lệ, Gateway SHALL từ chối request với mã lỗi `403 Forbidden`.
-12. THE Gateway SHALL thực hiện kiểm tra User Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:user:{user_id}`) để chặn các người dùng đang bị đình chỉ (Suspended), trả về `401 Unauthorized` nếu user bị khóa.
+12. THE Gateway SHALL thực hiện kiểm tra User Blacklist lưu trữ trên Redis cache (sử dụng tiền tố `blacklist:user:{user_id}`) để chặn các người dùng đang bị đình chỉ (Suspended), trả về `401 Unauthorized` nếu user bị khóa. Sự kiện đình chỉ tài khoản người dùng được phát đi từ User/Auth Service qua Kafka topic `auth.events.user`, sau đó được Auth Service (Sync Worker) tiêu thụ và ghi nhận trạng thái khóa vào Redis Blacklist.
 
 ### Requirement 3: Rate Limiting
 
@@ -80,3 +80,33 @@ API Gateway tập trung — Kong Gateway OSS. Xử lý SSL termination, rate lim
 2. THE Gateway SHALL log tất cả requests (method, path, status, latency)
 3. THE Gateway SHALL propagate trace headers (OpenTelemetry)
 4. THE Gateway SHALL cung cấp health check endpoint
+
+### Requirement 6: MCP Route Redirection (Server-Sent Events)
+
+**User Story:** Là hệ thống AI, tôi muốn Gateway định tuyến các kết nối Model Context Protocol (MCP) truyền trực tiếp (Server-Sent Events) tới các microservices nghiệp vụ ổn định, không bị ngắt kết nối giữa chừng.
+
+#### Acceptance Criteria
+1. THE Gateway SHALL định tuyến các đường dẫn MCP SSE bao gồm `/api/v1/mcp` tới dịch vụ `crm`, `/api/v1/kb/mcp` tới dịch vụ `knowledge-base`, `/api/v1/messaging/mcp` tới dịch vụ `messaging`, và các đường dẫn tương ứng khác cho cả 7 dịch vụ nghiệp vụ hỗ trợ MCP.
+2. THE Gateway SHALL duy trì kết nối persistent cho các requests này, tự động thiết lập thời gian chờ của luồng gửi/nhận (read/write/send timeout) ở mức tối thiểu `60000ms` (60 giây) để tránh tự động ngắt kết nối.
+3. THE Gateway SHALL tắt tính năng buffering dữ liệu (bằng cách thiết lập header `X-Accel-Buffering: no` hoặc thông qua cấu hình proxy buffer) để đảm bảo dữ liệu sự kiện (events) được truyền trực tiếp đến client theo thời gian thực (realtime streaming).
+4. THE Gateway SHALL kiểm tra đầy đủ token OIDC, rate limiting và inject các security headers (`X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, `X-Permissions-Signature`) cho các kết nối MCP trước khi chuyển tiếp.
+
+---
+
+## Upstream Dynamic Routing & Gateway Service Discovery Requirements
+
+### Requirement 8: Shared Service Discovery
+1. THE Gateway SHALL định tuyến tất cả các request tới các microservices nghiệp vụ nội bộ thông qua các đối tượng Upstream ảo thay vì hostname/port tĩnh.
+2. THE Gateway Sync Daemon SHALL quét định kỳ danh sách IP:Port từ các Redis Sets của từng dịch vụ hoạt động để cập nhật danh sách targets của Upstream tương ứng trong cấu hình Kong.
+3. THE Gateway Sync Daemon SHALL tự động thực hiện reload cấu hình qua API `/config` của Kong nếu phát hiện sự thay đổi targets.
+
+
+---
+
+## Service Discovery (Self-Registration) & Health Endpoint (Tối ưu hóa)
+1. THE Service SHALL tự phát hiện IP card mạng nội bộ khi khởi chạy theo độ ưu tiên: Biến môi trường `CONTAINER_IP` > Quét các interface card mạng vật lý của OS > Fallback kết nối UDP fake đến `8.8.8.8`.
+2. THE Service SHALL tự động đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:gateway` khi startup.
+3. THE Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:gateway:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Service SHALL tự động xóa IP của mình trên Redis Set và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
+5. THE Service SHALL cung cấp API endpoint `/health` (hoặc `/healthz`) trả về HTTP 200 OK để phục vụ Active Healthcheck của API Gateway.
+6. THE Service SHALL tích hợp cơ chế Fail-Safe: Registry client không crash ứng dụng nếu Redis tạm thời mất kết nối khi khởi chạy.

@@ -65,3 +65,14 @@ Dịch vụ thu thập metrics, engagement tracking, AI-powered insights, report
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `analytics`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Analytics Service.
 - **Tenant Isolation:** Dữ liệu Analytics và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Analytics Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Analytics Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:analytics` khi startup.
+3. THE Analytics Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:analytics:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Analytics Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:analytics` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

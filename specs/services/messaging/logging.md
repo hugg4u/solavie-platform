@@ -95,3 +95,43 @@ GET /metrics  → Prometheus format
 | HighHandoffRate | handoffs / messages > 50% in 30m | warning |
 | KafkaConsumerLag | consumer lag > 500 for 5m | warning |
 | WebSocketDisconnectSpike | disconnect rate > 20% in 5m | warning |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "messaging",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3002,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:messaging"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "messaging",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3002,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:messaging"
+  }
+}
+```

@@ -443,7 +443,7 @@ async def test_auto_create_routes_on_first_api_key():
     import hmac, hashlib
     user_id = "test-user-123"
     perms = "ai-core:configs:write"
-    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
     payload_str = f"{tenant_id}:{user_id}:{perms}"
     sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
     
@@ -537,7 +537,7 @@ async def test_dynamic_models_endpoint():
     perms = "ai-core:configs:read"
     
     import hmac, hashlib
-    secret = "default-gateway-signing-secret-key-change-me-in-production"
+    secret = os.getenv("GATEWAY_SIGNING_SECRET", "default-gateway-signing-secret-key-change-me-in-production")
     payload_str = f"{tenant_id}:{user_id}:{perms}"
     sig = hmac.new(secret.encode('utf-8'), payload_str.encode('utf-8'), hashlib.sha256).hexdigest()
     
@@ -724,15 +724,16 @@ async def test_chatbot_complete_injects_repetition_penalties():
     msgs = [{"role": "user", "content": "Hello"}]
 
     with patch("gateway.router.acompletion", side_effect=fake_acompletion):
-        with patch.object(gateway, "get_routing", return_value={
-            "primary_model": "gpt-4o-mini", "fallback_model": "gpt-4o-mini",
-            "provider": "openai", "fallback_provider": "openai",
-            "temperature": 0.7, "max_tokens": 500,
-        }):
-            with patch.object(gateway, "compress_history", return_value=msgs):
-                with patch.object(gateway, "get_provider_credentials", return_value={"api_key": "sk-x"}):
-                    with patch.object(gateway, "resolve_active_default_model", side_effect=lambda t, p, m: m):
-                        await gateway.complete("tenant", "chatbot", msgs)
+        with patch.object(gateway.semantic_cache, "lookup", return_value=(None, 0.0)):
+            with patch.object(gateway, "get_routing", return_value={
+                "primary_model": "gpt-4o-mini", "fallback_model": "gpt-4o-mini",
+                "provider": "openai", "fallback_provider": "openai",
+                "temperature": 0.7, "max_tokens": 500,
+            }):
+                with patch.object(gateway, "compress_history", return_value=msgs):
+                    with patch.object(gateway, "get_provider_credentials", return_value={"api_key": "sk-x"}):
+                        with patch.object(gateway, "resolve_active_default_model", side_effect=lambda t, p, m: m):
+                            await gateway.complete("tenant", "chatbot", msgs)
 
     assert captured.get("frequency_penalty") == 0.3, "FIX-6: frequency_penalty must be 0.3 for chatbot"
     assert captured.get("presence_penalty") == 0.1, "FIX-6: presence_penalty must be 0.1 for chatbot"

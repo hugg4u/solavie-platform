@@ -32,6 +32,7 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 1. IF primary channel thất bại, THEN fallback sang channel khác
 2. IF tất cả channels thất bại, THEN queue cho retry sau
 3. THE Notification_Service SHALL log delivery status per notification
+4. THE Notification_Service SHALL đóng vai trò Kafka Consumer tiêu thụ (consume) các yêu cầu gửi thông báo từ Kafka topic `notification.send` (Luồng 5) để xử lý bất đồng bộ và đảm bảo không mất mát tin nhắn kể cả khi nhà mạng hoặc mail server đối tác bị sập.
 
 ### Requirement 4: MCP Server Integration
 
@@ -57,3 +58,14 @@ Dịch vụ thông báo đa kênh — Slack, email, in-app push. Delivery guaran
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `notification`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Notification Service.
 - **Tenant Isolation:** Dữ liệu Notification và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Notification Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Notification Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:notification` khi startup.
+3. THE Notification Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:notification:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Notification Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:notification` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

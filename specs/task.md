@@ -33,11 +33,11 @@ This master checklist tracks the development and deployment of the entire Solavi
 *Goal: Complete supporting features: comments integration, multi-channel notifications, tenant config reload, DMS files, link shortener, and media workers.*
   - [ ] [**COMMENT-MANAGER Service**](file:///d:/workspace/project/solavie-system/specs/services/comment-manager/task.md) (4 requirements - Tích hợp MCP) - Tech: Node.js 20 (NestJS)
   - [ ] [**NOTIFICATION Service**](file:///d:/workspace/project/solavie-system/specs/services/notification/task.md) (4 requirements - Tích hợp MCP) - Tech: Node.js 20 (NestJS)
-  - [ ] [**TENANT-CONFIG Service**](specs/solavie-system/services/tenant-config/task.md) (10 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**DMS Service**](specs/solavie-system/services/dms/task.md) (9 requirements) - Tech: Node.js 20 (NestJS)
-  - [ ] [**LINK-SHORTENER Service**](specs/solavie-system/services/link-shortener/task.md) (5 requirements) - Tech: Node.js 20 (Fastify)
-  - [ ] [**MEDIA-PROCESSOR Service**](specs/solavie-system/services/media-processor/task.md) (5 requirements) - Tech: Python 3.12 (FastAPI)
-  - [ ] [**OBSERVABILITY Service**](specs/solavie-system/services/observability/task.md) (5 requirements) - Tech: Prometheus/Grafana Stack
+  - [ ] [**TENANT-CONFIG Service**](file:///d:/workspace/project/solavie-system/specs/services/tenant-config/task.md) (10 requirements) - Tech: Node.js 20 (NestJS)
+  - [ ] [**DMS Service**](file:///d:/workspace/project/solavie-system/specs/services/dms/task.md) (9 requirements) - Tech: Node.js 20 (NestJS)
+  - [ ] [**LINK-SHORTENER Service**](file:///d:/workspace/project/solavie-system/specs/services/link-shortener/task.md) (5 requirements) - Tech: Node.js 20 (Fastify)
+  - [ ] [**MEDIA-PROCESSOR Service**](file:///d:/workspace/project/solavie-system/specs/services/media-processor/task.md) (5 requirements) - Tech: Python 3.12 (FastAPI)
+  - [ ] [**OBSERVABILITY Service**](file:///d:/workspace/project/solavie-system/specs/services/observability/task.md) (5 requirements) - Tech: Prometheus/Grafana Stack
 
 ## System-Level Infrastructure Tasks
 
@@ -60,6 +60,10 @@ This master checklist tracks the development and deployment of the entire Solavi
 - [ ] **Step 5: End-to-End System Integration Testing**
   - [ ] Trigger mock message inflow -> Chatbot processing -> RAG retrieval -> Guardrails -> CRM Lead auto-update.
   - [ ] Audit tenant isolation at every network request and database transaction.
+- [ ] **Step 6: Service Discovery & Gateway Routing Optimization**
+  - [ ] Cấu hình Active/Passive Healthcheck và Circuit Breaker trên Kong.
+  - [ ] Chuyển Kong sang DB-mode và nâng cấp Sync Daemon sang Async (gọi REST Admin API thay vì reload YAML).
+  - [ ] Cải tiến giải thuật IP Discovery Fallback và cung cấp endpoint `/health` cho 20 microservices.
 
 ## Done When
 
@@ -67,3 +71,4 @@ This master checklist tracks the development and deployment of the entire Solavi
 - [ ] Master routing rules on Kong Gateway function correctly with zero authentication bypasses on protected resources.
 - [ ] Cross-tenant row-level security (RLS) validations prevent any data leakage.
 - [ ] High p95 latency margins (Chatbot response < 2s, vector search < 10ms) are validated through load testing.
+- [ ] Service Discovery and Kong DB-mode targets sync functions smoothly under node failures in under 1 second.

@@ -71,14 +71,32 @@ CREATE INDEX idx_notif_user ON notifications(user_id, read_at NULLS FIRST, creat
 CREATE INDEX idx_notif_tenant ON notifications(tenant_id, created_at DESC);
 ```
 
-## Kafka Events Consumed
-
-| Topic | Action |
-|-------|--------|
-| `messaging.handoff.requested` | Notify assigned agent (priority: critical) |
-| `crm.lead.score.changed` | Notify assigned agent (priority: high) |
-| `scheduler.post.failed` | Notify post creator (priority: high) |
-| `comment.escalation` | Notify assigned agent (priority: high) |
+## Kafka Events Consumed (Luồng 5 - MỚI)
+ 
+ | Topic | Action |
+ |-------|--------|
+ | `messaging.handoff.requested` | Notify assigned agent (priority: critical) |
+ | `crm.lead.score.changed` | Notify assigned agent (priority: high) |
+ | `scheduler.post.failed` | Notify post creator (priority: high) |
+ | `comment.escalation` | Notify assigned agent (priority: high) |
+ | `notification.send` | Gửi thông báo bất đồng bộ qua Email/SMS/Push cho người dùng |
+ 
+ ### Payload của `notification.send` (Luồng 5):
+ ```json
+ {
+   "event_id": "uuid-v4",
+   "tenant_id": "uuid-v4",
+   "user_id": "uuid-v4",
+   "type": "EMAIL", // EMAIL | SMS | PUSH
+   "template": "post_publish_failed",
+   "parameters": {
+     "schedule_id": "uuid-v4",
+     "post_id": "uuid-v4",
+     "error": "Reason details"
+   },
+   "timestamp": "ISO-8601 timestamp"
+ }
+ ```
 
 ## Delivery SLA
 - Critical (handoff): < 3 seconds
@@ -184,3 +202,37 @@ Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request t
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `notification`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+---
+
+## Service Discovery Integration Design
+
+Dịch vụ Notification tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính để hỗ trợ phát hiện dịch vụ động:
+
+### 1. Kiến trúc Client
+* **Cơ chế:**
+  * **Startup Event:** Khi tiến trình của dịch vụ khởi động, client thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:notification`.
+  * **Heartbeat Thread/Task:** Chạy định kỳ mỗi 5 giây để thực hiện:
+    * Ghi đè khóa sự sống: `SETEX registry:service:notification:node:{ip}:{port} 15 "alive"`.
+    * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:notification {ip}:{port}`.
+  * **Shutdown Event:** Khi nhận tín hiệu tắt tiến trình (`SIGTERM`/`SIGINT`), client thực hiện dọn dẹp:
+    * Xóa IP khỏi Set: `SREM registry:service:notification {ip}:{port}`.
+    * Xóa khóa sống: `DEL registry:service:notification:node:{ip}:{port}`.
+
+### 2. Tích hợp theo Tech Stack
+* **NestJS (Node.js):** Sử dụng các lifecycle hooks `OnModuleInit` và `OnApplicationShutdown` kết hợp thư viện `ioredis` và `setInterval` cho heartbeat.
+* **FastAPI (Python):** Sử dụng lifespan event handlers của FastAPI kết hợp `asyncio.create_task` và `redis-py`.
+* **Spring Boot (Java):** Sử dụng annotation `@PostConstruct` và `@PreDestroy` kết hợp `ScheduledExecutorService` và `Jedis`/`Lettuce`.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

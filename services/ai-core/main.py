@@ -83,6 +83,15 @@ async def startup_event():
 
     asyncio.create_task(run_registration())
 
+    # 6. Initialize Semantic Cache index on startup
+    try:
+        from gateway.semantic_cache import SemanticCacheManager
+        cache_mgr = SemanticCacheManager()
+        await cache_mgr.create_index()
+    except Exception as e:
+        logger.error(f"Failed to initialize semantic cache index: {e}")
+
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

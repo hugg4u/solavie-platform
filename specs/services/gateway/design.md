@@ -94,6 +94,9 @@ services:
 
   - name: crm
     url: http://crm:3003
+    connect_timeout: 60000
+    read_timeout: 60000
+    write_timeout: 60000
     routes:
       - name: crm-api
         paths: ["/api/v1/contacts", "/api/v1/segments", "/api/v1/deals", "/api/v1/tickets", "/api/v1/mcp"]
@@ -416,8 +419,8 @@ Kong Gateway sử dụng custom Lua plugin `dynamic-policy` để thực hiện 
     - Inject `X-User-Permissions` (chuỗi CSV các quyền đã sắp xếp).
     - Inject `X-Permissions-Signature` (signature).
 6.  **Bước 6: Token & User Revocation Verification**:
-    - Check JTI Blacklist: Gửi lệnh `GET blacklist:jti:{jti}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (Token has been revoked).
-    - Check User Suspension: Gửi lệnh `GET blacklist:user:{user_id}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (User has been suspended).
+    - Check JTI Blacklist: Gửi lệnh `GET blacklist:jti:{jti}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (Token has been revoked). Dữ liệu blacklist này được cập nhật bất đồng bộ bởi Auth Service (Sync Worker) khi consume sự kiện từ Kafka topic `token.revoked` (Luồng 2).
+    - Check User Suspension: Gửi lệnh `GET blacklist:user:{user_id}` tới Redis. Nếu có, lập tức trả về `401 Unauthorized` (User has been suspended). Dữ liệu này được cập nhật bất đồng bộ từ Kafka topic `auth.events.user` (Luồng 1) bởi Sync Worker.
 
 ## Data Models
 
@@ -464,3 +467,89 @@ Distributed transactions dung Saga pattern voi compensating actions khi rollback
 | Contract Tests | Pact (consumer-driven) cho gRPC interfaces | Chatbot?AI Core, Messaging?Chatbot |
 | Property-Based Tests | fast-check (JS) / Hypothesis (Python) | Tenant isolation, idempotency |
 | Load Tests | k6 | Chatbot E2E < 2s t?i 100 concurrent users |
+
+---
+
+## Shared Upstream Routing & Sync Daemon Design
+
+### 1. Cấu hình Upstreams trong generate_kong_config.py
+Gateway cấu hình đối tượng Upstream ảo cho toàn bộ các backend microservices nghiệp vụ để hỗ trợ tự động mở rộng. Danh sách các upstreams ảo bao gồm:
+* `ai-core-upstream`
+* `user-service-upstream`
+* `tenant-config-upstream`
+* `chatbot-upstream`
+* `knowledge-base-upstream`
+* và các upstreams tương ứng cho các dịch vụ khác (`campaign`, `crm`, `analytics`, `comment-manager`, `dms`, `link-shortener`, `media-processor`, `notification`, `channel-connector`, `scheduler`).
+
+### 2. Registry Sync Daemon (sync_registry.py)
+Bộ đồng bộ hỗ trợ mở rộng động. Thay vì hardcode cứng bản đồ ánh xạ `SERVICES_MAP`, Sync Daemon có thể:
+1. Đọc danh sách các dịch vụ đăng ký trực tiếp từ Redis bằng cách liệt kê các key có pattern `registry:service:*`.
+2. Hoặc nạp cấu hình ánh xạ dịch vụ $\leftrightarrow$ upstream từ biến môi trường `SERVICES_MAP` (dưới dạng chuỗi JSON) được truyền vào Docker Compose/Kubernetes ConfigMap.
+
+Ví dụ cấu hình mở rộng:
+```python
+SERVICES_MAP = {
+    "ai-core": "ai-core-upstream",
+    "user-service": "user-service-upstream",
+    "tenant-config": "tenant-config-upstream",
+    "chatbot": "chatbot-upstream",
+    "knowledge-base": "knowledge-base-upstream",
+    "campaign": "campaign-upstream",
+    "crm": "crm-upstream",
+    "analytics": "analytics-upstream",
+    "comment-manager": "comment-manager-upstream",
+    "dms": "dms-upstream",
+    "link-shortener": "link-shortener-upstream",
+    "media-processor": "media-processor-upstream",
+    "notification": "notification-upstream",
+    "channel-connector": "channel-connector-upstream",
+    "scheduler": "scheduler-upstream"
+}
+```
+
+Tại mỗi chu kỳ quét (mặc định mỗi 5 giây), Sync Daemon thực hiện:
+1. Duyệt qua tất cả các cặp service-upstream trong `SERVICES_MAP` được cấu hình.
+2. Gọi Redis để lấy danh sách IP:Port hoạt động từ Redis set `registry:service:{service_name}` và kiểm tra TTL của từng node qua key `registry:service:{service_name}:node:{ip}:{port}`.
+3. Nếu phát hiện thay đổi target, thực hiện cập nhật lại file khai báo `kong.yml` (hoặc thông qua Kong Admin API) và reload Kong Gateway.
+
+---
+
+## Model Context Protocol (MCP) SSE Routing Design
+
+Các endpoints MCP Server-Sent Events (SSE) yêu cầu kết nối stream trực tiếp không ngắt quãng:
+
+### 1. Cấu hình Routes trên Kong Gateway
+Khi cấu hình các route `/api/v1/mcp`, `/api/v1/kb/mcp`, `/api/v1/messaging/mcp`,... trong `generate_kong_config.py`, Gateway áp dụng các tham số tối ưu hóa cho kết nối duy trì lâu dài:
+* `connect_timeout = 60000` (60 giây)
+* `read_timeout = 60000` (60 giây)
+* `write_timeout = 60000` (60 giây)
+
+Các routes và upstreams nghiệp vụ cùng Scope Tags đi kèm được quy định chi tiết theo bảng dưới đây:
+
+| Tên Dịch Vụ (Service) | Đường Dẫn MCP Route (Paths) | Upstream ảo (Target) | OAuth2 Scope Tag |
+|---|---|---|---|
+| `crm` | `/api/v1/mcp` | `crm-upstream` | `scope:crm` |
+| `knowledge-base` | `/api/v1/kb/mcp` | `knowledge-base-upstream` | `scope:knowledge-base` |
+| `messaging` | `/api/v1/messaging/mcp` | `messaging-upstream` | `scope:messaging` |
+| `notification` | `/api/v1/notification/mcp` | `notification-upstream` | `scope:notification` |
+| `comment-manager` | `/api/v1/comments/mcp` | `comment-manager-upstream` | `scope:comment-manager` |
+| `content` | `/api/v1/content/mcp` | `content-upstream` | `scope:content` |
+| `scheduler` | `/api/v1/scheduler/mcp` | `scheduler-upstream` | `scope:scheduler` |
+| `analytics` | `/api/v1/analytics/mcp` | `analytics-upstream` | `scope:analytics` |
+
+### 2. Cấu hình Buffering và Keep-Alive
+* **Bypass Buffering:** Để đảm bảo dữ liệu streaming từ LLM/Agent được hiển thị tức thời trên Client mà không bị nghẽn ở lớp Nginx của Kong, Nginx proxy buffer sẽ được vô hiệu hóa trên các routes MCP (qua header response `X-Accel-Buffering: no` được inject bởi plugin hoặc trả về từ downstream).
+* **Keep-Alive:** Kích hoạt Keep-Alive trên upstream connections để tái sử dụng TCP connections, tránh overhead bắt tay SSL/TCP liên tục cho các luồng MCP chat.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

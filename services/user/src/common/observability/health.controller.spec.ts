@@ -24,7 +24,7 @@ describe('HealthController', () => {
   };
 
   const mockMetricsService = {
-    getMetricsResponse: jest.fn(() => 'mock-metrics'),
+    getMetricsResponse: jest.fn(() => Promise.resolve('mock-metrics')),
   };
 
   beforeEach(async () => {
@@ -86,13 +86,13 @@ describe('HealthController', () => {
   });
 
   describe('GET /metrics', () => {
-    it('should return metrics list', () => {
+    it('should return metrics list', async () => {
       const mockRes = {
         set: jest.fn(),
         send: jest.fn(),
       } as any;
 
-      controller.getMetrics(mockRes);
+      await controller.getMetrics(mockRes);
 
       expect(mockRes.set).toHaveBeenCalledWith('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
       expect(mockRes.send).toHaveBeenCalledWith('mock-metrics');

@@ -25,8 +25,9 @@ This document tracks the implementation checklist for **SCHEDULER Service** base
 **Acceptance Criteria Implementation:**
 - [ ] AC 1.1: THE Scheduler_Service SHALL cho phép schedule post trên 1 hoặc nhiều channels
 - [ ] AC 1.2: THE Scheduler_Service SHALL hỗ trợ timezone per-tenant
-- [ ] AC 1.3: WHEN đến thời điểm publish, THE Scheduler_Service SHALL trigger publish event qua Kafka
+- [ ] AC 1.3: WHEN đến thời điểm publish, THE Scheduler_Service SHALL đóng vai trò Kafka Producer phát sự kiện yêu cầu đăng bài tới Kafka topic `scheduler.post.due` (Luồng 4).
 - [ ] AC 1.4: THE Scheduler_Service SHALL hỗ trợ recurring schedules (daily, weekly)
+- [ ] AC 1.5: THE Scheduler_Service SHALL đóng vai trò Kafka Consumer lắng nghe các topics `content.published` và `scheduler.post.failed` (Luồng 4) để cập nhật trạng thái xuất bản bài viết tương ứng.
 
 ### Task 2: 2: Calendar View
 > *User Story: Là marketer, tôi muốn xem lịch đăng bài dạng calendar.*
@@ -102,3 +103,21 @@ This document tracks the implementation checklist for **SCHEDULER Service** base
 - [ ] Tích hợp cơ chế bảo mật tiêm `tenant_id` từ request header trực tiếp vào các Quartz Job và DB models.
 - [ ] Viết các test case tự động để xác nhận cô lập tenant khi đặt lịch.
 
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (Spring Boot).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

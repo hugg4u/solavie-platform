@@ -15,14 +15,28 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
     async def Complete(self, request, context):
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
-        # Extract x-user-permissions from metadata (case-insensitive)
+        # Extract security metadata (case-insensitive)
         metadata = {k.lower(): v for k, v in context.invocation_metadata()}
+        x_tenant_id = metadata.get("x-tenant-id") or request.tenant_id
+        x_user_id = metadata.get("x-user-id")
         user_permissions_csv = metadata.get("x-user-permissions")
+        x_permissions_signature = metadata.get("x-permissions-signature")
+
         if user_permissions_csv is None:
             # Trusted internal call or gateway bypass
             user_permissions = ["*"]
         else:
             user_permissions = [p.strip() for p in user_permissions_csv.split(",") if p.strip()]
+
+        # Store in ContextVar for propagation to MCP client
+        from api.deps import security_headers_ctx
+        headers = {
+            "X-Tenant-ID": x_tenant_id,
+            "X-User-ID": x_user_id,
+            "X-User-Permissions": user_permissions_csv,
+            "X-Permissions-Signature": x_permissions_signature
+        }
+        security_headers_ctx.set(headers)
 
         try:
             result = await self.orchestrator.run(

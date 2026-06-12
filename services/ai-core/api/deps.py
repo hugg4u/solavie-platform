@@ -2,9 +2,13 @@ import uuid
 import hmac
 import hashlib
 import os
+from contextvars import ContextVar
 from fastapi import Header, HTTPException
 from gateway.router import safe_uuid
 from db.database import get_db
+
+# Context variable to forward security headers across thread/task boundary to MCP client
+security_headers_ctx: ContextVar[dict | None] = ContextVar("security_headers", default=None)
 
 def get_effective_tenant(
     x_tenant_id: str | None = Header(None),
@@ -66,6 +70,15 @@ def require_permission(required_permission: str):
         if not hmac.compare_digest(x_permissions_signature, expected_sig):
             raise HTTPException(status_code=403, detail="Invalid authorization signature.")
             
+        # Store security headers in ContextVar for propagation to MCP client
+        headers = {
+            "X-Tenant-ID": x_tenant_id,
+            "X-User-ID": x_user_id,
+            "X-User-Permissions": x_user_permissions,
+            "X-Permissions-Signature": x_permissions_signature
+        }
+        security_headers_ctx.set(headers)
+
         # Match permissions
         perms = set(p.strip() for p in x_user_permissions.split(",") if p.strip())
         if check_permission(perms, required_permission):
@@ -73,4 +86,5 @@ def require_permission(required_permission: str):
             
         raise HTTPException(status_code=403, detail=f"Forbidden: requires permission '{required_permission}'.")
     return dependency
+
 

@@ -11,6 +11,7 @@ import { HealthController } from './common/observability/health.controller';
 import { PermissionsController } from './common/observability/permissions.controller';
 import { MetricsService } from './common/observability/metrics.service';
 import { MetricsInterceptor } from './common/observability/metrics.interceptor';
+import { ServiceRegistryClient } from './common/observability/service-registry.client';
 
 @Module({
   imports: [PrismaModule, RedisModule, KeycloakModule, UsersModule],
@@ -18,6 +19,7 @@ import { MetricsInterceptor } from './common/observability/metrics.interceptor';
   providers: [
     AppService,
     MetricsService,
+    ServiceRegistryClient,
     {
       provide: APP_INTERCEPTOR,
       useClass: MetricsInterceptor,

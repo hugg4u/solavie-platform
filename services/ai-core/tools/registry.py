@@ -340,6 +340,98 @@ ALL_TOOLS = [
                 "required": ["contact_id", "behavior_data"]
             }
         }
+    },
+    # ── Category 5: Solar, CRM & O&M Operations (MỚI) ──
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_solar_roi",
+            "description": "Calculate solar system recommended size, panel quantity, monthly savings, and payback period based on monthly electric bill and roof area.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "monthly_bill": {"type": "number", "description": "Average monthly electricity bill in VND"},
+                    "roof_area_sqm": {"type": "number", "description": "Available roof area for solar panels in square meters"},
+                    "location_zone": {"type": "string", "enum": ["south", "central", "north"], "description": "Geographic location zone"}
+                },
+                "required": ["monthly_bill", "roof_area_sqm", "location_zone"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_proposal_preview",
+            "description": "Retrieve the pre-generated solar proposal PDF link and financial ROI summary details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deal_id": {"type": "string", "description": "CRM Deal UUID"}
+                },
+                "required": ["deal_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_om_ticket",
+            "description": "Create a new Operations and Maintenance (O&M) ticket for solar system issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "string", "description": "CRM Contact UUID related to the issue"},
+                    "title": {"type": "string", "description": "Brief summary of the issue"},
+                    "description": {"type": "string", "description": "Detailed description of the problem/symptoms"},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Urgency level", "default": "medium"}
+                },
+                "required": ["contact_id", "title", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ticket_status",
+            "description": "Check the current status and technician assignment of an O&M support ticket.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {"type": "string", "description": "O&M Ticket UUID"}
+                },
+                "required": ["ticket_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_lead_deal",
+            "description": "Create a new sales lead deal in CRM solar pipeline.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "string", "description": "CRM Contact UUID to link the deal"},
+                    "deal_name": {"type": "string", "description": "Name of the deal opportunity"}
+                },
+                "required": ["contact_id", "deal_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_deal_stage",
+            "description": "Update the sales pipeline stage of an existing CRM solar deal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deal_id": {"type": "string", "description": "CRM Deal UUID"},
+                    "stage": {"type": "string", "enum": ["lead", "consult", "survey", "proposal", "negotiation", "contract_signed", "closed_lost"], "description": "New pipeline stage"}
+                },
+                "required": ["deal_id", "stage"]
+            }
+        }
     }
 ]
 
@@ -353,7 +445,13 @@ PERMISSION_MATRIX = {
         "tag_contact",
         "analyze_sentiment",
         "translate",
-        "summarize"
+        "summarize",
+        "calculate_solar_roi",
+        "get_proposal_preview",
+        "create_om_ticket",
+        "get_ticket_status",
+        "create_lead_deal",
+        "update_deal_stage"
     ],
     "content_generation": [
         "knowledge_base_search",
@@ -410,7 +508,13 @@ TOOL_PERMISSIONS = {
     "summarize": "knowledge-base:documents:read",
     "translate": "knowledge-base:documents:read",
     "analyze_sentiment": "knowledge-base:documents:read",
-    "calculate_lead_score": "crm:contacts:update"
+    "calculate_lead_score": "crm:contacts:update",
+    "calculate_solar_roi": "crm:deals:read",
+    "get_proposal_preview": "crm:deals:read",
+    "create_lead_deal": "crm:deals:create",
+    "update_deal_stage": "crm:deals:update",
+    "create_om_ticket": "crm:tickets:create",
+    "get_ticket_status": "crm:tickets:read"
 }
 
 # ─── Baseline Rate Limits per Tier (AC 8.4) ──────────────────────────────────
@@ -435,7 +539,13 @@ BASELINE_TIER_LIMITS = {
         "summarize": 100,
         "translate": 100,
         "analyze_sentiment": 100,
-        "calculate_lead_score": 50
+        "calculate_lead_score": 50,
+        "calculate_solar_roi": 50,
+        "get_proposal_preview": 50,
+        "create_lead_deal": 50,
+        "update_deal_stage": 50,
+        "create_om_ticket": 50,
+        "get_ticket_status": 50
     },
     "standard": {
         "knowledge_base_search": 500,
@@ -456,7 +566,13 @@ BASELINE_TIER_LIMITS = {
         "summarize": 500,
         "translate": 500,
         "analyze_sentiment": 500,
-        "calculate_lead_score": 200
+        "calculate_lead_score": 200,
+        "calculate_solar_roi": 100,
+        "get_proposal_preview": 100,
+        "create_lead_deal": 100,
+        "update_deal_stage": 100,
+        "create_om_ticket": 100,
+        "get_ticket_status": 100
     },
     "enterprise": {
         "knowledge_base_search": 5000,
@@ -477,7 +593,13 @@ BASELINE_TIER_LIMITS = {
         "summarize": 5000,
         "translate": 5000,
         "analyze_sentiment": 5000,
-        "calculate_lead_score": 1000
+        "calculate_lead_score": 1000,
+        "calculate_solar_roi": 500,
+        "get_proposal_preview": 500,
+        "create_lead_deal": 500,
+        "update_deal_stage": 500,
+        "create_om_ticket": 500,
+        "get_ticket_status": 500
     }
 }
 
@@ -542,7 +664,12 @@ class ToolPermissionManager:
                 "scheduler:schedules:create",
                 "comment-manager:comments:update",
                 "notification:notifications:send",
-                "analytics:metrics:read"
+                "analytics:metrics:read",
+                "crm:deals:read",
+                "crm:deals:create",
+                "crm:deals:update",
+                "crm:tickets:create",
+                "crm:tickets:read"
             ]
         elif role_norm in ["agent", "support"]:
             return [

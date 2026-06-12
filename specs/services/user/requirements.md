@@ -32,7 +32,7 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
    * Gọi Keycloak Admin API để tạo một tài khoản "Shadow" (chưa kích hoạt) tương ứng và liên kết vào Organization của Tenant trong realm `solavie`.
    * Sinh mã Token kích hoạt dùng một lần (hết hạn sau 24 giờ).
 3. THE User_Service SHALL gửi email mời kèm link kích hoạt chứa mã token bảo mật thông qua dịch vụ Notification Service.
-4. Khi Tenant Admin thực hiện khóa hoặc mở khóa tài khoản nhân viên trên Dashboard, User_Service SHALL gọi Keycloak Admin API tương ứng để đặt giá trị `"enabled": false` (hoặc `true`) trên Keycloak, đồng thời gửi sự kiện `token.revoked` sang Redis để thu hồi session/token ngay lập tức (< 1ms).
+4. Khi Tenant Admin thực hiện khóa hoặc mở khóa tài khoản nhân viên trên Dashboard, User_Service SHALL gọi Keycloak Admin API tương ứng để đặt giá trị `"enabled": false` (hoặc `true`) trên Keycloak, đồng thời gửi sự kiện `token.revoked` sang Apache Kafka topic `token.revoked` để thu hồi session/token.
 5. Khi nhân viên cập nhật thông tin cá nhân cơ bản (Email, Họ, Tên) trên Dashboard, User_Service SHALL gọi Keycloak Admin API tương ứng để đồng bộ thông tin lên Keycloak.
 6. Trước khi gửi yêu cầu đổi Email lên Keycloak, User_Service SHALL gọi API kiểm tra chéo tính duy nhất của Email mới để tránh lỗi `409 Conflict`.
 7. THE User_Service SHALL cung cấp các REST API gán và thu hồi vai trò tùy chỉnh cho người dùng (`POST /api/v1/users/:id/roles`, `DELETE /api/v1/users/:id/roles/:name`) để ánh xạ thành viên doanh nghiệp vào Organization-scoped Roles của Keycloak.
@@ -52,14 +52,13 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 **User Story:** Là security engineer, tôi muốn khi một tài khoản bị khóa, kích hoạt hoặc thay đổi thông tin trên Keycloak thì dữ liệu nghiệp vụ ở Backend cũng được cập nhật ngay lập tức.
 
 #### Acceptance Criteria
-1. THE User_Service SHALL tích hợp một Webhook Endpoint hoặc lắng nghe hàng đợi sự kiện (Redis/Kafka) để tiếp nhận các sự kiện thay đổi danh tính từ Keycloak.
+1. THE User_Service SHALL lắng nghe hàng đợi sự kiện Apache Kafka topic `auth.events.user` để tiếp nhận các sự kiện thay đổi danh tính từ Keycloak (được publish bởi Auth Sync Worker).
 2. Khi nhận sự kiện người dùng kích hoạt tài khoản thành công (Verify Email / Set Password), User_Service SHALL cập nhật trạng thái User thành `ACTIVE` trong cơ sở dữ liệu `solavie_user_db`.
 3. Khi nhận sự kiện tài khoản bị khóa (Suspended / Disabled), User_Service SHALL cập nhật trạng thái User thành `SUSPENDED` tương ứng.
 4. Khi nhận sự kiện email của người dùng thay đổi từ Keycloak, User_Service SHALL cập nhật email trong database local.
 5. Khi nhận sự kiện xóa tài khoản người dùng từ Keycloak, User_Service SHALL thực hiện xóa mềm (Soft Delete) hồ sơ nghiệp vụ tương ứng.
-6. THE User_Service SHALL tích hợp cơ chế **Lazy Synchronization** (Tự phục hồi đồng bộ khi đăng nhập): Khi người dùng đăng nhập lần đầu tiên thành công và có JWT Token hợp lệ, nếu trạng thái DB local vẫn là `PENDING`, User_Service SHALL tự động cập nhật trạng thái User thành `ACTIVE` để dự phòng sự cố mất Webhook.
-7. Endpoint Webhook nhận sự kiện từ Keycloak (`POST /api/v1/users/events`) SHALL được bảo mật bằng cơ chế **Signature Verification** (xác thực chữ ký HMAC-SHA256 với Shared Secret) để ngăn chặn các request giả mạo.
-
+6. THE User_Service SHALL tích hợp cơ chế **Lazy Synchronization** (Tự phục hồi đồng bộ khi đăng nhập): Khi người dùng đăng nhập lần đầu tiên thành công và có JWT Token hợp lệ, nếu trạng thái DB local vẫn là `PENDING`, User_Service SHALL tự động cập nhật trạng thái User thành `ACTIVE` để dự phòng sự cố mất event.
+7. Endpoint Webhook nhận sự kiện trực tiếp từ Keycloak (nếu dùng làm fallback, `POST /api/v1/users/events`) SHALL được bảo mật bằng cơ chế **Signature Verification** (xác thực chữ ký HMAC-SHA256 với Shared Secret) để ngăn chặn các request giả mạo.
 
 ### Requirement: Zero-Trust Access Control & Permission Manifest
 
@@ -73,3 +72,14 @@ Dịch vụ quản lý hồ sơ nghiệp vụ và trạng thái hoạt động t
 5. Đối với vai trò `system` hoặc `system_admin`, THE USER_Service SHALL chỉ cho phép tự động gán quyền wildcard `*` và bypass kiểm tra khi và chỉ khi `tenant_id` trích xuất trùng khớp với Master Tenant ID (`solavie-system-master`). Nếu vai trò `system`/`system_admin` xuất hiện dưới vai trò thuộc Organization thông thường, USER_Service SHALL chặn và trả về lỗi `403 Forbidden` để ngăn chặn Privilege Escalation.
 6. THE USER_Service SHALL chặn và từ chối mọi yêu cầu tạo mới hoặc gán các vai trò thuộc danh sách từ khóa bảo lưu (`system`, `system_admin`, `super_admin`, `root`) cho người dùng thuộc tenant thông thường.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE User Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE User Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:user` khi startup.
+3. THE User Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:user:node:{ip}:{port}` với TTL là 15 giây.
+4. THE User Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:user` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

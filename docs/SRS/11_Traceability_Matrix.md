@@ -84,8 +84,10 @@
 | **FR-CRM-009** | Lập lịch khảo sát và Ghi nhận dữ liệu thực địa | UC-33 | US-060 | BRD §2 | TC-CRM-009 | 🔴 Hoạt động |
 | **FR-CRM-010** | Tự động tính toán công suất và ROI Solar | UC-34 | US-061 | BRD §2 | TC-CRM-010 | 🔴 Hoạt động |
 | **FR-CRM-011** | Tự động biên soạn và xuất Solar Proposal PDF | UC-34 | US-062 | BRD §2 | TC-CRM-011 | 🔴 Hoạt động |
-| **FR-CRM-012** | Tiếp nhận báo lỗi và Điều phối Ticket O&M | UC-35 | US-063, US-064 | BRD §2 | TC-CRM-012 | 🟡 Đang dev |
-| **FR-CRM-013** | Tích hợp API HelioScope/OpenSolar | UC-34 | US-066 | BRD §2 | TC-CRM-013 | 🟢 Lên kế hoạch |
+| **FR-CRM-012** | Proposal PDF qua MCP | UC-33 | US-060 | BRD §2 | TC-PDF-001 | 🟡 Đang dev |
+| **FR-CRM-013** | O&M Ticket qua MCP | UC-33 | US-061 | BRD §2 | TC-OM-001 | 🟡 Đang dev |
+| **FR-CRM-020** | Tiếp nhận báo lỗi và Điều phối Ticket O&M | UC-35 | US-063, US-064 | BRD §2 | TC-CRM-012 | 🟡 Đang dev |
+| **FR-CRM-021** | Tích hợp API HelioScope/OpenSolar | UC-34 | US-066 | BRD §2 | TC-CRM-013 | 🟢 Lên kế hoạch |
 | **FR-CRM-014** | Gửi CSAT survey khi đóng O&M Ticket | UC-35 | US-067 | BRD §2 | TC-CRM-014 | 🟡 Đang dev |
 | **FR-CRM-015** | Lead Scoring Engine tự động | UC-36 | US-073 | BRD §8 | TC-CRM-015 | 🟡 Đang dev |
 | **FR-CRM-016** | Cảnh báo Hot Lead vượt ngưỡng | UC-36 | US-074 | BRD §8 | TC-CRM-016 | 🟡 Đang dev |
@@ -130,6 +132,16 @@
 | **FR-AI-002** | Roots Security Boundary cho MCP | UC-10 | US-018 | BRD §3 | TC-AI-002 | 🟡 Đang dev |
 | **FR-AI-003** | Duyệt hành động nhạy cảm có cấu hình | UC-08, UC-33 | US-014, US-060 | BRD §3 | TC-AI-003 | 🟡 Đang dev |
 | **FR-AI-004** | Prompt Caching tối ưu chi phí AI | UC-10 | US-069 | BRD §3 | TC-AI-004 | 🟡 Đang dev |
+| **FR-AI-005** | Định tuyến mô hình động | UC-10 | US-018 | BRD §3 | TC-AI-005 | 🟡 Đang dev |
+| **FR-AI-006** | Khóa API Tenant (BYOK) | UC-10 | US-018 | BRD §3 | TC-AI-006 | 🟡 Đang dev |
+| **FR-AI-007** | Báo cáo & giả lập chi phí | UC-10 | US-018 | BRD §3 | TC-AI-007 | 🟡 Đang dev |
+| **FR-AI-008** | Hot-reload Redis Pub/Sub | UC-10 | US-018 | BRD §3 | TC-AI-008 | 🟡 Đang dev |
+| **FR-AI-009** | Cảnh báo chi phí vượt hạn mức | UC-10 | US-069 | BRD §3 | TC-AI-009 | 🟡 Đang dev |
+| **FR-AI-010** | Bảng giá LLM mặc định hệ thống | UC-10 | US-018 | BRD §3 | TC-AI-010 | 🟡 Đang dev |
+| **FR-AI-011** | Phòng vệ model bị khai tử | UC-10 | US-018 | BRD §3 | TC-AI-011 | 🟡 Đang dev |
+| **FR-AI-012** | Tự động khởi tạo LLM config | UC-10 | US-018 | BRD §3 | TC-AI-012 | 🟡 Đang dev |
+| **FR-AI-014** | API /models động từ Registry | UC-10 | US-018 | BRD §3 | TC-AI-014 | 🟡 Đang dev |
+| **FR-AI-015** | Bộ nhớ đệm ngữ nghĩa (Semantic Cache) | UC-10 | US-018 | BRD §3 | TC-CACHE-001 | 🟡 Đang dev |
 | **FR-SEC-001** | Consent popup NĐ 13/2023 | UC-37 | US-076 | BRD §10 | TC-SEC-001 | 🟡 Đang dev |
 | **FR-SEC-002** | Right to Erasure (xóa dữ liệu KH) | UC-38 | US-077 | BRD §10 | TC-SEC-002 | 🟡 Đang dev |
 

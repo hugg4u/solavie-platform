@@ -70,7 +70,13 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 1. THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback.
 2. THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider.
 3. THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất.
-4. THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức.
+4. THE AI_Core SHALL kiểm tra và thực thi chính sách ngân sách LLM của Tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant (tính tổng từ `llm_usage_logs`) và đối chiếu với hạn mức chi phí (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`), và chính sách xử lý (`cost_limit_policy`) được đồng bộ trong Redis cache key `tenant:{tenant_id}:limits`.
+    - IF `cost_limit_usd` không tồn tại hoặc là `null`, THE AI_Core SHALL bỏ qua toàn bộ bước kiểm tra này.
+    - WHEN chi phí thực tế đạt hoặc vượt ngưỡng cảnh báo ($\text{cost\_limit\_usd} \times \frac{\text{cost\_alert\_threshold\_percent}}{100}$), THE AI_Core SHALL phát tín hiệu cảnh báo (Cost Alert Signal): ghi log error, gửi Prometheus metric và đẩy thông báo qua Notification Service.
+    - WHEN chi phí thực tế đạt hoặc vượt $100\%$ hạn mức `cost_limit_usd`, THE AI_Core SHALL thực thi chính sách:
+        - `notify_only`: Tiếp tục xử lý request LLM bình thường và chỉ ghi nhận cảnh báo.
+        - `auto_downgrade`: Tự động thay đổi mô hình LLM chính sang mô hình rẻ hơn trong `fallback_model` của Tenant, hoặc mô hình mặc định rẻ nhất hệ thống.
+        - `block`: Từ chối yêu cầu và trả về lỗi HTTP 429 (Resource Exhausted).
 5. THE AI_Core SHALL expose metrics cho Prometheus.
 
 ### Requirement 6: Prompt Management
@@ -98,12 +104,13 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 **User Story:** Là developer, tôi muốn đăng ký các Custom MCP Server nội bộ (solar_calc, crm, om_ticket) cho AI sử dụng một cách động và bảo mật.
 
 #### Acceptance Criteria
-1. THE AI_Core SHALL maintain a whitelisted registry của các Custom MCP Servers (`tenant_mcp_servers` table) theo từng tenant.
-2. THE AI_Core SHALL dynamically query and establish SSE (Server-Sent Events) connections tới các whitelisted MCP servers này thông qua `MCPClientManager` để lấy danh sách tools động.
+1. THE AI_Core SHALL maintain a whitelisted registry của các Custom MCP Servers (`tenant_mcp_servers` table) theo từng tenant. Các server được phép đăng ký mặc định gồm: `solar_calc`, `crm`, và `om_ticket`.
+2. THE AI_Core SHALL dynamically query and establish SSE (Server-Sent Events) connections tới các whitelisted MCP servers này thông qua `MCPClientManager` để lấy danh sách tools động. Khi thiết lập kết nối, `MCPClientManager` bắt buộc phải chuyển tiếp (inject) đầy đủ các headers bảo mật được phân giải từ client request bao gồm `X-Tenant-ID`, `X-User-ID`, `X-User-Permissions`, và `X-Permissions-Signature` vào `sse_client` session để bảo đảm tính cô lập dữ liệu đa thuê.
 3. THE AI_Core SHALL restrict tools per use case (permission matrix) và thực hiện phân quyền người dùng dựa trên Global Permission Spec (`{service}:{resource}:{action}`). Lớp Guard và Executor bắt buộc phải xác thực chữ ký HMAC-SHA256 trên HTTP Header `X-Permissions-Signature` bằng `GATEWAY_SIGNING_SECRET`, sau đó đối chiếu mã quyền hạn in-memory O(1) với độ trễ dưới 2ms trước khi chạy. AI Core SHALL expose API manifest `GET /api/v1/permissions/manifest` trả về danh sách tài nguyên và hành động mà service hỗ trợ.
 4. THE AI_Core SHALL automatically inject/overwrite the `tenant_id` parameter from authenticated JWT into every tool execution argument payload to guarantee strict tenant data isolation.
 5. THE AI_Core SHALL block all connections to external public/community MCP servers (like raw postgres, sqlite, or filesystem servers) to eliminate SSRF and prompt injection data exfiltration risks.
 6. THE AI_Core SHALL rate limit tool calls (per tool, per tenant) sử dụng cơ chế Redis Token Bucket, và log tất cả tool calls cho audit.
+7. THE AI_Core SHALL support tool `get_proposal_preview` via MCP which MUST return a PDF presigned URL (with TTL 15 minutes) and a structured ROI summary, instead of a plain text summary, to ensure the user receives the actual generated PDF proposal document.
 
 ### Requirement 9: Web Search Integration (MỚI)
 
@@ -132,6 +139,33 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 9. THE AI_Core SHALL tích hợp bộ đánh giá kiểm chứng nguồn tin (NLI Grounding Validator) ở đầu ra bằng mô hình suy luận tự nhiên (NLI) để so khớp câu trả lời với tài liệu RAG gốc. Nếu phát hiện mâu thuẫn (Contradiction) hoặc không có căn cứ (Neutral) với điểm số tin cậy (Grounding Score) < 0.80, hệ thống SHALL chặn phản hồi và tiến hành thử lại (tối đa 2 lần) trước khi tự động chuyển giao cuộc chat cho nhân viên.
 10. THE AI_Core SHALL tích hợp bộ kiểm duyệt nội dung đầu ra độc lập (Output Content Moderation) tại tầng ContentGuardrail để phát hiện và ngăn chặn các nội dung thô tục (Profanity), độc hại (Toxicity), và nguy cơ rò rỉ chỉ dẫn hệ thống (Prompt Leakage prevention) trước khi khôi phục dữ liệu PII. Nếu phát hiện vi phạm, hệ thống SHALL chặn phản hồi và trả về câu từ chối mặc định an toàn: "Xin lỗi, tôi không thể hiển thị nội dung này do vi phạm chính sách an toàn thông tin."
 
+### Requirement 11: Semantic Caching (MỚI)
+
+**User Story:** Là business owner, tôi muốn tối ưu chi phí LLM call và tăng tốc thời gian phản hồi chatbot cho các câu hỏi trùng lặp hoặc tương đương từ người dùng.
+
+#### Acceptance Criteria
+1. THE AI_Core SHALL tích hợp cơ chế bộ nhớ đệm ngữ nghĩa sử dụng Redis Stack Vector Search (KNN) tại Redis DB 0.
+2. THE AI_Core SHALL tự động khởi tạo index vector `idx:semantic_cache` trên Redis Stack nếu chưa tồn tại. Schema index bắt buộc bao gồm: `tenant_id` (TAG), `use_case` (TAG), `question` (TEXT), `response` (TEXT), và `vector` (VECTOR - thuật toán KNN Flat hoặc HNSW, khoảng cách Cosine, 384 dimensions).
+3. THE AI_Core SHALL sử dụng local FastEmbed model `multilingual-e5-small` để sinh vector embeddings 384 chiều cho câu hỏi của người dùng tại máy chủ cục bộ (< 20ms).
+4. THE AI_Core SHALL thực hiện truy vấn so khớp độ tương đồng ngữ nghĩa trên Redis Stack bằng lệnh `FT.SEARCH` sử dụng tham số vector và lọc chính xác theo `tenant_id` và `use_case = chatbot`.
+5. IF độ tương đồng ngữ nghĩa (1 - Cosine Distance) >= 0.92, THEN hệ thống SHALL ghi nhận là **Cache Hit**, lập tức trả về câu trả lời lưu trong cache với độ trễ < 10ms, bỏ qua hoàn toàn việc gọi LangGraph Agent và các API LLM bên ngoài, đồng thời tăng Prometheus metric `ai_core_semantic_cache_hits_total`.
+6. IF độ tương đồng ngữ nghĩa < 0.92, THEN hệ thống SHALL ghi nhận là **Cache Miss**, thực hiện luồng ReAct Agent bình thường, đồng thời tăng Prometheus metric `ai_core_semantic_cache_misses_total`.
+7. ON Cache Miss, sau khi Agent sinh câu trả lời thành công, hệ thống SHALL kích hoạt một background task (chạy bất đồng bộ qua FastAPI BackgroundTasks) để lưu câu hỏi, câu trả lời, và vector embeddings mới vào Redis cache với khóa `{tenant_id}:semantic_cache:{hash_cau_hoi}` và TTL mặc định là 86,400 giây (24 giờ).
+8. THE AI_Core SHALL cô lập dữ liệu cache tuyệt đối giữa các tenants thông qua metadata filter `tenant_id` trong truy vấn `FT.SEARCH`, ngăn chặn hoàn toàn rò rỉ dữ liệu chéo tenant.
+
+### Requirement 12: Redis Resiliency & Multi-tier Cache (MỚI)
+
+**User Story:** Là hệ thống, tôi muốn việc đọc/ghi cấu hình luôn hoạt động ổn định và có thời gian phản hồi gần như 0ms ngay cả khi máy chủ Redis gặp sự cố kết nối, quá tải hoặc downtime.
+
+#### Acceptance Criteria
+1. THE AI_Core SHALL tích hợp bộ nhớ cache cục bộ trong tiến trình (Local Memory Cache) hoạt động như tầng đệm thứ nhất cho các thông tin: LLM Routing (TTL 30s), API Credentials (TTL 30s), Tenant Limits (TTL 10s), và Accumulated Cost (TTL 10s).
+2. THE AI_Core SHALL kiểm tra Local Cache trước tiên cho mọi request đọc cấu hình. Nếu cache hit và chưa hết hạn, hệ thống trả về cấu hình ngay lập tức (O(1) in-memory, latency ~0ms), loại bỏ hoàn toàn các network roundtrip tới Redis.
+3. THE AI_Core SHALL bọc toàn bộ các tương tác (đọc/ghi) với Redis trong block xử lý lỗi `try-except` an toàn. Khi xảy ra lỗi kết nối Redis (`ConnectionError`, `TimeoutError`), hệ thống PHẢI ghi log warning và kích hoạt chế độ **Fail-Open**:
+   - Đối với định tuyến và thông tin API keys: Tự động truy vấn trực tiếp từ database PostgreSQL cục bộ (đã được đồng bộ trước đó).
+   - Đối với giới hạn chi phí (Cost Limits) của Tenant: Cho phép request đi qua bình thường (fail-open) hoặc sử dụng dữ liệu cũ đã hết hạn từ Local Cache (Grace Period) thay vì trả về lỗi HTTP 500 làm sập API.
+4. THE AI_Core SHALL thực hiện cơ chế tự phục hồi (Self-Healing) khi gặp tình huống Cache Miss limits trong Redis (limits_raw is None) bằng cách kích hoạt một background task bất đồng bộ (`asyncio.create_task`) gọi API của Tenant Config Service để nạp lại cache. Request hiện tại PHẢI đi qua ngay lập tức dưới dạng fail-safe mà không bị block chờ sync.
+5. THE AI_Core SHALL ngăn chặn việc tạo background sync trùng lặp cho cùng một Tenant bằng cách kiểm soát trạng thái tác vụ qua biến in-memory `_active_sync_tasks`.
+
 ## Security & Access Control
 - **Authentication & Authorization:** APIs của AI Core Service **PHẢI** được bảo vệ ở tầng Gateway (Kong) thông qua xác thực OIDC JWT.
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `ai-core`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến AI Core Service.
@@ -140,10 +174,6 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 ---
 
 ## Future Roadmap (Phase 2)
-
-### Requirement 11: Semantic Caching
-- **AC 11.1:** Dịch vụ SHALL tích hợp Redis Vector Search để lưu trữ các câu trả lời của LLM.
-- **AC 11.2:** Khi có câu hỏi mới có độ tương đồng ngữ nghĩa > 90% (Cosine Similarity) với câu hỏi cũ đã lưu, hệ thống SHALL trả về ngay lập tức từ cache, bỏ qua cuộc gọi LLM và KB Search để tối ưu chi phí và tăng tốc phản hồi (< 10ms).
 
 ### Requirement 12: Structured Outputs Enforcement
 - **AC 12.1:** Dịch vụ SHALL sử dụng JSON Schema (qua tính năng `response_format` của LLM APIs) để bắt buộc Agent phản hồi theo đúng cấu hình định dạng, giúp chatbot và CRM parse kết quả an toàn.
@@ -171,3 +201,14 @@ Dịch vụ AI trung tâm — ReAct Agent Platform với MCP tool-calling. Bao g
 
 
 
+
+
+---
+
+## Service Discovery (Self-Registration) & Health Endpoint (Tối ưu hóa)
+1. THE Service SHALL tự phát hiện IP card mạng nội bộ khi khởi chạy theo độ ưu tiên: Biến môi trường `CONTAINER_IP` > Quét các interface card mạng vật lý của OS > Fallback kết nối UDP fake đến `8.8.8.8`.
+2. THE Service SHALL tự động đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:ai-core` khi startup.
+3. THE Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:ai-core:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Service SHALL tự động xóa IP của mình trên Redis Set và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).
+5. THE Service SHALL cung cấp API endpoint `/health` (hoặc `/healthz`) trả về HTTP 200 OK để phục vụ Active Healthcheck của API Gateway.
+6. THE Service SHALL tích hợp cơ chế Fail-Safe: Registry client không crash ứng dụng nếu Redis tạm thời mất kết nối khi khởi chạy.

@@ -154,6 +154,25 @@ Nhằm mục đích triệt tiêu lỗi `502 Bad Gateway` khi triển khai (depl
 - **Upstream Retries (Thử lại ở tầng Gateway):** Khi xảy ra lỗi TCP Handshake hoặc node đích ngắt kết nối đột ngột (trước khi heartbeat 15 giây kịp hết hạn trên Redis), Kong được cấu hình `retries = 3`. Kong sẽ tự động chuyển tiếp request thất bại sang một target healthy khác trong danh sách Upstream mà khách hàng không hề nhận ra lỗi.
 - **Zero-Downtime Rolling Release:** Khi deploy release mới, các container cũ sẽ nhận tín hiệu SIGTERM và thực hiện dọn dẹp (Graceful Shutdown) bằng cách gỡ IP khỏi Redis Registry và chuyển `/health` sang trạng thái lỗi. Trong khi đó, các node mới khởi chạy thành công sẽ đăng ký IP và bắt đầu vượt qua kiểm tra sức khỏe của Kong trước khi nhận traffic. Điều này đảm bảo tính sẵn sàng 100% của hệ thống.
 
+### 10.6.7. Cơ chế Chống chịu lỗi Redis và Fallback đa tầng (Redis Resiliency & Multi-tier Fallback)
+
+Nhằm mục đích triệt tiêu các lỗi sập hệ thống (HTTP 500) khi dịch vụ phân tán Redis gặp sự cố kết nối, quá tải hoặc downtime, dịch vụ AI Core áp dụng cơ chế tự phục hồi và fallback cấu hình đa tầng:
+
+- **Bộ nhớ đệm trong tiến trình (Local In-Memory Cache - Tầng 1):**
+  - Mọi cấu hình Routing, API Keys, và Cost Limits của Tenant được đệm trực tiếp trong RAM của process dịch vụ với thời hạn tồn tại (TTL) ngắn (10s cho limits/costs, 30s cho routing/keys).
+  - Triệt tiêu 95% số cuộc gọi mạng (network roundtrip) tới Redis, giảm thời gian phản hồi (latency) xuống xấp xỉ 0ms đối với các tác vụ đọc cấu hình lặp lại của cùng một Tenant.
+  - Khi Redis downtime, Local Cache hoạt động như bộ đệm thay thế tạm thời (Grace Period), cho phép sử dụng dữ liệu cũ đã hết hạn thay vì từ chối request.
+
+- **Bọc bảo vệ chống lỗi kết nối (Try-Catch Fail-Safe - Tầng 2):**
+  - Toàn bộ các tương tác đọc/ghi Redis được bọc trong block xử lý lỗi `try-except` an toàn. 
+  - Nếu xảy ra lỗi `ConnectionError` hoặc `TimeoutError` từ Redis, hệ thống ghi log cảnh báo mức warning và tự động kích hoạt chế độ **Fail-Open**:
+    - Đối với định tuyến và API keys: tự động truy vấn trực tiếp từ database PostgreSQL cục bộ (đã đồng bộ trước đó).
+    - Đối với giới hạn chi phí (Cost Limits): Tạm thời bỏ qua kiểm tra (fail-open) để request của người dùng hoàn thành bình thường.
+
+- **Tự động nạp cache bất đồng bộ (Non-blocking Self-Healing - Tầng 3):**
+  - Khi Redis hoạt động bình thường nhưng bị thiếu cấu hình limits (Cache Miss): request hiện tại vẫn đi qua bình thường (fail-safe).
+  - Hệ thống tự động tạo một background task bất đồng bộ (`asyncio.create_task`) gọi API của `Tenant Config Service` để kéo lại cấu hình và nạp lại vào Redis + Database, đảm bảo tính nhất quán dữ liệu mà không làm tăng độ trễ mạng của khách hàng hiện tại.
+
 ---
 
 ## 10.7. Chính sách lưu trữ và dọn dẹp dữ liệu (Data Retention & Archiving Policy)

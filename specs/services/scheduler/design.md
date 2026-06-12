@@ -113,35 +113,58 @@ CREATE INDEX idx_schedules_tenant ON schedules(tenant_id, scheduled_at DESC);
 CREATE INDEX idx_auto_tenant ON automation_flows(tenant_id, enabled);
 ```
 
-## Kafka Events
-
-### Consumed: `content.approved`
-→ Auto-create schedule if content has suggested_time
-
-### Published: `scheduler.post.due`
-```json
-{
-  "event_id": "uuid",
-  "tenant_id": "uuid",
-  "schedule_id": "uuid",
-  "post_id": "uuid",
-  "channel_ids": ["uuid"],
-  "action": "publish"
-}
-```
-
-### Published: `scheduler.post.failed`
-```json
-{
-  "event_id": "uuid",
-  "tenant_id": "uuid",
-  "schedule_id": "uuid",
-  "error": "string",
-  "retry_count": 3
-}
-```
-
-## Quartz Job Config
+## Kafka Events (Luồng 4 - MỚI)
+ 
+ ### Consumed Topics
+ 
+ #### 1. Topic: `content.approved`
+ - **Mô tả:** Nhận sự kiện bài viết được phê duyệt từ Content Service để tự động lên lịch nếu có thời gian gợi ý (`suggested_time`).
+ 
+ #### 2. Topic: `content.published`
+ - **Mô tả:** Nhận sự kiện đăng bài thành công từ Content/Publisher Service để cập nhật trạng thái schedule thành `published` trong DB.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "published_at": "ISO-8601 timestamp",
+   "channel_id": "uuid"
+ }
+ ```
+ 
+ #### 3. Topic: `scheduler.post.failed`
+ - **Mô tả:** Nhận sự kiện đăng bài thất bại từ Content/Publisher Service để thực hiện cơ chế retry hoặc thông báo lỗi cho người dùng.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "error": "Error details string",
+   "retry_count": 1
+ }
+ ```
+ 
+ ### Published Topics
+ 
+ #### 1. Topic: `scheduler.post.due`
+ - **Mô tả:** Phát sự kiện yêu cầu đăng bài khi Quartz Scheduler trigger bài viết đến giờ hẹn xuất bản.
+ - **Payload:**
+ ```json
+ {
+   "event_id": "uuid",
+   "tenant_id": "uuid",
+   "schedule_id": "uuid",
+   "post_id": "uuid",
+   "channel_ids": ["uuid"],
+   "action": "publish"
+ }
+ ```
+ 
+ ## Quartz Job Config
 ```java
 // Publish job runs every 30 seconds, checks for due schedules
 @Scheduled(fixedRate = 30000)
@@ -247,3 +270,37 @@ Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request t
 - Dịch vụ được triển khai stateless phía sau Kong API Gateway.
 - Gateway chịu trách nhiệm validate JWT token từ Keycloak, xác thực client scope `scheduler`, và inject header `X-Tenant-ID` vào request.
 - Dịch vụ tin tưởng hoàn toàn vào các header được Gateway inject để thực hiện logic nghiệp vụ và cô lập dữ liệu.
+
+---
+
+## Service Discovery Integration Design
+
+Dịch vụ Scheduler tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính để hỗ trợ phát hiện dịch vụ động:
+
+### 1. Kiến trúc Client
+* **Cơ chế:**
+  * **Startup Event:** Khi tiến trình của dịch vụ khởi động, client thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:scheduler`.
+  * **Heartbeat Thread/Task:** Chạy định kỳ mỗi 5 giây để thực hiện:
+    * Ghi đè khóa sự sống: `SETEX registry:service:scheduler:node:{ip}:{port} 15 "alive"`.
+    * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:scheduler {ip}:{port}`.
+  * **Shutdown Event:** Khi nhận tín hiệu tắt tiến trình (`SIGTERM`/`SIGINT`), client thực hiện dọn dẹp:
+    * Xóa IP khỏi Set: `SREM registry:service:scheduler {ip}:{port}`.
+    * Xóa khóa sống: `DEL registry:service:scheduler:node:{ip}:{port}`.
+
+### 2. Tích hợp theo Tech Stack
+* **NestJS (Node.js):** Sử dụng các lifecycle hooks `OnModuleInit` và `OnApplicationShutdown` kết hợp thư viện `ioredis` và `setInterval` cho heartbeat.
+* **FastAPI (Python):** Sử dụng lifespan event handlers của FastAPI kết hợp `asyncio.create_task` và `redis-py`.
+* **Spring Boot (Java):** Sử dụng annotation `@PostConstruct` và `@PreDestroy` kết hợp `ScheduledExecutorService` và `Jedis`/`Lettuce`.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

@@ -78,6 +78,14 @@ gateway_security_rbac_cache_hit_total: Counter [tenant_id, cache_layer] // cache
 gateway_security_rbac_fetch_failures_total: Counter [tenant_id, source] // source: redis, fallback_tcs
 
 
+## Correlation with Kafka Event Logs (Luồng 2 - MỚI)
+Khi Gateway từ chối request do token nằm trong JTI Blacklist hoặc tài khoản bị đình chỉ (Suspended), log sự kiện của Gateway phải chứa đầy đủ thông tin định danh:
+- `jti`: ID duy nhất của JWT token bị thu hồi.
+- `user_id`: ID của người dùng.
+- `reason`: "token_blacklisted" hoặc "user_suspended".
+
+Thông tin này được dùng để đối chiếu với timestamp sự kiện phát ra trên Kafka topic `token.revoked` và `auth.events.user` nhằm đo lường độ trễ đồng bộ cuối-cuối (End-to-End Revocation Latency).
+
 ## Giai đoạn 4 — Logging & Metrics cho Cache & Circuit Breaker (MỚI)
 
 ### 1. Log sự kiện thay đổi trạng thái Circuit Breaker
@@ -109,25 +117,39 @@ gateway_circuit_breaker_state: Gauge [service] // value: 0 (CLOSED), 1 (OPEN), 2
 gateway_circuit_breaker_trips_total: Counter [service]
 ```
 
-### 3. Log sự kiện cập nhật Upstream Targets (Sync Daemon)
-Khi Registry Sync Daemon thực hiện thêm hoặc bớt các Target IP của Upstream trên Kong, nó phải ghi nhận log có cấu trúc để phục vụ giám sát:
+
+
+---
+
+## Gateway Sync Daemon Logs
+
+Khi Registry Sync Daemon thực hiện đồng bộ các target của bất kỳ upstream nào, nó phải ghi nhận log có cấu trúc JSON chứa trường `upstream`:
 
 ```json
 {
-  "timestamp": "2026-06-09T17:45:00.123Z",
+  "timestamp": "2026-06-10T00:00:00.000Z",
   "level": "info",
   "service": "kong-registry-sync",
   "message": "Upstream target updated",
-  "upstream": "ai-core-upstream",
-  "action": "add_target", // add_target, remove_target, sync_complete
-  "target": "172.20.0.10:8000",
+  "upstream": "user-service-upstream",
+  "action": "add_target",
+  "target": "172.20.0.15:3008",
   "status": "success",
   "context": {
-    "redis_nodes_count": 2,
-    "kong_targets_count": 2
+    "redis_nodes_count": 1,
+    "kong_targets_count": 1
   }
 }
 ```
 
-```
 
+---
+
+## Service Discovery Audit Logs (Structured JSON)
+Mọi hoạt động đăng ký, heartbeat và hủy đăng ký phải xuất ra log JSON cấu trúc chuẩn:
+*   **Log Register Success:**
+    `{"timestamp": "ISO-8601", "level": "info", "service": "gateway", "message": "Service node registration completed", "action": "register", "node_ip": "{ip}", "node_port": {port}, "status": "success"}`
+*   **Log Deregister Success:**
+    `{"timestamp": "ISO-8601", "level": "info", "service": "gateway", "message": "Service node deregistration completed", "action": "deregister", "node_ip": "{ip}", "node_port": {port}, "status": "success"}`
+*   **Log Heartbeat Failure:**
+    `{"timestamp": "ISO-8601", "level": "warn", "service": "gateway", "message": "Heartbeat failure: {error}", "action": "heartbeat_failure", "node_ip": "{ip}", "node_port": {port}, "status": "failure"}`

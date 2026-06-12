@@ -59,3 +59,14 @@ Dịch vụ quản lý bình luận trên bài đăng — auto-classify (spam/ne
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `comment-manager`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Comment Manager Service.
 - **Tenant Isolation:** Dữ liệu Comment Manager và các phiên kết nối MCP **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Comment Manager Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Comment Manager Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:comment-manager` khi startup.
+3. THE Comment Manager Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:comment-manager:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Comment Manager Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:comment-manager` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

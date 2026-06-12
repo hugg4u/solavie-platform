@@ -41,6 +41,27 @@ Dịch vụ Tenant Config Service sử dụng logger chuẩn của NestJS (tích
 *   Mọi giá trị nhạy cảm trước khi ghi log hoặc ghi vào bảng `config_audit_logs` bắt buộc phải được che giấu bằng chuỗi định dạng `[REDACTED]`.
 *   **KHÔNG** ghi log giá trị biến môi trường `GATEWAY_SIGNING_SECRET`.
 
+### 1.4. Nhật ký phát sự kiện Kafka (Kafka Event Publish Logs - Luồng 3 MỚI)
+Khi Tenant Config Service phát sự kiện thay đổi cấu hình bảo mật hoặc vai trò lên Kafka topic `config.updates` (Luồng 3), log ghi nhận phải có cấu trúc JSON:
+```json
+{
+  "timestamp": "2026-06-08T11:45:00.123Z",
+  "level": "info",
+  "service": "tenant-config-service",
+  "trace_id": "xyz789abc012",
+  "message": "Security config update published to Kafka",
+  "context": {
+    "topic": "config.updates",
+    "partition": 1,
+    "offset": 105,
+    "tenant_id": "tenant-uuid-1234",
+    "category": "security_comments_notif",
+    "updated_fields": ["auth_password_min_length"],
+    "latency_ms": 12
+  }
+}
+```
+
 ---
 
 ## 2. Phân Vết Hệ Thống (OpenTelemetry Tracing)
@@ -74,6 +95,8 @@ Dịch vụ phơi bày các chỉ số đo lường hiệu năng tại endpoint 
     *   *Labels:* `tenant_id`
 *   **`tenant_config_security_permission_denied_total`** (Counter): Số lần từ chối truy cập do thiếu quyền.
     *   *Labels:* `tenant_id`, `required_permission`
+*   **`tenant_config_kafka_operations_total`** (Counter): Thống kê số lần đẩy sự kiện lên Kafka topic `config.updates`.
+    *   *Labels:* `operation` (`publish`), `status` (`success`, `error`)
 
 ---
 
@@ -94,3 +117,43 @@ Dịch vụ phơi bày các chỉ số đo lường hiệu năng tại endpoint 
 | **`PostgreSQLConnectionDown`** | Kết nối tới database `config_db` bị gián đoạn liên tục quá 30s. | Critical | Kiểm tra log PostgreSQL, kết nối mạng trong cụm Docker/Kubernetes và connection pool. |
 | **`DownstreamPermissionDenials`** | `sum(rate(tenant_config_security_permission_denied_total[5m])) > 10` | Warning | Cảnh báo người dùng thực hiện truy cập trái phép hoặc cấu hình quyền trên Keycloak/Redis bị sai lệch. |
 | **`DefaultConfigProvisionFail`** | Lắng nghe event tạo tenant mới nhưng lưu default config vào DB gặp lỗi > 3 lần. | Critical | Kiểm tra tính nhất quán dữ liệu của bảng `tenant_configs` và các Kafka topics. |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "tenant-config",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3006,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:tenant-config"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "tenant-config",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3006,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:tenant-config"
+  }
+}
+```

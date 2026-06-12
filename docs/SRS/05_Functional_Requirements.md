@@ -547,7 +547,21 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-34, US-062
 
-### FR-CRM-012: Tiếp nhận báo lỗi và Điều phối Ticket O&M
+### FR-CRM-012: Xuất Proposal PDF thông qua công cụ MCP (Proposal PDF via MCP)
+- **Mô tả:** Hệ thống **PHẢI** cho phép AI Agent truy vấn Proposal PDF thông qua MCP tool `get_proposal_preview`. Kết quả trả về từ CRM Service **PHẢI** là một đối tượng JSON chứa đường dẫn tải xuống bảo mật (Presigned URL) có thời hạn hiệu lực (TTL) là 15 phút được tạo bởi DMS Service cùng tóm tắt ROI tương ứng, thay vì chỉ trả về một bản tóm tắt bằng văn bản thuần túy.
+- **Đầu vào:** `proposal_id` và `tenant_id` lấy từ context xác thực của User.
+- **Đầu ra:** Đối tượng JSON chứa `{ pdf_url, roi_summary: { capacity_kwp, monthly_kwh, savings_ratio, payback_years } }`.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-33, US-060
+
+### FR-CRM-013: Tạo và Truy vấn O&M Ticket thông qua MCP (O&M Ticket via MCP)
+- **Mô tả:** Hệ thống **PHẢI** hỗ trợ tạo và cập nhật O&M tickets tự động thông qua các công cụ MCP (`create_om_ticket` và `get_ticket_status`). Khi một Ticket được tạo qua MCP tool, CRM Service **PHẢI** lưu trữ vào `crm_db` và đồng thời publish sự kiện `crm.ticket.created` lên Kafka để Notification Service tự động gán và gửi thông báo cho Kỹ thuật viên bảo trì.
+- **Đầu vào:** `contact_id`, `title`, `description`, `priority` từ lời gọi tool của Agent.
+- **Đầu ra:** Bản ghi Ticket mới trong `crm_db`, sự kiện Kafka được đẩy đi, và Kỹ thuật viên được gán tự động.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-33, US-061
+
+### FR-CRM-020: Tiếp nhận báo lỗi và Điều phối Ticket O&M
 - **Mô tả:** Hệ thống **PHẢI** hỗ trợ tạo vé hỗ trợ vận hành bảo trì (O&M Ticket) khi khách hàng báo lỗi qua chat hoặc hotline, cho phép thiết lập độ ưu tiên (Low, Medium, High, Critical) và phân công Kỹ thuật viên bảo dưỡng xử lý hiện trường.
 - **Đầu vào:** ID khách hàng, mô tả lỗi, độ ưu tiên, ID Kỹ thuật viên bảo trì.
 - **Đầu ra:** Bản ghi Ticket mới lưu trong bảng `crm_tickets`, gửi thông báo khẩn qua Notification Service tới Kỹ thuật viên được gán, và lưu log audit hành trình.
@@ -880,7 +894,7 @@
 
 ## 5.19. Bổ sung Phân hệ CRM — Lead Scoring & CSAT
 
-### FR-CRM-013: Tích hợp API bản đồ bức xạ mặt trời (HelioScope/OpenSolar)
+### FR-CRM-021: Tích hợp API bản đồ bức xạ mặt trời (HelioScope/OpenSolar)
 - **Mô tả:** Hệ thống **NÊN** hỗ trợ kết nối với các dịch vụ bên thứ ba (HelioScope hoặc OpenSolar) thông qua API để lấy sơ đồ thiết kế 3D bố trí tấm pin trên mái nhà và sản lượng bức xạ chính xác dựa trên tọa độ GPS của công trình.
 - **Đầu vào:** Tọa độ GPS (latitude, longitude) của công trình, diện tích mái khả dụng.
 - **Đầu ra:** Sơ đồ bố trí 3D (ảnh) và dữ liệu bức xạ (kWh/m²/năm) lưu vào `crm_surveys`.
@@ -1004,11 +1018,16 @@
 - **Đầu ra:** Cấu hình mới được áp dụng tại AI Core và cache Redis cũ bị xóa bỏ (< 5 giây).
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
-
-### FR-AI-009: Cảnh báo chi phí vượt hạn mức (Cost Alert)
-- **Mô tả:** AI Core Service **PHẢI** liên tục theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs`. Hệ thống **PHẢI** đối chiếu chi phí này với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của Tenant). Khi chi phí sử dụng thực tế đạt **80%** hạn mức, AI Core Service **PHẢI** tự động kích hoạt cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời thông báo qua hệ thống Notification hoặc tự động hạ cấp xuống mô hình AI rẻ tiền hơn để kiểm soát ngân sách.
-- **Đầu vào:** Bản ghi log chi phí `llm_usage_logs` của 30 ngày qua, cấu hình limits của Tenant.
-- **Đầu ra:** Metric cảnh báo phát đi, thông báo cảnh báo và kích hoạt chiến lược hạ cấp mô hình.
+### FR-AI-009: Cảnh báo chi phí và Thực thi chính sách ngân sách (Cost Alert & Policy Enforcement)
+- **Mô tả:** AI Core Service **PHẢI** liên tục theo dõi chi phí tích lũy trong 30 ngày qua của từng Tenant bằng cách tính tổng từ bảng `llm_usage_logs`. Hệ thống **PHẢI** đối chiếu chi phí này với hạn mức chi phí (`cost_limit_usd`), ngưỡng phần trăm cảnh báo (`cost_alert_threshold_percent`) và chính sách kiểm soát chi phí (`cost_limit_policy`) được Tenant Admin chủ động cấu hình trong `ai_kb_config` (lưu ở Redis cache `tenant:{tenant_id}:limits`).
+    - Khi chi phí sử dụng thực tế đạt hoặc vượt ngưỡng cảnh báo ($\text{cost\_limit\_usd} \times \frac{\text{cost\_alert\_threshold\_percent}}{100}$), AI Core Service **PHẢI** tự động kích hoạt cảnh báo (Cost Alert Signal): ghi nhận log lỗi cảnh báo hệ thống, phát đi metric cảnh báo lên Prometheus, đồng thời gửi thông báo cảnh báo qua hệ thống Notification.
+    - Khi chi phí sử dụng thực tế vượt quá $100\%$ hạn mức `cost_limit_usd`, AI Core Service **PHẢI** thực thi chính sách đã được cấu hình trong `cost_limit_policy`:
+        *   `notify_only`: Tiếp tục xử lý request bình thường và chỉ ghi log/cảnh báo hệ thống.
+        *   `auto_downgrade`: Tự động chuyển hướng toàn bộ yêu cầu LLM sang mô hình rẻ tiền hơn được định nghĩa trong `fallback_model` của cấu hình Tenant, hoặc mô hình mặc định giá rẻ hệ thống (ví dụ: `gpt-4o-mini`).
+        *   `block`: Từ chối toàn bộ các yêu cầu gọi LLM mới, trả về lỗi HTTP 429 (Resource Exhausted) để bảo vệ ngân sách của Tenant.
+    - Nếu Tenant không cấu hình hạn mức này (`cost_limit_usd` là `null`), hệ thống **PHẢI** bỏ qua bước kiểm tra và không áp đặt bất kỳ giới hạn hay cảnh báo chi phí mặc định nào.
+- **Đầu vào:** Bản ghi log chi phí `llm_usage_logs` của 30 ngày qua, cấu hình limits của Tenant (`cost_limit_usd`, `cost_alert_threshold_percent`, `cost_limit_policy`) từ Redis cache.
+- **Đầu ra:** Phát metric cảnh báo lên Prometheus, gửi thông báo qua Notification Service, và thực thi chặn (trả về HTTP 429) hoặc hạ cấp mô hình tùy theo cấu hình chính sách khi chạm/vượt hạn mức.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-069
 
@@ -1033,12 +1052,19 @@
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10, US-018
 
-### FR-AI-013: API `/models` danh mục mô hình động từ Registry
+### FR-AI-014: API `/models` danh mục mô hình động từ Registry
 - **Mô tả:** API endpoint `/api/v1/completions/models` **PHẢI** trả về danh sách mô hình hoàn toàn động bằng cách truy vấn trực tiếp từ LiteLLM registry (`model_cost`) của 12 nhà cung cấp được hỗ trợ trong hệ thống đối với tất cả mô hình dạng Chat (`mode == "chat"`). Hệ thống **PHẢI** tự động thêm các mô hình local (như `qwen2.5-coder`, `llama3`) vào kết quả trả về, thay vì trả về danh sách tĩnh fix cứng.
 - **Đầu vào:** Yêu cầu GET `/api/v1/completions/models`, LiteLLM registry.
 - **Đầu ra:** JSON payload chứa danh sách hơn 339 mô hình động kèm provider của chúng.
 - **Mức độ ưu tiên:** 🔴 Must Have
 - **Truy vết:** UC-10
+
+### FR-AI-015: Bộ nhớ đệm ngữ nghĩa cho Chatbot (Semantic Caching)
+- **Mô tả:** AI Core Service **PHẢI** hỗ trợ cơ chế bộ nhớ đệm ngữ nghĩa sử dụng Redis Stack Vector Search (KNN) để tối ưu hóa chi phí LLM call và tăng tốc thời gian phản hồi chatbot. Hệ thống **PHẢI** sử dụng model local FastEmbed `multilingual-e5-small` để sinh vector embeddings 384 chiều cho câu hỏi của người dùng và thực hiện tìm kiếm KNN trên index `idx:semantic_cache` với bộ lọc `tenant_id` và `use_case = chatbot`. Nếu Cosine Similarity (1 - Cosine Distance) >= 0.92, hệ thống **PHẢI** ghi nhận là **Cache Hit** và trả về câu trả lời lưu trong cache ngay lập tức (< 10ms), bỏ qua hoàn toàn việc gọi LLM. Ngược lại (**Cache Miss**), hệ thống chạy Agent bình thường và lên lịch ghi cache bất đồng bộ với TTL 24 giờ.
+- **Đầu vào:** Tenant ID, use_case, tin nhắn thô của khách hàng.
+- **Đầu ra:** Câu trả lời tương ứng (từ Cache hoặc LLM) và trạng thái cache hit/miss được phản ánh qua metrics.
+- **Mức độ ưu tiên:** 🔴 Must Have
+- **Truy vết:** UC-10, US-018
 
 ---
 

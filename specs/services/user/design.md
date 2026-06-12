@@ -162,13 +162,13 @@ sequenceDiagram
     participant Admin as Tenant Admin (Dashboard)
     participant US as User Service (Backend)
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (token.revoked)
+    participant Kafka as Kafka (token.revoked)
 
     Admin->>US: POST /api/v1/users/{id}/suspend (hoặc /unsuspend)
     US->>KC: 1. Đặt trạng thái: PUT /admin/realms/solavie/users/{id} {"enabled": false}
     US->>KC: 2. Hủy Sessions: POST /admin/realms/solavie/users/{id}/logout
     KC-->>US: Pt xác nhận thành công
-    US->>Redis: 3. PUBLISH token.revoked {"jti": "...", "exp": ...}
+    US->>Kafka: 3. Publish event to token.revoked {"jti": "...", "exp": ...}
     US->>US: 4. Cập nhật status='SUSPENDED' ở database Backend
     US-->>Admin: Trả về trạng thái đã cập nhật thành công
 ```
@@ -177,12 +177,14 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (auth.user.events)
+    participant Worker as Auth Sync Worker
+    participant Kafka as Kafka (auth.events.user)
     participant US as User Service (Backend)
 
     KC->>KC: Trigger event: user.disabled (hoặc user.enabled)
-    KC->>Redis: PUBLISH auth.user.events {"event": "user.disabled", "user_id": "uuid"}
-    Redis-->>US: Nhận event
+    KC->>Worker: Webhook Event "user.disabled"
+    Worker->>Kafka: Publish event to auth.events.user topic
+    Kafka-->>US: Consume event
     US->>US: Cập nhật status='SUSPENDED' (hoặc 'ACTIVE') ở database Backend
 ```
 
@@ -301,3 +303,37 @@ Do NestJS chạy trên kiến trúc đơn luồng (Event Loop) với các reques
      },
    });
    ```
+
+---
+
+## Service Discovery Integration Design
+
+Dịch vụ User tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính để hỗ trợ phát hiện dịch vụ động:
+
+### 1. Kiến trúc Client
+* **Cơ chế:**
+  * **Startup Event:** Khi tiến trình của dịch vụ khởi động, client thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:user`.
+  * **Heartbeat Thread/Task:** Chạy định kỳ mỗi 5 giây để thực hiện:
+    * Ghi đè khóa sự sống: `SETEX registry:service:user:node:{ip}:{port} 15 "alive"`.
+    * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:user {ip}:{port}`.
+  * **Shutdown Event:** Khi nhận tín hiệu tắt tiến trình (`SIGTERM`/`SIGINT`), client thực hiện dọn dẹp:
+    * Xóa IP khỏi Set: `SREM registry:service:user {ip}:{port}`.
+    * Xóa khóa sống: `DEL registry:service:user:node:{ip}:{port}`.
+
+### 2. Tích hợp theo Tech Stack
+* **NestJS (Node.js):** Sử dụng các lifecycle hooks `OnModuleInit` và `OnApplicationShutdown` kết hợp thư viện `ioredis` và `setInterval` cho heartbeat.
+* **FastAPI (Python):** Sử dụng lifespan event handlers của FastAPI kết hợp `asyncio.create_task` và `redis-py`.
+* **Spring Boot (Java):** Sử dụng annotation `@PostConstruct` và `@PreDestroy` kết hợp `ScheduledExecutorService` và `Jedis`/`Lettuce`.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

@@ -107,6 +107,8 @@ graph TB
 | 16| **DMS**           | Node.js | NestJS | 3007 | dms_db | Quản lý tệp tin, thư mục ảo, kiểm soát phiên bản và quota lưu trữ của tenant. |
 | 17| **Link Shortener** | Node.js | Fastify | 3009 | shortener_db | Rút gọn URL, theo dõi và ghi nhận lượt click của khách hàng phục vụ A/B Testing. |
 | 18| **Media Processor**| Python  | FastAPI | 8008 | - | Chạy Celery worker nén ảnh, tạo thumbnail và transcode video chuẩn API mạng xã hội. |
+| 19| **redis-stack**   | -      | Redis Stack | 6399 | - | **Redis Stack Server (Vector Database):** Lưu trữ bộ nhớ đệm ngữ nghĩa (Semantic Cache) của chatbot, hỗ trợ truy vấn vector KNN HNSW. |
+
 
 ---
 
@@ -131,6 +133,11 @@ graph TD
     subgraph "AI Core Service (FastAPI + LangGraph - Stateful Engine)"
         ai_core_server[AI Core Server / gRPC]
         
+        %% Tầng 0: Semantic Cache
+        subgraph "Tầng 0: Semantic Cache Gate"
+            sem_cache[Semantic Cache Manager]
+        end
+
         %% Tầng 1: Input Guardrail
         subgraph "Tầng 1: Input Guardrails"
             pii_tok[PII Tokenizer Middleware]
@@ -174,6 +181,7 @@ graph TD
     subgraph "Databases & Custom MCP Servers"
         pg_db[(PostgreSQL DB CRM/O&M)]
         qdrant[(Qdrant Vector DB)]
+        redis_stack[(Redis Stack Vector DB - Port 6399)]
         mcp_solar[Custom Solar Calc MCP Server]
         mcp_crm[Custom CRM MCP Server]
         mcp_om[Custom O&M Ticket MCP Server]
@@ -187,33 +195,37 @@ graph TD
 
     %% Luồng AI Core
     ai_core_client -->|5. Call Agent| ai_core_server
-    ai_core_server -->|6. De-id PII| pii_tok
-    pii_tok -->|7. Check Intent| intent_val
-    intent_val -->|8. Run Graph| langgraph_core
+    ai_core_server -->|6. Cache Lookup| sem_cache
+    sem_cache -->|7a. Cache Hit: Return Answer| ai_core_server
+    sem_cache -->|7b. Cache Miss: Query Vector| redis_stack
+    sem_cache -->|8. Proceed to De-id PII| pii_tok
+    pii_tok -->|9. Check Intent| intent_val
+    intent_val -->|10. Run Graph| langgraph_core
     
-    langgraph_core -->|9. Manage Checkpoints| agent_state
-    langgraph_core -->|10. Delegate Tasks| crm_agent & om_agent & inv_agent
+    langgraph_core -->|11. Manage Checkpoints| agent_state
+    langgraph_core -->|12. Delegate Tasks| crm_agent & om_agent & inv_agent
     
-    langgraph_core -->|11. Complete/Reason| llm_router
-    llm_router -->|12. Semantic Search| qdrant
-    llm_router -->|13. Read Database Relations| graph_rag
-    llm_router -->|14. Query Codebase/Contracts| gemini_long
+    langgraph_core -->|13. Complete/Reason| llm_router
+    llm_router -->|14. Semantic Search| qdrant
+    llm_router -->|15. Read Database Relations| graph_rag
+    llm_router -->|16. Query Codebase/Contracts| gemini_long
 
     %% Chốt chặn Tool Call
-    langgraph_core -->|15. Call Action Tool| spec_val
-    spec_val -->|16. Validate Schema| perm_gate
-    perm_gate -->|17. Verify HMAC & In-memory Check| mcp_host
+    langgraph_core -->|17. Call Action Tool| spec_val
+    spec_val -->|18. Validate Schema| perm_gate
+    perm_gate -->|19. Verify HMAC & In-memory Check| mcp_host
     
     %% Thực thi Tool và Phân giải PII
-    mcp_host -->|18. Re-id PII map| re_id
-    re_id -->|19. Call Solar Calc| mcp_solar
-    re_id -->|20. Call CRM API| mcp_crm
-    re_id -->|21. Call O&M Ticket| mcp_om
+    mcp_host -->|20. Re-id PII map| re_id
+    re_id -->|21. Call Solar Calc| mcp_solar
+    re_id -->|22. Call CRM API| mcp_crm
+    re_id -->|23. Call O&M Ticket| mcp_om
     mcp_crm & mcp_om --> pg_db
 
     %% Kiểm soát đầu ra
-    langgraph_core -->|21. Validate Hallucination| nli_val
-    nli_val -->|22. Final Response| ai_core_server
+    langgraph_core -->|24. Validate Hallucination| nli_val
+    nli_val -->|25. Final Response| ai_core_server
+
 ```
 
 
@@ -389,8 +401,8 @@ graph TD
 
 ### Pha 1: Hạ tầng cơ sở & Lõi AI (Base & AI Core Foundation)
 - Cài đặt Kubernetes cluster, cấu hình Kong API Gateway và cài đặt Realm và Organizations Keycloak.
-- Triển khai `AI Core Service` (LLM gateway), `DMS Service` (quản lý tệp tin) và `Knowledge Base Service` (RAG Pipeline với Qdrant).
-- *Mục tiêu:* Đảm bảo hạ tầng xác thực thông suốt, lưu trữ tệp tin an toàn và Chatbot có khả năng tìm kiếm tri thức cơ bản.
+- Triển khai `AI Core Service` (LLM gateway & Semantic Cache), `DMS Service` (quản lý tệp tin) và `Knowledge Base Service` (RAG Pipeline với Qdrant).
+- *Mục tiêu:* Đảm bảo hạ tầng xác thực thông suốt, lưu trữ tệp tin an toàn và Chatbot có khả năng tìm kiếm tri thức và lưu trữ cache ngữ nghĩa cơ bản.
 
 ### Pha 2: Kênh liên lạc và Chatbot AI (Channel & Chatbot Core)
 - Triển khai `Channel Connector Service` để kết nối và nhận webhook từ Facebook Page/Zalo OA.
@@ -403,10 +415,11 @@ graph TD
 - *Mục tiêu:* Hỗ trợ marketing đăng bài tự động đa kênh theo thời gian thực.
 
 ### Pha 4: CRM & Chiến dịch & Báo cáo (CRM & Analytics)
-- Triển khai `CRM Service` với cơ chế tự động gộp Contact và Lead Scoring.
+- Triển khai `CRM Service` với cơ chế tự động gộp Contact, Lead Scoring, và tích hợp 3 Custom MCP Servers (solar_calc, crm, om_ticket).
 - Triển khai `Campaign Service` để chạy chiến dịch broadcast hàng loạt và A/B Testing.
 - Triển khai `Analytics Service` kết hợp TimescaleDB để trực quan hóa biểu đồ hiệu suất.
 - *Mục tiêu:* Tối ưu hóa dữ liệu khách hàng, mở rộng quy mô tiếp cận và theo dõi hiệu suất ROI chiến dịch.
+
 
 ### Pha 5: Phụ trợ và Giám sát (Add-ons & Observability)
 - Triển khai `Comment Manager Service` (ẩn/xóa spam tự động) và `Notification Service` (email/push/SMS).

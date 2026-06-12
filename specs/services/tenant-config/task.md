@@ -30,18 +30,20 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 2: Validation Schema
 > *User Story: Là một Tenant Admin, tôi muốn hệ thống kiểm tra tính hợp lệ của giá trị cấu hình trước khi lưu.*
 - [ ] AC 2.1: Triển khai NestJS `ValidationPipe` với class-validator để kiểm tra kiểu dữ liệu và giá trị biên của cấu hình.
-- [ ] AC 2.2: Validate giới hạn của các trường số thực, số nguyên, enum trong 5 categories (ví dụ: `confidence_threshold` trong khoảng `[0.60, 0.95]`, `offline_mode_behavior` thuộc enum hợp lệ).
+- [ ] AC 2.2: Validate giới hạn của các trường số thực, số nguyên, enum trong 5 categories (ví dụ: `confidence_threshold` trong khoảng `[0.60, 0.95]`, `offline_mode_behavior` thuộc enum hợp lệ, `cost_limit_usd` >= 0.0 hoặc null, `cost_alert_threshold_percent` từ [50, 100], `cost_limit_policy` thuộc enum ['notify_only', 'auto_downgrade', 'block']).
 - [ ] AC 2.3: Validate định dạng whitelist Custom MCP SSE Servers (`sse_url` phải có schema http/https hợp lệ, phòng tránh SSRF).
 - [ ] AC 2.4: Trả về HTTP 422 kèm danh sách chi tiết các lỗi validation nếu phát hiện giá trị không hợp lệ.
 - [ ] AC 2.5: Ràng buộc kiểu Boolean: Kiểm tra strict true/false, không chấp nhận chuỗi `"true"`/`"false"` hoặc số `1`/`0`.
 
-### Task 3: Hot Reload qua Redis Pub/Sub
+### Task 3: Hot Reload qua Redis Pub/Sub & Kafka
 > *User Story: Là một Tenant Admin, tôi muốn thay đổi cấu hình có hiệu lực ngay lập tức trên toàn hệ thống.*
 - [ ] AC 3.1: Đồng bộ hóa ghi dữ liệu: Trong cùng một transaction nghiệp vụ, thực hiện ghi giá trị mới vào Redis Cache và gọi Redis client `PUBLISH` lên kênh `config.updates`.
 - [ ] AC 3.2: Đảm bảo thời gian lan truyền cấu hình xuống downstream memory của các service khác trong vòng < 5 giây.
 - [ ] AC 3.3: Định nghĩa cấu trúc payload của event `config.updates` gồm: `tenant_id`, `category`, `updated_fields`, `updated_at`.
 - [ ] AC 3.4: Xử lý lỗi Redis Cache: Retry tối đa 3 lần với backoff 1s; nếu lỗi tiếp diễn, ghi nhận log lỗi hệ thống và trả về HTTP 207 (Multi-Status).
 - [ ] AC 3.5: Xử lý lỗi Pub/Sub: Retry tối đa 3 lần; nếu lỗi, ghi nhận hệ thống nhưng vẫn trả về HTTP 200 (vì DB đã lưu thành công).
+- [ ] AC 3.6: Đóng vai trò là Kafka Producer phát sự kiện cấu hình bảo mật hoặc vai trò lên Kafka topic `config.updates` khi có thay đổi liên quan đến xác thực/phân quyền (Luồng 3).
+- [ ] AC 3.7: Xử lý lỗi phát Kafka: thực hiện retry tối đa 3 lần với exponential backoff và chuyển hướng tin nhắn lỗi sang DLQ nếu thất bại hoàn toàn để tránh mất mát dữ liệu cấu hình bảo mật.
 
 ### Task 4: gRPC Config Reader
 > *User Story: Là một microservice nội bộ, tôi muốn truy vấn cấu hình nhanh qua gRPC khi Redis cache miss.*
@@ -53,7 +55,7 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 5: Default Config & Default Roles Initialization khi Tenant mới
 > *User Story: Là một Super Admin, tôi muốn Tenant mới được tạo với bộ cấu hình và các vai trò mặc định hợp lý.*
 - [ ] AC 5.1: Đăng ký lắng nghe sự kiện tạo tenant mới từ hệ thống (qua Kafka/RabbitMQ hoặc nội bộ).
-- [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, ...).
+- [ ] AC 5.2: Triển khai luồng tự động ghi bản ghi default config vào PostgreSQL cho tenant mới với các giá trị quy định sẵn (`chatbot_enabled: true`, `confidence_threshold: 0.70`, `cost_limit_usd: null`, `cost_alert_threshold_percent: 80`, `cost_limit_policy: notify_only` ...).
 - [ ] AC 5.3: Triển khai luồng gieo mầm (seed) 4 vai trò mặc định (`admin`, `manager`, `agent`, `viewer`) cùng phân quyền mặc định tương ứng vào bảng `roles` và `role_permissions` của PostgreSQL.
 - [ ] AC 5.4: Đồng bộ danh sách quyền mặc định của 4 vai trò này lên Redis cache key `tenant:{tenant_id}:role:{role_name}:permissions` (được sắp xếp alphabet tăng dần).
 - [ ] AC 5.5: Giới hạn thời gian tạo mặc định hoàn tất trong vòng < 5 giây từ khi nhận sự kiện.
@@ -69,6 +71,7 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 ### Task 7: Cấu hình Chatbot & AI (ai_kb)
 - [ ] AC 7.1: Cho phép cấu hình các API keys của LLM Providers, thực hiện mã hóa đối xứng AES-256-GCM sử dụng `ENCRYPTION_KEY` trước khi lưu vào DB.
 - [ ] AC 7.2: Quản lý whitelist các SSE MCP Server, kiểm tra định dạng và validate an toàn đầu vào cho `sse_url` để chặn tấn công SSRF.
+- [ ] AC 7.3: Cho phép cấu hình hạn mức chi phí LLM (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`) và chính sách xử lý (`cost_limit_policy`) trong `ai_kb` category, tự động kích hoạt đồng bộ qua Redis và Pub/Sub.
 
 ### Task 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
 - [ ] AC 8.1: Cho phép cấu hình object `working_hours` kiểm soát khung giờ làm việc chi tiết của từng ngày trong tuần.
@@ -113,3 +116,22 @@ Tài liệu này theo dõi tiến độ triển khai và kiểm thử các tính
 - [ ] Khởi chạy cục bộ docker-compose, thực hiện gọi API qua Gateway để kiểm chứng Gateway inject signature và downstream verify thành công.
 - [ ] Kiểm tra Redis CLI xem dữ liệu permissions lưu dưới key `tenant:{tenant_id}:role:{role_name}:permissions` có đúng định dạng CSV phân tách alphabet không.
 - [ ] Test trường hợp thay đổi permissions của một custom role và kiểm chứng Gateway invalidate local cache trong < 5 giây.
+
+---
+
+## Service Discovery Client Integration (MỚI)
+
+### Task 21: Service Discovery Client Integration
+- [ ] AC 21.1: Triển khai lớp `ServiceRegistryClient` tự động lấy IP nội bộ qua kết nối UDP socket ảo.
+- [ ] AC 21.2: Tích hợp `ServiceRegistryClient` vào lifecycle hook khởi động và tắt của ứng dụng (NestJS).
+- [ ] AC 21.3: Triển khai cấu trúc JSON logs cho các sự kiện đăng ký và lỗi heartbeat lên Redis.
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

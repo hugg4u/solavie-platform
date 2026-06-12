@@ -71,7 +71,9 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] AC 5.1: THE AI_Core SHALL log mọi LLM call vào bảng `llm_usage_logs`: model, tokens, latency, cost_usd, cache_hit, is_fallback
 - [x] AC 5.2: THE AI_Core SHALL cung cấp API báo cáo sử dụng (`GET /api/v1/analytics/usage-summary`) gom nhóm theo tenant, use_case, model, provider
 - [x] AC 5.3: THE AI_Core SHALL hỗ trợ bộ giả lập chi phí (`POST /api/v1/analytics/simulate-cost`) để ước tính chênh lệch tài chính và thay đổi latency dự kiến khi đổi cấu hình định tuyến dựa trên lịch sử token của 30 ngày gần nhất
-- [x] AC 5.4: THE AI_Core SHALL alert khi cost vượt threshold cấu hình của tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant, so sánh với hạn mức chi phí (`cost_limit_usd` được định nghĩa trong cấu hình limits của tenant), và tự động kích hoạt tín hiệu cảnh báo (Cost Alert) khi sử dụng đạt 80% hạn mức
+- [x] AC 5.4: THE AI_Core SHALL kiểm tra và thực thi chính sách ngân sách LLM của Tenant: theo dõi chi phí tích lũy trong 30 ngày qua của tenant (tính tổng từ `llm_usage_logs`) và đối chiếu với hạn mức chi phí (`cost_limit_usd`), ngưỡng cảnh báo (`cost_alert_threshold_percent`), và chính sách xử lý (`cost_limit_policy`) được đồng bộ trong Redis cache key `tenant:{tenant_id}:limits`.
+        - Khi chi phí đạt hoặc vượt ngưỡng cảnh báo: kích hoạt cảnh báo (log error, Prometheus metric, Notification).
+        - Khi chi phí đạt hoặc vượt 100% hạn mức: thực thi block (trả về HTTP 429), auto_downgrade (hạ cấp sang fallback model), hoặc notify_only (chỉ tiếp tục cảnh báo).
 - [x] AC 5.5: THE AI_Core SHALL expose metrics cho Prometheus
 
 ### Task 6: 6: Prompt Management
@@ -201,11 +203,15 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 
 ---
 
-## Future Phase 2 Task Checklist
-
-### Task 13: Semantic Caching Implementation
-- [x] AC 11.1: Tích hợp Redis Stack và cài đặt module RediSearch vector index trong code
-- [x] AC 11.2: Triển khai kiểm tra tương đồng ngữ nghĩa câu hỏi trước khi gọi LLM/KB Search
+### Task 13: Semantic Caching Implementation (MỚI - Giai đoạn 2 & 3)
+- [x] **13.1**: requirements.txt thêm fastembed>=0.3.0
+- [x] **13.2**: core/config.py thêm REDIS_STACK_URL, SEMANTIC_CACHE_THRESHOLD=0.92, SEMANTIC_CACHE_TTL=86400
+- [x] **13.3**: gateway/semantic_cache.py tạo SemanticCacheManager:
+  - Thiết kế Vector Schema `idx:semantic_cache` trên Redis Stack (TAG tenant_id, TAG use_case, TEXT question, TEXT response, VECTOR vector HNSW 384 Cosine).
+  - Tích hợp FastEmbed `multilingual-e5-small` tại cục bộ để sinh vector 384 chiều của câu hỏi.
+- [x] **13.4**: gateway/router.py integrate cache vào complete() (tìm kiếm vector KNN với cosine similarity >= 0.92, tenant-isolated)
+- [x] **13.5**: core/metrics.py thêm cache hit/miss metrics (ai_core_semantic_cache_hits_total, ai_core_semantic_cache_misses_total)
+- [x] **13.6**: Viết pytest cho semantic cache (lookup hit, lookup miss, tenant isolation, async write)
 
 ### Task 14: Structured Outputs Integration
 - [x] AC 12.1: Định nghĩa JSON schema và tích hợp `response_format` trong LiteLLM completion calls
@@ -267,15 +273,64 @@ This document tracks the implementation checklist for **AI-CORE Service** based 
 - [x] Bắt buộc tự động tiêm/ghi đè tham số `tenant_id` từ JWT token xác thực vào tham số (arguments) của tool trước khi gửi sang MCP Server.
 - [x] Cập nhật `ToolExecutor.execute` định tuyến các remote tools (có tiền tố `{server_name}__`) qua `MCPClientManager.execute_mcp_tool`.
 - [x] Viết unit tests kiểm thử cơ chế whitelisting và tiêm `tenant_id` tại AI Core.
+- [x] Triển khai chuyển tiếp các HTTP headers bảo mật (X-Tenant-ID, X-User-ID, X-User-Permissions, X-Permissions-Signature) vào `sse_client` session.
 
 
-### Task 20: Service Self-Registration and Lifecycle Heartbeat [PLANNED]
+### Task 20: Service Self-Registration and Lifecycle Heartbeat [COMPLETED]
 > *User Story: Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.*
 
 **Acceptance Criteria Implementation:**
-- [ ] AC 20.1: Triển khai lớp `ServiceRegistryClient` trong `ai-core` tự động lấy IP nội bộ của card mạng chính qua kết nối UDP socket ảo.
-- [ ] AC 20.2: Triển khai background thread gửi heartbeat (`SETEX` và `SADD` lên Redis) định kỳ mỗi 5 giây với TTL = 15 giây.
-- [ ] AC 20.3: Tích hợp `ServiceRegistryClient` vào FastAPI lifespan startup/shutdown event handlers.
-- [ ] AC 20.4: Viết unit tests kiểm thử với mock Redis kiểm chứng luồng hoạt động đăng ký/heartbeat/deregister của client.
+- [x] AC 20.1: Triển khai lớp `ServiceRegistryClient` trong `ai-core` tự động lấy IP nội bộ của card mạng chính qua kết nối UDP socket ảo.
+- [x] AC 20.2: Triển khai background thread gửi heartbeat (`SETEX` và `SADD` lên Redis) định kỳ mỗi 5 giây với TTL = 15 giây.
+- [x] AC 20.3: Tích hợp `ServiceRegistryClient` vào FastAPI lifespan startup/shutdown event handlers.
+- [x] AC 20.4: Viết unit tests kiểm thử với mock Redis kiểm chứng luồng hoạt động đăng ký/heartbeat/deregister của client.
+
+### Task 21: Integration of CRM, Solar Calc, and O&M MCP Tools (MỚI - Giai đoạn 2)
+- [x] **21.1**: Cập nhật `ALL_TOOLS` trong `services/ai-core/tools/registry.py` để bổ sung JSON Schema cho các tool mới:
+  - `calculate_solar_roi`
+  - `get_proposal_preview`
+  - `create_om_ticket`
+  - `get_ticket_status`
+  - `create_lead_deal`
+  - `update_deal_stage`
+- [x] **21.2**: Cập nhật `mcp_mapping` trong `services/ai-core/tools/executor.py` để trỏ chính xác các tool:
+  - `"calculate_solar_roi"` trỏ sang `"solar_calc__calculate_solar_roi"`
+  - `"get_proposal_preview"` trỏ sang `"solar_calc__get_proposal_preview"`
+  - `"create_om_ticket"` trỏ sang `"om_ticket__create_om_ticket"`
+  - `"get_ticket_status"` trỏ sang `"om_ticket__get_ticket_status"`
+  - `"create_lead_deal"` trỏ sang `"crm__create_lead_deal"`
+  - `"update_deal_stage"` trỏ sang `"crm__update_deal_stage"`
+- [x] **21.3**: Cập nhật `PERMISSION_MATRIX` trong `services/ai-core/tools/registry.py` để cho phép `chatbot` gọi các tool ROI, Proposal, và O&M Ticket.
+- [x] **21.4**: Cập nhật `TOOL_PERMISSIONS` trong `services/ai-core/tools/registry.py` để phân quyền RBAC cho các tool mới:
+  - `calculate_solar_roi` -> `crm:deals:read`
+  - `get_proposal_preview` -> `crm:deals:read`
+  - `create_lead_deal` -> `crm:deals:create`
+  - `update_deal_stage` -> `crm:deals:update`
+  - `create_om_ticket` -> `crm:tickets:create`
+  - `get_ticket_status` -> `crm:tickets:read`
+- [x] **21.5**: Đăng ký Circuit Breakers cho các remote tool mới này trong `TOOL_BREAKERS` tại `services/ai-core/tools/executor.py`.
+- [x] **21.6**: Viết pytest để kiểm tra độ chính xác của mcp_mapping và thực thi RBAC.
+
+### Task 22: Redis Resiliency & Multi-tier Fallback (MỚI)
+> *User Story: Là hệ thống, tôi muốn việc đọc/ghi cấu hình luôn hoạt động ổn định và có thời gian phản hồi gần như 0ms ngay cả khi máy chủ Redis gặp sự cố kết nối, quá tải hoặc downtime.*
+
+**Acceptance Criteria Implementation:**
+- [ ] AC 22.1: Khai báo và khởi tạo Local Cache (`_local_routes_cache`, `_local_credentials_cache`, `_local_limits_cache`, `_local_accumulated_cost_cache`) trong `LLMGateway.__init__` của `services/ai-core/gateway/router.py`.
+- [ ] AC 22.2: Nâng cấp `_get_accumulated_cost` đọc từ Local Cache trước (TTL 10s), bọc try-except Redis và fallback tính toán trực tiếp từ Postgres DB.
+- [ ] AC 22.3: Nâng cấp `check_cost_limit` và `get_routing` đọc limits từ Local Cache (TTL 10s), bọc try-except Redis và fallback bỏ qua / dùng local cache cũ.
+- [ ] AC 22.4: Triển khai Non-blocking Background Sync khi limits cache miss (`limits_raw is None`) bằng `asyncio.create_task(fetch_and_sync_config)` có kiểm soát trùng lặp qua `self._active_sync_tasks`.
+- [ ] AC 22.5: Nâng cấp `_lookup_credentials` đọc API credentials từ Local Cache (TTL 30s), bọc try-except Redis và fallback trực tiếp từ Postgres.
+- [ ] AC 22.6: Cập nhật `check_and_trigger_cost_alert` trong `services/ai-core/api/v1/endpoints/completions.py` bọc try-except khi đọc Redis limits.
+- [ ] AC 22.7: Viết unit tests kiểm tra lỗi kết nối Redis, cache miss background sync và kiểm tra in-memory cache hits trong `test_rbac_and_metrics.py`.
 
 
+
+
+---
+
+## Service Discovery & Health API Tasks
+- [ ] Triển khai thuật toán IP Auto-detect với 3 mức độ ưu tiên (CONTAINER_IP -> OS interfaces -> UDP fake).
+- [ ] Cài đặt Lifespan Registry client với cơ chế Fail-Safe khi kết nối Redis lỗi.
+- [ ] Thiết lập Graceful Shutdown (hủy đăng ký khi nhận SIGTERM/SIGINT).
+- [ ] Triển khai Endpoint `/health` kiểm tra trạng thái DB và Redis.
+- [ ] Cấu hình định dạng log JSON chuẩn cho các sự kiện Service Discovery.

@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     
     # Redis Configuration
     REDIS_URL: str = "redis://localhost:6379/1"
+    REDIS_STACK_URL: str = "redis://localhost:6399/0"
+    SEMANTIC_CACHE_THRESHOLD: float = 0.92
+    SEMANTIC_CACHE_TTL: int = 86400
     
     # Provider Keys
     TAVILY_API_KEY: str | None = None

@@ -30,9 +30,12 @@ graph TB
         GRPC_S["gRPC Server"]
         
         subgraph "Modules"
-            CONFIG_MOD["Config Module\n(CRUD + Validation)"]
-            ROLE_MOD["Role & Permission Module\n(Auth Proxy Role Sync)"]
-            HOTRELOAD["Hot Reload Module\n(Redis Pub/Sub)"]
+            CONFIG_MOD["Config Module
+(CRUD + Validation)"]
+            ROLE_MOD["Role & Permission Module
+(Auth Proxy Role Sync)"]
+            HOTRELOAD["Hot Reload Module
+(Redis Pub/Sub & Kafka Producer)"]
             AUDIT["Audit Log Module"]
             DEFAULT["Default Config Module"]
         end
@@ -42,13 +45,17 @@ graph TB
         PG[("PostgreSQL (config_db)")]
         Redis[("Redis Cache & Pub/Sub")]
         Keycloak[("Keycloak IDP")]
+        Kafka[("Kafka Broker")]
     end
 
     subgraph "Consumers & Gateway"
-        Gateway["Kong API Gateway\n(Cache 3 tầng & Verification)"]
+        Gateway["Kong API Gateway
+(Cache 3 tầng & Verification)"]
         AICore["AI Core Service"]
         CRMSvc["CRM Service"]
         US["User Service (Auth Proxy)"]
+        SyncWorker["Auth Sync Worker
+(Kafka Consumer)"]
     end
 
     Dashboard["Dashboard (Admin)"] -->|HTTPS| REST
@@ -64,7 +71,10 @@ graph TB
     CONFIG_MOD --> AUDIT --> PG
     
     HOTRELOAD -->|SET / PUBLISH| Redis
+    HOTRELOAD -->|Publish security updates| Kafka
     Redis -->|Pub/Sub Notification| Gateway & AICore & CRMSvc
+    Kafka -->|Topic: config.updates| SyncWorker
+    SyncWorker -->|Keycloak Org Admin API| Keycloak
 ```
 
 ---
@@ -295,6 +305,9 @@ const CONFIG_VALIDATION_SCHEMA = {
   kb_chunk_size: { type: 'int', min: 128, max: 1024 },
   kb_chunk_overlap_percentage: { type: 'float', min: 5, max: 30 },
   rag_relevance_threshold: { type: 'float', min: 0.0, max: 1.0 },
+  cost_limit_usd: { type: 'float', min: 0.0, optional: true },
+  cost_alert_threshold_percent: { type: 'int', min: 50, max: 100 },
+  cost_limit_policy: { type: 'enum', values: ['notify_only', 'auto_downgrade', 'block'] },
   offline_mode_behavior: { type: 'enum', values: ['lead_capture', 'ai_warning', 'offline_msg'] },
   handoff_routing_algorithm: { type: 'enum', values: ['round_robin', 'least_busy', 'queue_claim', 'hybrid'] },
   manual_to_auto_timeout_hours: { type: 'float', min: 1, max: 24 },
@@ -387,23 +400,41 @@ message GetAllConfigResponse {
 | `config.updates` | Channel | Payload thông báo thay đổi cấu hình/vai trò | N/A (Pub/Sub) |
 | `system.limits.updates` | Channel | Payload thông báo thay đổi hạn mức gói | N/A (Pub/Sub) |
 
+## Kafka Topics & Event Channels (Luồng 3 - MỚI)
+
+| Topic | Phân đoạn (Partitions) | Định dạng Payload | Phím phân đoạn (Partition Key) | Mô tả |
+|---|---|---|---|---|
+| `config.updates` | 3 | JSON | `tenant_id` | Sự kiện cập nhật cấu hình bảo mật hoặc vai trò người dùng (Luồng 3) |
+
 ### Event Payloads:
-- **`config.updates` (cho Category Config):**
+- **`config.updates` (Luồng 3 - Config Category):**
   ```json
   {
+    "event_id": "uuid-v4",
     "tenant_id": "solavie-001",
-    "category": "ai_kb",
-    "updated_fields": ["confidence_threshold", "chatbot_enabled"],
-    "updated_at": "2026-06-07T01:44:23Z"
+    "category": "security_comments_notif",
+    "updated_fields": ["auth_password_min_length", "auth_max_login_attempts"],
+    "payload": {
+      "auth_password_min_length": 8,
+      "auth_max_login_attempts": 5
+    },
+    "timestamp": "2026-06-07T01:44:23Z"
   }
   ```
-- **`config.updates` (cho Roles & Permissions):**
+- **`config.updates` (Luồng 3 - Roles & Permissions):**
   ```json
   {
+    "event_id": "uuid-v4",
     "tenant_id": "solavie-001",
     "category": "roles",
     "role_name": "custom_agent",
-    "updated_at": "2026-06-07T01:44:23Z"
+    "payload": {
+      "name": "custom_agent",
+      "permissions": [
+        { "resource": "chatbot", "action": "read" }
+      ]
+    },
+    "timestamp": "2026-06-07T01:44:23Z"
   }
   ```
 
@@ -456,3 +487,37 @@ Mọi thao tác thay đổi cấu hình đều được ghi nhật ký kiểm to
 - **Unit Tests (Jest):** Coverage tối thiểu 80% business logic của các validator, guard HMAC, sync logic.
 - **Integration Tests:** Sử dụng Testcontainers khởi chạy PostgreSQL và Redis để kiểm thử kết nối DB, ghi log audit, cơ chế Pub/Sub.
 - **Contract Tests (Pact):** Kiểm thử ràng buộc gRPC Interface giữa Tenant Config Service và các downstream service (AI Core, CRM, Chatbot).
+
+---
+
+## Service Discovery Integration Design
+
+Dịch vụ Tenant Config tích hợp lớp `ServiceRegistryClient` chạy song song với ứng dụng chính để hỗ trợ phát hiện dịch vụ động:
+
+### 1. Kiến trúc Client
+* **Cơ chế:**
+  * **Startup Event:** Khi tiến trình của dịch vụ khởi động, client thực thi lệnh `SADD` để thêm IP:Port của node hiện tại vào Redis Set: `registry:service:tenant-config`.
+  * **Heartbeat Thread/Task:** Chạy định kỳ mỗi 5 giây để thực hiện:
+    * Ghi đè khóa sự sống: `SETEX registry:service:tenant-config:node:{ip}:{port} 15 "alive"`.
+    * Đảm bảo IP vẫn tồn tại trong Set: `SADD registry:service:tenant-config {ip}:{port}`.
+  * **Shutdown Event:** Khi nhận tín hiệu tắt tiến trình (`SIGTERM`/`SIGINT`), client thực hiện dọn dẹp:
+    * Xóa IP khỏi Set: `SREM registry:service:tenant-config {ip}:{port}`.
+    * Xóa khóa sống: `DEL registry:service:tenant-config:node:{ip}:{port}`.
+
+### 2. Tích hợp theo Tech Stack
+* **NestJS (Node.js):** Sử dụng các lifecycle hooks `OnModuleInit` và `OnApplicationShutdown` kết hợp thư viện `ioredis` và `setInterval` cho heartbeat.
+* **FastAPI (Python):** Sử dụng lifespan event handlers của FastAPI kết hợp `asyncio.create_task` và `redis-py`.
+* **Spring Boot (Java):** Sử dụng annotation `@PostConstruct` và `@PreDestroy` kết hợp `ScheduledExecutorService` và `Jedis`/`Lettuce`.
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

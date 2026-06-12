@@ -78,8 +78,9 @@ export class HealthController {
    * Trả về danh sách metrics theo định dạng chuẩn Prometheus.
    */
   @Get('metrics')
-  getMetrics(@Res() res: any) {
+  async getMetrics(@Res() res: any) {
     res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-    res.send(this.metricsService.getMetricsResponse());
+    const data = await this.metricsService.getMetricsResponse();
+    res.send(data);
   }
 }

@@ -226,7 +226,7 @@ keycloak:
   command: start --optimized
   environment:
     KC_DB: postgres
-    KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak_db
+    KC_DB_URL: jdbc:postgresql://postgres-db:5432/keycloak_db
     KC_DB_USERNAME: keycloak
     KC_DB_PASSWORD: ${KC_DB_PASSWORD}
     KC_HOSTNAME: auth.yourdomain.com
@@ -238,9 +238,9 @@ keycloak:
   ports:
     - "8080:8080"
   depends_on:
-    - postgres-keycloak
+    - postgres-db
 
-postgres-keycloak:
+postgres-db:
   image: postgres:16
   environment:
     POSTGRES_DB: keycloak_db
@@ -339,24 +339,27 @@ Chi tiết gọi Keycloak Admin API để đồng bộ:
 Để đảm bảo thông tin nghiệp vụ tại **User Service** luôn đồng bộ với trạng thái danh tính tại Keycloak, hệ thống cấu hình **Keycloak Event Listener (HTTP Webhook / Redis Event Publisher)** để tự động đẩy sự kiện khi có thay đổi liên quan đến User:
 
 ### 🔄 Quy trình đồng bộ:
-1. Khi xảy ra các sự kiện User nhạy cảm trên Keycloak, một Custom Event Listener SPI sẽ bắn sự kiện sang Redis channel `auth.user.events` (hoặc Kafka topic `auth.user.events`).
-2. **User Service** lắng nghe channel/topic này để cập nhật trạng thái tương ứng trong cơ sở dữ liệu `solavie_user_db`.
+1. Khi xảy ra các sự kiện User nhạy cảm trên Keycloak (ví dụ: VERIFY_EMAIL, UPDATE_EMAIL, DISABLE_USER, DELETE_USER), Custom Event Listener SPI trên Keycloak sẽ gửi HTTP webhook về cho **Auth Sync Worker**.
+2. **Auth Sync Worker** đóng vai trò Kafka Producer, chuyển tiếp và publish sự kiện vào Apache Kafka topic `auth.events.user`.
+3. **User Service** (Consumer) lắng nghe topic này để cập nhật trạng thái tương ứng trong cơ sở dữ liệu `solavie_user_db`.
 
 ```mermaid
 sequenceDiagram
     participant KC as Keycloak (Auth)
-    participant Redis as Redis (auth.user.events)
+    participant Worker as Auth Sync Worker
+    participant Kafka as Kafka (auth.events.user)
     participant US as User Service (Backend)
 
     KC->>KC: Trigger User Event (e.g. VERIFY_EMAIL)
-    KC->>Redis: PUBLISH auth.user.events {event_type, user_id, details}
-    Redis-->>US: Nhận event thời gian thực
+    KC->>Worker: Webhook Event {event_type, user_id, details}
+    Worker->>Kafka: Publish to auth.events.user topic
+    Kafka-->>US: Consume event thời gian thực
     US->>US: Cập nhật bảng users (status='ACTIVE' hoặc 'SUSPENDED')
 ```
 
 ### 📋 Danh sách sự kiện và Hành động đồng bộ:
 
-| Sự kiện trên Keycloak (Event Type) | Payload gửi đi | Hành động tại User Service |
+| Sự kiện trên Keycloak (Event Type) | Payload gửi đi qua Kafka | Hành động tại User Service |
 |:---|:---|:---|
 | **`VERIFY_EMAIL`** / **`REGISTER`** | `{"event": "user.verified", "user_id": "uuid", "email": "..."}` | Cập nhật `status = 'ACTIVE'` |
 | **`UPDATE_EMAIL`** | `{"event": "user.email_updated", "user_id": "uuid", "new_email": "..."}` | Cập nhật email trong hồ sơ |
@@ -451,3 +454,16 @@ Dịch vụ kiểm tra và xác thực chữ ký signature trên mỗi request t
 3. So sánh `X-Permissions-Signature` với `expected_sig`. Nếu không khớp, trả về ngay lập tức mã lỗi `403 Forbidden` (Signature Mismatch).
 4. So khớp in-memory O(1): parse `X-User-Permissions` thành một Set và đối chiếu với quyền yêu cầu của endpoint (ví dụ: `auth:roles:read`).
    - Hỗ trợ wildcard: `*` (Super Admin bypass), `auth:*` (Service bypass), và `auth:roles:*` (Resource bypass).
+
+
+---
+
+## Registry Client & Health Endpoint Design (Tối ưu hóa)
+*   **Giải thuật phát hiện IP:**
+    1. Lấy biến môi trường `CONTAINER_IP`.
+    2. Nếu trống, quét các interface card mạng vật lý của OS để tìm IP IPv4 hợp lệ.
+    3. Fallback: Tạo kết nối UDP fake đến `8.8.8.8:53`.
+*   **Health Check Endpoint:**
+    *   Endpoint: `/health`
+    *   Response: `{"status": "UP", "timestamp": "ISO-8601", "details": {"database": "UP", "redis": "UP"}}`
+    *   Kiểm tra kết nối Database và Redis. Trả về HTTP 200 nếu khỏe mạnh, HTTP 503 nếu lỗi kết nối cốt lõi.

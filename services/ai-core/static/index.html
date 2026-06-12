@@ -91,7 +91,9 @@
         .header-actions {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
         .tenant-selector {
@@ -496,6 +498,64 @@
                 opacity: 1;
             }
         }
+
+        /* Modal and security configurations */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(11, 15, 25, 0.75);
+            backdrop-filter: blur(12px);
+            z-index: 999;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal-container {
+            width: 550px;
+            max-width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            animation: modalFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes modalFadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        .spin-loader {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
 
@@ -509,16 +569,16 @@
         </div>
 
         <div class="header-actions">
+            <!-- API Base Select -->
             <div class="tenant-selector">
-                <i data-lucide="shield" size="16" style="color: var(--accent-primary);"></i>
-                <select id="userRoleSelect" onchange="onRoleChange()">
-                    <option value="admin">Admin</option>
-                    <option value="manager">Manager</option>
-                    <option value="standard_user">Standard User</option>
-                    <option value="visitor" selected>Visitor</option>
+                <i data-lucide="network" size="16" style="color: var(--accent-secondary);"></i>
+                <select id="apiBaseSelect" onchange="onApiBaseChange()">
+                    <option value="" selected>Direct API (Cổng 8009)</option>
+                    <option value="http://localhost:8000">Gateway API (Cổng 8000)</option>
                 </select>
             </div>
 
+            <!-- Tenant Selector -->
             <div class="tenant-selector">
                 <i data-lucide="building-2" size="16" style="color: var(--accent-secondary);"></i>
                 <select id="tenantSelect" onchange="onTenantChange()">
@@ -527,12 +587,22 @@
                 </select>
             </div>
 
+            <!-- Custom Tenant Input -->
             <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem;">
                 <label for="customTenantInput" style="margin: 0;">Custom UUID:</label>
                 <input type="text" id="customTenantInput" placeholder="Nhập UUID tenant..."
                     style="width: 180px; padding: 0.4rem 0.75rem; font-size: 0.85rem;"
                     onchange="onCustomTenantChange()">
             </div>
+
+            <!-- Security Config Modal Trigger Button -->
+            <button class="btn btn-secondary" id="openAuthModalBtn" onclick="toggleAuthModal(true)"
+                style="padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i data-lucide="shield-check" style="color: var(--accent-primary);"></i>
+                <span>Cấu hình Bảo mật</span>
+                <span class="status-indicator active" id="authStatusIndicator"
+                    style="width: 8px; height: 8px; background: var(--success); border-radius: 50%; display: inline-block;"></span>
+            </button>
         </div>
     </header>
 
@@ -902,6 +972,75 @@
         // Initialize Lucide Icons
         lucide.createIcons();
 
+        // Helper to generate HMAC-SHA256 signed auth headers for local testing bypassing Gateway
+        async function getAuthHeaders() {
+            const tenantId = getTenantId();
+            const userRole = document.getElementById('userRoleSelect').value;
+            const secret = document.getElementById('gatewaySecretInput').value.trim();
+            const token = document.getElementById('jwtTokenInput').value.trim();
+            const userId = "test-user-id";
+
+            // Map roles to permissions matching require_permission endpoints
+            let permissions = "ai-core:configs:read";
+            if (userRole === "admin") {
+                permissions = "*";
+            } else if (userRole === "manager") {
+                permissions = "ai-core:chats:create,ai-core:configs:read,ai-core:configs:write,ai-core:prompts:read,ai-core:prompts:write,ai-core:analytics:read";
+            } else if (userRole === "standard_user") {
+                permissions = "ai-core:chats:create,ai-core:configs:read,ai-core:analytics:read";
+            } else if (userRole === "visitor") {
+                permissions = "ai-core:configs:read";
+            }
+
+            const payload = `${tenantId}:${userId}:${permissions}`;
+
+            let signature = "";
+            try {
+                const encoder = new TextEncoder();
+                const keyData = encoder.encode(secret);
+                const messageData = encoder.encode(payload);
+
+                const cryptoKey = await crypto.subtle.importKey(
+                    "raw",
+                    keyData,
+                    { name: "HMAC", hash: "SHA-256" },
+                    false,
+                    ["sign"]
+                );
+
+                const signatureBuffer = await crypto.subtle.sign(
+                    "HMAC",
+                    cryptoKey,
+                    messageData
+                );
+
+                signature = Array.from(new Uint8Array(signatureBuffer))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+            } catch (err) {
+                console.error("Failed to generate HMAC signature:", err);
+            }
+
+            const headers = {
+                "X-Tenant-ID": tenantId,
+                "X-User-ID": userId,
+                "X-User-Permissions": permissions,
+                "X-Permissions-Signature": signature
+            };
+
+            if (token) {
+                headers["Authorization"] = `Bearer ${token}`;
+            }
+
+            return headers;
+        }
+
+        // Helper to prepend the selected API Base URL (relative or Gateway)
+        function getApiUrl(path) {
+            const apiBase = document.getElementById('apiBaseSelect').value;
+            return apiBase + path;
+        }
+
         // Conversation history state
         let chatHistory = [];
 
@@ -933,7 +1072,10 @@
         }
 
         function onRoleChange() {
-            showToast('Đã chuyển sang vai trò: ' + document.getElementById('userRoleSelect').value, 'info');
+            const role = document.getElementById('userRoleSelect').value;
+            showToast('Đã chuyển sang vai trò: ' + role, 'info');
+            onModalRoleChange();
+            updateAuthStatusIndicator();
         }
 
         function onCustomTenantChange() {
@@ -1006,12 +1148,12 @@
             const botMsgEl = appendMessage('Đang xử lý...', 'assistant', true);
 
             try {
-                const response = await fetch('/api/v1/completions', {
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl('/api/v1/completions'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Tenant-ID': tenantId,
-                        'X-User-Role': userRole
+                        ...authHeaders
                     },
                     body: JSON.stringify({
                         tenant_id: tenantId,
@@ -1084,8 +1226,11 @@
             tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Đang tải...</td></tr>';
 
             try {
-                const response = await fetch(`/api/v1/configs/routes?tenant_id=${getTenantId()}`, {
-                    headers: { 'X-Tenant-ID': getTenantId() }
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl(`/api/v1/configs/routes?tenant_id=${getTenantId()}`), {
+                    headers: {
+                        ...authHeaders
+                    }
                 });
 
                 if (!response.ok) throw new Error('Không thể tải cấu hình định tuyến');
@@ -1128,11 +1273,12 @@
             };
 
             try {
-                const response = await fetch('/api/v1/configs/routes', {
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl('/api/v1/configs/routes'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Tenant-ID': getTenantId()
+                        ...authHeaders
                     },
                     body: JSON.stringify(payload)
                 });
@@ -1152,8 +1298,11 @@
             tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Đang tải...</td></tr>';
 
             try {
-                const response = await fetch(`/api/v1/configs/keys?tenant_id=${getTenantId()}`, {
-                    headers: { 'X-Tenant-ID': getTenantId() }
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl(`/api/v1/configs/keys?tenant_id=${getTenantId()}`), {
+                    headers: {
+                        ...authHeaders
+                    }
                 });
 
                 if (!response.ok) throw new Error('Không thể tải API Keys');
@@ -1190,11 +1339,12 @@
             };
 
             try {
-                const response = await fetch('/api/v1/configs/keys', {
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl('/api/v1/configs/keys'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Tenant-ID': getTenantId()
+                        ...authHeaders
                     },
                     body: JSON.stringify(payload)
                 });
@@ -1212,8 +1362,11 @@
         // ── API: Analytics summary ──
         async function loadUsageSummary() {
             try {
-                const response = await fetch(`/api/v1/analytics/usage-summary?tenant_id=${getTenantId()}`, {
-                    headers: { 'X-Tenant-ID': getTenantId() }
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl(`/api/v1/analytics/usage-summary?tenant_id=${getTenantId()}`), {
+                    headers: {
+                        ...authHeaders
+                    }
                 });
 
                 if (!response.ok) throw new Error('Không thể tải báo cáo sử dụng');
@@ -1235,11 +1388,12 @@
             if (!targetModel) return;
 
             try {
-                const response = await fetch('/api/v1/analytics/simulate-cost', {
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl('/api/v1/analytics/simulate-cost'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Tenant-ID': getTenantId()
+                        ...authHeaders
                     },
                     body: JSON.stringify({
                         tenant_id: getTenantId(),
@@ -1274,8 +1428,11 @@
             tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Đang tải...</td></tr>';
 
             try {
-                const response = await fetch(`/api/v1/usage/breakdown?tenant_id=${getTenantId()}`, {
-                    headers: { 'X-Tenant-ID': getTenantId() }
+                const authHeaders = await getAuthHeaders();
+                const response = await fetch(getApiUrl(`/api/v1/usage/breakdown?tenant_id=${getTenantId()}`), {
+                    headers: {
+                        ...authHeaders
+                    }
                 });
 
                 if (!response.ok) throw new Error('Không thể tải phân tích sử dụng');
@@ -1299,7 +1456,289 @@
                 tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--error);">Lỗi: ${err.message}</td></tr>`;
             }
         }
+
+        // Security Modal logic
+        function toggleAuthModal(show) {
+            const modal = document.getElementById('authModal');
+            if (show) {
+                modal.style.display = 'flex';
+                // Trigger reflow
+                modal.offsetHeight;
+                modal.classList.add('active');
+
+                // Set active tab based on API Base
+                const apiBase = document.getElementById('apiBaseSelect').value;
+                if (apiBase === 'http://localhost:8000') {
+                    switchModalTab('gateway');
+                } else {
+                    switchModalTab('direct');
+                }
+                onModalRoleChange();
+            } else {
+                modal.classList.remove('active');
+                setTimeout(() => {
+                    modal.style.display = 'none';
+                }, 300);
+            }
+        }
+
+        function switchModalTab(mode) {
+            const directBtn = document.getElementById('directModeTabBtn');
+            const gatewayBtn = document.getElementById('gatewayModeTabBtn');
+            const directSettings = document.getElementById('directModeSettings');
+            const gatewaySettings = document.getElementById('gatewayModeSettings');
+
+            if (mode === 'direct') {
+                directBtn.classList.add('active');
+                gatewayBtn.classList.remove('active');
+                directSettings.style.display = 'flex';
+                gatewaySettings.style.display = 'none';
+            } else {
+                directBtn.classList.remove('active');
+                gatewayBtn.classList.add('active');
+                directSettings.style.display = 'none';
+                gatewaySettings.style.display = 'flex';
+            }
+        }
+
+        function onModalRoleChange() {
+            const role = document.getElementById('userRoleSelect').value;
+            const display = document.getElementById('modalPermissionsDisplay');
+
+            let permissions = "ai-core:configs:read";
+            if (role === "admin") {
+                permissions = "*";
+            } else if (role === "manager") {
+                permissions = "ai-core:chats:create,ai-core:configs:read,ai-core:configs:write,ai-core:prompts:read,ai-core:prompts:write,ai-core:analytics:read";
+            } else if (role === "standard_user") {
+                permissions = "ai-core:chats:create,ai-core:configs:read,ai-core:analytics:read";
+            } else if (role === "visitor") {
+                permissions = "ai-core:configs:read";
+            }
+            display.value = permissions;
+        }
+
+        function saveAuthModalSettings() {
+            toggleAuthModal(false);
+            updateAuthStatusIndicator();
+            showToast('Đã áp dụng cấu hình bảo mật mới!', 'success');
+        }
+
+        function updateAuthStatusIndicator() {
+            const apiBase = document.getElementById('apiBaseSelect').value;
+            const indicator = document.getElementById('authStatusIndicator');
+
+            if (apiBase === 'http://localhost:8000') {
+                const token = document.getElementById('jwtTokenInput').value.trim();
+                if (token) {
+                    indicator.style.background = 'var(--success)';
+                } else {
+                    indicator.style.background = 'var(--error)';
+                }
+            } else {
+                indicator.style.background = 'var(--accent-primary)';
+            }
+        }
+
+        function onApiBaseChange() {
+            const val = document.getElementById('apiBaseSelect').value;
+            updateAuthStatusIndicator();
+            if (val === 'http://localhost:8000') {
+                const token = document.getElementById('jwtTokenInput').value.trim();
+                if (!token) {
+                    showToast('Bạn đã chọn Gateway API, vui lòng cấu hình JWT Token!', 'warning');
+                    toggleAuthModal(true);
+                    switchModalTab('gateway');
+                } else {
+                    showToast('Đã chuyển sang Gateway API (Port 8000)', 'success');
+                }
+            } else {
+                showToast('Đã chuyển sang Direct API (Port 8009)', 'success');
+            }
+        }
+
+        async function acquireTokenFromKeycloak() {
+            const username = document.getElementById('kcUsernameInput').value.trim();
+            const password = document.getElementById('kcPasswordInput').value.trim();
+            const kcUrl = document.getElementById('kcUrlInput').value.trim();
+            const clientId = document.getElementById('kcClientIdInput').value.trim();
+
+            if (!username || !password || !kcUrl || !clientId) {
+                showToast('Vui lòng nhập đầy đủ thông tin đăng nhập Keycloak!', 'error');
+                return;
+            }
+
+            const loginBtn = document.querySelector('[onclick="acquireTokenFromKeycloak()"]');
+            const originalText = loginBtn.innerHTML;
+            loginBtn.disabled = true;
+            loginBtn.innerHTML = '<i class="spin-loader"></i> Đang kết nối...';
+
+            try {
+                const tokenUrl = `${kcUrl.replace(/\/$/, '')}/realms/solavie/protocol/openid-connect/token`;
+                const params = new URLSearchParams();
+                params.append('client_id', clientId);
+                params.append('username', username);
+                params.append('password', password);
+                params.append('grant_type', 'password');
+                params.append('scope', 'openid email profile organization');
+
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: params
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error_description || errorData.error || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (data.access_token) {
+                    document.getElementById('jwtTokenInput').value = data.access_token;
+                    showToast('Đăng nhập Keycloak và nhận Token thành công!', 'success');
+
+                    // Auto switch to Gateway mode
+                    const apiBaseSelect = document.getElementById('apiBaseSelect');
+                    if (apiBaseSelect.value === "") {
+                        apiBaseSelect.value = "http://localhost:8000";
+                    }
+                    saveAuthModalSettings();
+                } else {
+                    throw new Error('Không nhận được access_token từ Keycloak');
+                }
+            } catch (err) {
+                console.error("Keycloak Login Error:", err);
+                showToast(`Đăng nhập thất bại: ${err.message}`, 'error');
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.innerHTML = originalText;
+            }
+        }
+
+        // Call status indicator on load
+        window.addEventListener('DOMContentLoaded', () => {
+            updateAuthStatusIndicator();
+            onModalRoleChange();
+        });
     </script>
+
+    <!-- ── AUTH/SECURITY MODAL ── -->
+    <div id="authModal" class="modal-overlay">
+        <div class="modal-container card"
+            style="width: 550px; padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem; border: 1px solid var(--border-color);">
+            <div
+                style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <i data-lucide="shield-check" style="color: var(--accent-primary);"></i>
+                    <h3
+                        style="font-family: 'Space Grotesk', sans-serif; font-size: 1.35rem; font-weight: 700; color: white;">
+                        Cấu hình Bảo mật & Xác thực</h3>
+                </div>
+                <button class="btn btn-secondary" onclick="toggleAuthModal(false)"
+                    style="padding: 0.25rem 0.5rem; border-radius: 50%; min-width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+                    <i data-lucide="x" size="18"></i>
+                </button>
+            </div>
+
+            <!-- Tab Controller inside Modal -->
+            <div
+                style="display: flex; gap: 0.5rem; background: rgba(0,0,0,0.2); padding: 0.25rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <button class="nav-btn active" id="directModeTabBtn" onclick="switchModalTab('direct')"
+                    style="flex: 1; text-align: center; justify-content: center; padding: 0.5rem;">Direct API (Cổng
+                    8009)</button>
+                <button class="nav-btn" id="gatewayModeTabBtn" onclick="switchModalTab('gateway')"
+                    style="flex: 1; text-align: center; justify-content: center; padding: 0.5rem;">Gateway API (Cổng
+                    8000)</button>
+            </div>
+
+            <!-- DIRECT MODE SETTINGS -->
+            <div id="directModeSettings" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div class="form-group">
+                    <label for="userRoleSelect">Vai trò của Người dùng (Mock Role)</label>
+                    <select id="userRoleSelect" onchange="onRoleChange()">
+                        <option value="admin">Admin (Quyền hạn tối cao *)</option>
+                        <option value="manager">Manager (Quản lý nghiệp vụ)</option>
+                        <option value="standard_user">Standard User (Nhân viên vận hành)</option>
+                        <option value="visitor" selected>Visitor (Khách vãng lai)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Danh sách Quyền (Permissions CSV sẽ ký mã hóa)</label>
+                    <textarea id="modalPermissionsDisplay" rows="2"
+                        style="font-family: monospace; font-size: 0.85rem; background: rgba(0,0,0,0.3); color: #c084fc; resize: none;"
+                        readonly>ai-core:configs:read</textarea>
+                </div>
+                <div class="form-group">
+                    <label for="gatewaySecretInput">Gateway Signing Secret (Khóa ký HMAC)</label>
+                    <input type="text" id="gatewaySecretInput"
+                        value="default-gateway-signing-secret-key-change-me-in-production"
+                        style="font-family: monospace; font-size: 0.85rem;">
+                </div>
+                <div
+                    style="font-size: 0.8rem; color: var(--text-muted); background: rgba(139, 92, 246, 0.05); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(139, 92, 246, 0.15);">
+                    <i data-lucide="info" size="14"
+                        style="vertical-align: middle; margin-right: 0.25rem; color: var(--accent-primary);"></i>
+                    Ở chế độ <strong>Direct API</strong>, Playground UI tự động tính toán chữ ký số HMAC-SHA256 trên
+                    trình duyệt để khớp với cơ chế xác thực <code>require_permission</code> của dịch vụ AI-CORE.
+                </div>
+            </div>
+
+            <!-- GATEWAY MODE SETTINGS -->
+            <div id="gatewayModeSettings" style="display: none; flex-direction: column; gap: 1rem;">
+                <div class="form-group">
+                    <label for="jwtTokenInput">JWT Bearer Token</label>
+                    <textarea id="jwtTokenInput" rows="4" placeholder="Nhập JWT Token từ Keycloak..."
+                        style="font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
+                </div>
+
+                <div class="card"
+                    style="padding: 1rem; background: rgba(255, 255, 255, 0.02); display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div
+                        style="display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                        <i data-lucide="key" size="16" style="color: var(--warning);"></i>
+                        <h4 style="font-size: 0.95rem; font-weight: 600; color: white;">Trình lấy Token từ Keycloak</h4>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="kcUsernameInput">Username</label>
+                            <input type="text" id="kcUsernameInput" value="admin-tenant-test-uuid"
+                                style="font-size: 0.85rem; padding: 0.5rem 0.75rem;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="kcPasswordInput">Password</label>
+                            <input type="password" id="kcPasswordInput" value="SolavieSecurePass123!"
+                                style="font-size: 0.85rem; padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: white; border-radius: 8px; outline: none;">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="kcUrlInput">Keycloak Base URL</label>
+                            <input type="text" id="kcUrlInput" value="http://localhost:8081"
+                                style="font-size: 0.85rem; padding: 0.5rem 0.75rem;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="kcClientIdInput">Client ID</label>
+                            <input type="text" id="kcClientIdInput" value="dashboard"
+                                style="font-size: 0.85rem; padding: 0.5rem 0.75rem;">
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="acquireTokenFromKeycloak()"
+                        style="padding: 0.5rem 1rem; font-size: 0.85rem; align-self: flex-end; margin-top: 0.5rem;">
+                        <i data-lucide="log-in" size="14"></i> Đăng nhập & Lấy Token
+                    </button>
+                </div>
+            </div>
+
+            <div
+                style="display: flex; justify-content: flex-end; gap: 0.75rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                <button class="btn btn-secondary" onclick="toggleAuthModal(false)">Hủy</button>
+                <button class="btn btn-primary" onclick="saveAuthModalSettings()">Áp dụng</button>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

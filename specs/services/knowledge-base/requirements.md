@@ -109,3 +109,14 @@ Dịch vụ RAG pipeline — upload tài liệu, semantic chunking, embedding, h
 4. THE Knowledge_Base SHALL extract `tenant_id` from the HTTP header `X-Tenant-ID` (or custom JWT claim) and strictly restrict search queries to that tenant's document chunks.
 5. THE Knowledge_Base SHALL return standard JSON-RPC 2.0 responses formatted as MCP tool response text.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Knowledge Base Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Knowledge Base Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:knowledge-base` khi startup.
+3. THE Knowledge Base Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:knowledge-base:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Knowledge Base Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:knowledge-base` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

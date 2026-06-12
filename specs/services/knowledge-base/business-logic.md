@@ -494,3 +494,36 @@ Incoming POST /api/v1/kb/mcp/messages (JSON-RPC)
 │      chứa nội dung văn bản (text)        │
 └──────────────────────────────────────────┘
 ```
+
+---
+
+## Business Logic — Service Self-Registration
+
+### 1. Logic Đăng ký (Startup Hook)
+* BƯỚC 1: Gọi hàm `_get_internal_ip()` sử dụng socket UDP giả lập kết nối tới `8.8.8.8:80` để lấy IP nội bộ của container.
+* BƯỚC 2: Định nghĩa chuỗi node dạng `{ip}:{port}`.
+* BƯỚC 3: Thực hiện pipeline ghi vào Redis:
+  * `SADD registry:service:knowledge-base "{ip}:{port}"`
+  * `SETEX registry:service:knowledge-base:node:{ip}:{port} 15 "alive"`
+* BƯỚC 4: Bắt đầu chạy vòng lặp heartbeat (mỗi 5 giây) để gửi lại gói tin `SETEX` và `SADD` để làm mới TTL.
+
+### 2. Logic Hủy đăng ký (Shutdown Hook)
+* BƯỚC 1: Dừng vòng lặp heartbeat.
+* BƯỚC 2: Thực hiện pipeline dọn dẹp Redis:
+  * `SREM registry:service:knowledge-base "{ip}:{port}"`
+  * `DEL registry:service:knowledge-base:node:{ip}:{port}"`
+
+
+---
+
+## Lifespan Registry Logic & Health API Flow (Tối ưu hóa)
+*   **Startup Flow:**
+    1. Khởi tạo ứng dụng và kết nối cơ sở dữ liệu.
+    2. Gọi hàm lấy IP động -> Định danh node `{ip}:{port}`.
+    3. Gửi lệnh `SADD` và `SETEX` lên Redis Registry. Nếu kết nối Redis bị lỗi, log Warning và tiếp tục chạy ứng dụng (Fail-safe), không được crash tiến trình chính.
+    4. Bắt đầu Interval Heartbeat mỗi 5 giây.
+*   **Shutdown Flow (Graceful):**
+    1. Nhận tín hiệu `SIGTERM` hoặc `SIGINT`.
+    2. Dừng Interval Heartbeat.
+    3. Gửi lệnh `SREM` và `DEL` lên Redis Registry.
+    4. Giải phóng các kết nối Database, Redis và exit.

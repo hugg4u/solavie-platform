@@ -42,6 +42,9 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
    - kb_chunk_size: số nguyên trong khoảng [128, 1024]
    - kb_chunk_overlap_percentage: số thực trong khoảng [5, 30]
    - rag_relevance_threshold: số thực trong khoảng [0.0, 1.0]
+   - cost_limit_usd: số thực trong khoảng [0.0, 100000.0] hoặc giá trị null (không giới hạn)
+   - cost_alert_threshold_percent: số nguyên trong khoảng [50, 100]
+   - cost_limit_policy: một trong các giá trị: notify_only, auto_downgrade, block
    - offline_mode_behavior: một trong các giá trị: lead_capture, ai_warning, offline_msg
    - handoff_routing_algorithm: một trong: round_robin, least_busy, queue_claim, hybrid
    - manual_to_auto_timeout_hours: số thực trong khoảng [1, 24]
@@ -74,6 +77,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 3. THE Tenant_Config SHALL publish event `config.updates` với payload: tenant_id, category, updated_fields (danh sách tên field đã thay đổi), updated_at
 4. IF ghi Redis cache thất bại sau khi lưu DB thành công, THEN THE Tenant_Config SHALL retry ghi Redis tối đa 3 lần với backoff 1s; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi và trả về HTTP 207 (Multi-Status) chỉ rõ DB đã lưu nhưng cache chưa đồng bộ
 5. IF publish Redis Pub/Sub thất bại, THEN THE Tenant_Config SHALL retry tối đa 3 lần; nếu vẫn thất bại, THE Tenant_Config SHALL log lỗi nhưng vẫn trả về HTTP 200 vì DB đã lưu thành công; services sẽ nhận config mới qua cache miss fallback
+6. WHEN Tenant Admin cập nhật các cấu hình bảo mật liên quan đến xác thực và phân quyền (bao gồm `auth_password_min_length`, `auth_max_login_attempts`, hoặc Custom Roles & Permissions), THE Tenant_Config SHALL đóng vai trò là Kafka Producer phát sự kiện (event) cấu hình bảo mật thay đổi tới Kafka topic `config.updates` (Luồng 3). Sự kiện này bắt buộc phải được gửi thành công (At-least-once delivery) với cơ chế retry để đảm bảo Auth Service (Sync Worker) tiêu thụ và cập nhật đồng bộ lên Keycloak Organization. Payload sự kiện bao gồm: `tenant_id`, `category` ("security_comments_notif" hoặc "roles"), `updated_fields`, `payload` (chứa chi tiết các giá trị cấu hình bảo mật mới hoặc vai trò được cập nhật) và `timestamp`.
 
 ### Requirement 4: gRPC Config Reader
 
@@ -97,6 +101,9 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
    - auto_handoff_on_negative: true
    - ai_vision_invoice_reading: true
    - rag_relevance_threshold: 0.50
+   - cost_limit_usd: null
+   - cost_alert_threshold_percent: 80
+   - cost_limit_policy: notify_only
    - offline_mode_behavior: lead_capture
    - handoff_routing_algorithm: hybrid
    - manual_to_auto_timeout_hours: 2
@@ -139,6 +146,7 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 8. THE Tenant_Config SHALL tự động gửi thông báo đồng bộ cấu hình qua kênh Redis Pub/Sub `config.updates` ngay khi Admin lưu thay đổi để AI Core cập nhật.
 9. THE Tenant_Config SHALL quản lý cấu hình danh sách các Custom MCP SSE Servers được phê duyệt (mcp_server_whitelist) dưới dạng danh sách JSON objects. Mỗi MCP Server trong danh sách chứa: server_name, sse_url, status (active/inactive), description, và danh sách custom_headers (để xác thực/giao tiếp an toàn).
 10. THE Tenant_Config SHALL validate định dạng sse_url của các Custom MCP Servers (bắt buộc bắt đầu bằng http:// hoặc https:// và kết thúc bằng /mcp hoặc tương tự), đồng thời chặn các ký tự lạ để phòng tránh SSRF và Command Injection.
+11. THE Tenant_Config SHALL cho phép cấu hình hạn mức chi phí LLM tối đa của Tenant trong 30 ngày (cost_limit_usd) dưới dạng số thực >= 0.0 hoặc null, ngưỡng phần trăm cảnh báo ngân sách (cost_alert_threshold_percent) từ [50, 100], và chính sách kiểm soát chi phí (cost_limit_policy) thuộc một trong các giá trị ['notify_only', 'auto_downgrade', 'block']. Khi cấu hình thay đổi, hệ thống phải thực hiện hot-reload cập nhật xuống Redis cache key `{tenant_id}:config:ai_kb` và thông báo qua kênh Redis Pub/Sub `config.updates`.
 
 ### Requirement 8: Cấu hình Chat Routing & Giờ làm việc (chat_routing)
 
@@ -220,3 +228,14 @@ Dịch vụ quản lý tập trung toàn bộ cấu hình hệ thống của Sol
 - **Client Scope Required:** Mọi request hợp lệ chuyển tiếp đến service này **PHẢI** mang OAuth2 client scope là `tenant-config`. Nếu thiếu scope, Gateway sẽ chặn và trả về `403 Forbidden` trước khi chuyển tiếp đến Tenant Config Service.
 - **Tenant Isolation:** Dữ liệu Tenant Config **PHẢI** được phân tách và truy vấn dựa trên giá trị header `X-Tenant-ID` do Gateway inject.
 
+---
+
+## Service Discovery (Self-Registration)
+
+**User Story:** Là một developer, tôi muốn service của mình tự động đăng ký và duy trì heartbeat trên Redis Registry khi khởi động để Gateway có thể định tuyến động chính xác mà không phụ thuộc vào hạ tầng.
+
+### Acceptance Criteria
+1. THE Tenant Config Service SHALL tự động phát hiện IP nội bộ của card mạng chính khi khởi động bằng cơ chế socket UDP ảo.
+2. THE Tenant Config Service SHALL đăng ký địa chỉ `IP:Port` của mình vào Redis Set `registry:service:tenant-config` khi startup.
+3. THE Tenant Config Service SHALL gửi tin nhắn sống (heartbeat) định kỳ mỗi 5 giây lên Redis key `registry:service:tenant-config:node:{ip}:{port}` với TTL là 15 giây.
+4. THE Tenant Config Service SHALL dọn dẹp (hủy đăng ký) thông tin của mình trên Redis Set `registry:service:tenant-config` và xóa key TTL khi nhận tín hiệu shutdown (`SIGTERM`/`SIGINT`).

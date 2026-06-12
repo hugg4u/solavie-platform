@@ -166,7 +166,9 @@ Hệ thống sử dụng mô hình Database-per-service (Mỗi dịch vụ một
 | `estimated_kwh_month`| NUMERIC(8,2)| NOT NULL| Sản lượng điện dự kiến trung bình tháng (kWh) |
 | `savings_percentage`| NUMERIC(5,2)| NOT NULL| Tỷ lệ tiết kiệm điện so với tiền điện cũ (%) |
 | `payback_years` | NUMERIC(4,2)| NOT NULL | Thời gian hoàn vốn đầu tư dự kiến (năm) |
-| `dms_file_id` | UUID | NULL | ID file Proposal PDF được xuất và lưu trong DMS |
+| `dms_file_id` | UUID | NULL, FK | ID file Proposal PDF được xuất và lưu trong DMS |
+| `pdf_presigned_url` | TEXT | NULL | Đường dẫn tải xuống tạm thời (Presigned URL) có TTL 15 phút |
+| `pdf_generated_at` | TIMESTAMP | NULL | Thời điểm xuất file PDF đề xuất đầu tư |
 | `created_at` | TIMESTAMP | DEFAULT NOW() | Thời gian tạo báo giá |
 
 #### 7. Bảng `crm_tickets` (Quản lý các Ticket bảo trì & vận hành O&M sau bán hàng)
@@ -400,6 +402,22 @@ Hệ thống sử dụng mô hình Database-per-service (Mỗi dịch vụ một
 | `updated_at` | TIMESTAMPTZ | DEFAULT NOW() | Thời gian cập nhật |
 
 ---
+
+### 8.2.8. Redis Stack (Semantic Cache DB)
+
+Hệ thống sử dụng Redis Stack làm cơ sở dữ liệu vector để lưu trữ và truy vấn ngữ nghĩa cho chatbot. Mỗi bản ghi cache được lưu trữ dưới dạng một Hash trên Redis DB 0.
+
+#### Lược đồ Redis Hash: `semantic_cache:{tenant_id}:{md5_hash_question}`
+| Field Name | Data Type | Description |
+|------------|-----------|-------------|
+| `tenant_id` | TAG | UUID/Định danh Tenant để cô lập đa thuê và lọc dữ liệu |
+| `use_case` | TAG | Phân nhóm cache (ví dụ: `chatbot`) |
+| `question` | TEXT | Nội dung câu hỏi thô của khách hàng |
+| `response` | TEXT | Nội dung câu trả lời tương ứng do LLM sinh ra |
+| `vector` | VECTOR | Vector embedding 384 chiều, kiểu FLOAT32 (HNSW Cosine) |
+| `created_at`| TEXT | Thời gian lưu cache (ISO8601) |
+
+---
 ## 8.3. Từ điển dữ liệu chi tiết (Data Dictionary Sample)
 
 Dưới đây là mô tả chi tiết kiểu dữ liệu và ràng buộc của các trường dữ liệu quan trọng trong bảng cấu hình `tenant_configs` thuộc trường `ai_kb_config` (JSONB):
@@ -411,6 +429,9 @@ Dưới đây là mô tả chi tiết kiểu dữ liệu và ràng buộc của 
 | `auto_handoff_on_negative` | Boolean | NOT NULL | Tự động chuyển Agent khi khách giận dữ | `true` |
 | `ai_vision_invoice_reading` | Boolean | NOT NULL | Bật tính năng OCR đọc ảnh hóa đơn tự động | `true` |
 | `rag_relevance_threshold` | Numeric | Range: `[0.0, 1.0]` | Ngưỡng điểm tìm kiếm tri thức RAG để bot phản hồi | `0.50` |
+| `cost_limit_usd` | Numeric | Range: `[0.0, 100000.0]`, NULL | Hạn mức chi phí LLM tối đa của Tenant trong 30 ngày (USD). Mặc định null là không giới hạn | `null` |
+| `cost_alert_threshold_percent` | Integer | Range: `[50, 100]` | Ngưỡng phần trăm chi phí tích lũy để kích hoạt cảnh báo ngân sách | `80` |
+| `cost_limit_policy` | String | Enum: `['notify_only', 'auto_downgrade', 'block']` | Chính sách xử lý khi chi phí tích lũy vượt quá 100% hạn mức cost_limit_usd | `'notify_only'` |
 | `security_comments_notif.dms_max_storage_mb` | Integer | Range: `[100, 100000]` | Hạn mức dung lượng lưu trữ tối đa của Tenant (Megabytes) | `5000` |
 | `security_comments_notif.dms_max_file_versions` | Integer | Range: `[1, 20]` | Số lượng phiên bản lưu trữ tối đa của một tệp | `5` |
 

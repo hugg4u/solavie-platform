@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  postgres-keycloak:
+  postgres-db:
     image: postgres:16
     container_name: solavie-postgres
     command: postgres -c max_connections=300
@@ -9,11 +9,15 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KONG_DB_PASSWORD: ${KONG_DB_PASSWORD}
+      USER_SERVICE_DB_PASSWORD: ${USER_SERVICE_DB_PASSWORD}
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
+      - ./scripts/init-databases.template.sql:/scripts/init-databases.template.sql
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 3s
@@ -28,7 +32,7 @@ services:
     command: start --optimized
     environment:
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak_db
+      KC_DB_URL: jdbc:postgresql://postgres-db:5432/keycloak_db
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KC_DB_PASSWORD}
       KC_DB_POOL_MAX_SIZE: 150
@@ -50,7 +54,7 @@ services:
       - "${KEYCLOAK_PORT:-8081}:8080"
       - "9000:9000"
     depends_on:
-      postgres-keycloak:
+      postgres-db:
         condition: service_healthy
 
   auth-sync-worker:
@@ -58,18 +62,21 @@ services:
     container_name: solavie-auth-sync-worker
     volumes:
       - ./services/auth/scripts:/app
-    command: sh -c "pip install redis requests && python /app/sync_worker.py"
+    command: sh -c "pip install redis requests kafka-python-ng && python /app/sync_worker.py"
     environment:
       REDIS_HOST: redis-master-1
       REDIS_PORT: 6379
       KEYCLOAK_URL: http://keycloak:8080
       KC_ADMIN: ${KC_ADMIN}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKER:-kafka:9092}
     depends_on:
       redis-master-1:
         condition: service_healthy
       keycloak:
         condition: service_started
+      kafka:
+        condition: service_healthy
 
   redis-master-1:
     image: redis:7-alpine
@@ -134,10 +141,7 @@ services:
     image: redis:7-alpine
     container_name: solavie-redis-cluster-creator
     command: >
-      sh -c "
-      sleep 5 &&
-      redis-cli --cluster create redis-master-1:6379 redis-master-2:6379 redis-master-3:6379 redis-replica-1:6379 redis-replica-2:6379 redis-replica-3:6379 --cluster-replicas 1 --cluster-yes
-      "
+      sh -c " sleep 5 && redis-cli --cluster create redis-master-1:6379 redis-master-2:6379 redis-master-3:6379 redis-replica-1:6379 redis-replica-2:6379 redis-replica-3:6379 --cluster-replicas 1 --cluster-yes "
     depends_on:
       - redis-master-1
       - redis-master-2
@@ -155,13 +159,19 @@ services:
       - kong_config:/etc/kong
     command: sh -c "pip install requests pyyaml && python /auth/scripts/provision_organization.py --keycloak-url http://keycloak:8080 --tenant-id $${DEFAULT_TENANT_ID:-tenant-test-uuid} --tenant-name 'Default Tenant' --admin-email admin@solavie.com --template-path /auth/templates/solavie-realm-template.json && python /app/generate_kong_config.py"
     environment:
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
       KONG_ISSUER_URL: ${KONG_ISSUER_URL:-http://localhost:8081/realms/solavie}
       TENANT_ID: ${DEFAULT_TENANT_ID:-tenant-test-uuid}
       RATE_LIMIT_MINUTE: ${RATE_LIMIT_MINUTE:-200}
       RATE_LIMIT_HOUR: ${RATE_LIMIT_HOUR:-5000}
       KC_ADMIN: ${KC_ADMIN}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis-master-1}
+      REDIS_PORT: ${REDIS_INTERNAL_PORT:-6379}
+      CHANNEL_CONNECTOR_URL: ${CHANNEL_CONNECTOR_INTERNAL_URL:-http://channel-connector:3001}
+      MOCK_API_INTERNAL_URL: ${MOCK_API_INTERNAL_URL:-http://127.0.0.1:80}
+      GATEWAY_FALLBACK_TARGET: ${GATEWAY_FALLBACK_TARGET:-127.0.0.1:8000}
+      GATEWAY_SIGNING_SECRET: ${GATEWAY_SIGNING_SECRET}
     depends_on:
       keycloak:
         condition: service_started
@@ -179,6 +189,11 @@ services:
       GATEWAY_SIGNING_SECRET: ${GATEWAY_SIGNING_SECRET}
       KONG_MASTER_REALM_TENANT_ID: ${KONG_MASTER_REALM_TENANT_ID:-solavie-system-master}
       KONG_NGINX_HTTP_LUA_SHARED_DICT: "perm_cache 10m; lua_shared_dict circuit_state 1m"
+      KONG_NGINX_PROXY_PROXY_PASS_HEADER: X-Accel-Buffering
+      TENANT_CONFIG_INTERNAL_URL: ${TENANT_CONFIG_INTERNAL_URL:-http://tenant-config:3006}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-tenant-test-uuid}
+      DEFAULT_RATE_LIMIT_MINUTE: ${RATE_LIMIT_MINUTE:-200}
+      DEFAULT_RATE_LIMIT_HOUR: ${RATE_LIMIT_HOUR:-5000}
     ports:
       - "${KONG_HTTP_PORT:-8000}:8000"
       - "${KONG_HTTPS_PORT:-8443}:8443"
@@ -202,25 +217,43 @@ services:
       - kong_config:/etc/kong
     command: sh -c "pip install redis requests pyyaml && python /app/sync_registry.py"
     environment:
-      REDIS_HOST: redis-master-1
-      REDIS_PORT: 6379
+      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis-master-1}
+      REDIS_PORT: ${REDIS_INTERNAL_PORT:-6379}
       KONG_ADMIN_URL: http://solavie-gateway:8001
       KONG_CONFIG_PATH: /etc/kong/kong.yml
       PYTHONUNBUFFERED: "1"
+      GATEWAY_FALLBACK_TARGET: ${GATEWAY_FALLBACK_TARGET:-127.0.0.1:8000}
+      REGISTRY_SYNC_POLL_INTERVAL: ${REGISTRY_SYNC_POLL_INTERVAL:-5}
     depends_on:
       kong:
         condition: service_started
       redis-master-1:
         condition: service_healthy
 
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: solavie-redis-stack
+    ports:
+      - "6399:6379"
+    volumes:
+      - redis_stack_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
   ai-core:
     build:
       context: ./services/ai-core
       dockerfile: Dockerfile
+    ports:
+      - "8009:8000"
     environment:
       - ENVIRONMENT=development
-      - AI_CORE_DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres-keycloak:5432/postgres
+      - AI_CORE_DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres-db:5432/postgres
       - REDIS_URL=redis://redis-master-1:6379
+      - REDIS_STACK_URL=redis://redis-stack:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
@@ -230,9 +263,11 @@ services:
       - ./services/ai-core:/app
     command: sh -c "python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/ai_core.proto && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
-      postgres-keycloak:
+      postgres-db:
         condition: service_healthy
       redis-master-1:
+        condition: service_healthy
+      redis-stack:
         condition: service_healthy
 
   user-service:
@@ -247,7 +282,7 @@ services:
       - /usr/src/app/node_modules
     environment:
       - PORT=3008
-      - DATABASE_URL=postgresql://solavie_user:solavie_user_password@postgres-keycloak:5432/solavie_user_db?schema=public
+      - DATABASE_URL=postgresql://solavie_user:${USER_SERVICE_DB_PASSWORD:-solavie_user_password}@postgres-db:5432/solavie_user_db?schema=public
       - REDIS_HOST=redis-master-1
       - REDIS_PORT=6379
       - KEYCLOAK_URL=http://keycloak:8080
@@ -255,16 +290,22 @@ services:
       - KC_ADMIN_PASSWORD=${KC_ADMIN_PASSWORD}
       - KEYCLOAK_WEBHOOK_SECRET=webhook_shared_secret
       - DASHBOARD_URL=http://localhost:3000
+      - GATEWAY_SIGNING_SECRET=${GATEWAY_SIGNING_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SDK_DISABLED=true
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:9092}
     ports:
       - "3008:3008"
       - "50058:50058"
     depends_on:
-      postgres-keycloak:
+      postgres-db:
         condition: service_healthy
       redis-master-1:
         condition: service_healthy
       keycloak:
         condition: service_started
+      kafka:
+        condition: service_healthy
 
   pgadmin:
     image: dpage/pgadmin4:8.9
@@ -278,8 +319,32 @@ services:
     volumes:
       - ./scripts/pgadmin-servers.json:/pgadmin4/servers.json
     depends_on:
-      postgres-keycloak:
+      postgres-db:
         condition: service_healthy
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: solavie-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
@@ -289,4 +354,5 @@ volumes:
   redis_replica_1_data:
   redis_replica_2_data:
   redis_replica_3_data:
+  redis_stack_data:
   kong_config:

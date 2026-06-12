@@ -112,3 +112,17 @@ ai_core_model_deprecation_fallbacks_total = Counter(
     "Total number of fallback events triggered by deprecated models",
     ["tenant_id", "provider", "deprecated_model", "fallback_model"]
 )
+
+# ── Semantic Cache Metrics ────────────────────────────────────────────────────
+ai_core_semantic_cache_hits_total = Counter(
+    "ai_core_semantic_cache_hits_total",
+    "Total number of semantic cache hits",
+    []  # No labels required by spec, or we can make it simple
+)
+
+ai_core_semantic_cache_misses_total = Counter(
+    "ai_core_semantic_cache_misses_total",
+    "Total number of semantic cache misses",
+    []
+)
+

@@ -40,6 +40,12 @@ TOOL_BREAKERS = {
     "translate": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
     "analyze_sentiment": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
     "calculate_lead_score": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "calculate_solar_roi": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "get_proposal_preview": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "create_om_ticket": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "get_ticket_status": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "create_lead_deal": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
+    "update_deal_stage": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60.0, exclude=EXCLUDED_TOOL_EXCEPTIONS),
 }
 
 class ToolExecutor:
@@ -107,7 +113,12 @@ class ToolExecutor:
             "generate_content": "content__generate_content",
             "adapt_content": "content__adapt_content",
             "get_social_trends": "content__get_social_trends",
-            "calculate_solar_roi": "crm__calculate_solar_roi",
+            "calculate_solar_roi": "solar_calc__calculate_solar_roi",
+            "get_proposal_preview": "solar_calc__get_proposal_preview",
+            "create_om_ticket": "om_ticket__create_om_ticket",
+            "get_ticket_status": "om_ticket__get_ticket_status",
+            "create_lead_deal": "crm__create_lead_deal",
+            "update_deal_stage": "crm__update_deal_stage",
         }
         
         full_mcp_name = mcp_mapping.get(tool_name)

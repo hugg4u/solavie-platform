@@ -69,14 +69,18 @@ Sau khi đối chiếu với mô hình vận hành của Solavie, kiến trúc h
 | **TimescaleDB Database** (Lưu trữ metrics & logs time-series) | 1 | 1.5 GB | 1.5 GB |
 | **Qdrant Vector Database** (Chứa và index dữ liệu tri thức) | 1 | 800 MB | 0.8 GB |
 | **Apache Kafka + KRaft** (JVM broker điều phối event-driven) | 1 | 1.5 GB | 1.5 GB |
-| **Redis Cache** (Lưu session, config hot-reload) | 1 | 400 MB | 0.4 GB |
+| **Redis Stack** (RediSearch & Caching) | 1 | 800 MB | 0.8 GB |
 | **MinIO Storage** (S3 compatible server) | 1 | 300 MB | 0.3 GB |
 | **Hệ điều hành & OS agents** (Docker daemon, Logging, Monitoring) | - | 1.6 GB | 1.6 GB |
-| **TỔNG CỘNG TIÊU THỤ (DỰ KIẾN)** | **24 Containers** | - | **≈ 13.0 GB** |
+| **TỔNG CỘNG TIÊU THỤ (DỰ KIẾN)** | **24 Containers** | - | **≈ 13.4 GB** |
 
 *   **Khuyến nghị về RAM**:
     *   **Cấu hình tối thiểu (Minimum)**: **16 GB RAM** (đủ để chạy hệ thống ở mức tải thấp, môi trường staging/dev).
-    *   **Cấu hình khuyến nghị (Recommended)**: **32 GB RAM** (đảm bảo hệ thống vận hành êm ái, có đủ dung lượng buffer khi có traffic spike hoặc khi chạy chiến dịch broadcast tin nhắn hàng loạt).
+    *   **Cấu hình khuyến nghị (Recommended)**: **32 GB RAM** (đảm bảo hệ thống vận hành êm ái, có đủ dung lượng buffer khi có traffic spike hoặc khi chạy chiến dịch công suất cao, và tránh tình trạng Redis Stack bị OOM khi nạp nhiều Vector Index).
+    *   **Thuyết minh tính toán Redis Stack & CRM Service**: 
+        - Dịch vụ `crm-service` dự kiến chạy NestJS tiêu thụ khoảng 200MB RAM ở mức idle/moderate load.
+        - Redis Stack tiêu thụ khoảng 800MB RAM, trong đó 400MB dành cho các cấu trúc cache dữ liệu truyền thống (Session, Config cache) và 400MB dành riêng cho module RediSearch nạp index vector HNSW của Semantic Caching. Công thức ước tính RAM cho vector index: `RAM ≈ Số lượng Vector * (Kích thước Vector * 4 bytes + Overhead cấu trúc HNSW)`. Với vector 384 dimensions của model `multilingual-e5-small` và `M=16`, mỗi bản ghi cache tiêu tốn khoảng 2.5KB RAM cho vector index. Hệ thống có thể mở rộng lưu trữ tới 100,000 cache entries trên RAM mà không vượt quá hạn mức 800MB.
+
 
 ### 3.2. Yêu cầu về CPU (vCPU Cores)
 - **Tối thiểu**: **4 Cores vCPU**.
@@ -128,11 +132,22 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 
 ---
 
+### Đề xuất 4: Tối ưu hóa Service Discovery & API Gateway
+
+Để chuẩn bị cho hệ thống vận hành an toàn và tin cậy ở môi trường Product (scale multi-instance), hệ thống Solavie đã thiết lập lộ trình tối ưu hóa API Gateway và cơ chế phát hiện dịch vụ tự động:
+1.  **Kong Gateway chạy ở chế độ DB-Mode:** Loại bỏ chế độ DB-less để tránh việc phải liên tục reload file YAML tĩnh gây nghẽn CPU và gián đoạn kết nối. Các cập nhật targets của Upstream sẽ được ghi nhận trực tiếp vào Database và có hiệu lực tức thời thông qua REST Admin API.
+2.  **Kong Native Healthchecks:** Cấu hình Active và Passive Healthchecks trực tiếp trên các Upstream của Kong. Thiết lập cơ chế tự động cô lập (Circuit Breaker) các node lỗi ngay lập tức mà không cần chờ daemon đồng bộ cập nhật.
+3.  **Sync Daemon Bất đồng bộ (Async):** Viết lại daemon đồng bộ `sync_registry.py` sử dụng cơ chế `asyncio` để truy vấn Redis và cập nhật targets song song, tối ưu hóa I/O khi hệ thống scale lên hàng trăm instances.
+4.  **Cải tiến thuật toán lấy IP:** Cập nhật Registry Client ở các microservices để ưu tiên nhận diện IP động từ biến môi trường `CONTAINER_IP` hoặc quét card mạng vật lý của OS trước khi thực hiện fallback kết nối ngoài (UDP 8.8.8.8), đảm bảo hoạt động tốt trong mạng kín.
+
+---
+
 
 ## 4. MA TRẬN PHÂN TÍCH RỦI RO KIẾN TRÚC TRONG THỰC TẾ
 
 | Rủi ro kiến trúc | Tác động | Giải pháp phòng ngừa & Tối ưu |
 |------------------|----------|-------------------------------|
+| **Trễ nhịp đồng bộ của Service Discovery tự chế khiến request lỗi (W8)** | **Nghiêm trọng (High)** | Kích hoạt Active/Passive Healthcheck và cơ chế `retries` (tối thiểu 5 lần) trực tiếp trên Upstream của Kong để Gateway tự động ngắt node lỗi và định tuyến lại request tức thời mà không gây lỗi cho Client. |
 | **Tấn công Leo thang Đặc quyền (Privilege Escalation) do thiếu check Realm Master (W1)** | **Nghiêm trọng (Critical)** | Cấu hình `KONG_MASTER_REALM_TENANT_ID` và cập nhật `handler.lua` kiểm tra nghiêm ngặt `tenant_id` của Master Realm trước khi cấp quyền wildcard `*` cho các role `system`/`system_admin`. (Đã triển khai vá lỗi ở Gateway). |
 | **Nghẽn cổng IO do tệp tin video nặng** | **Cao (Medium)** | Media Processor giới hạn tệp video khảo sát tối đa 100MB. Cấu hình luồng ghi đệm SSD thay vì ghi RAM để tránh crash container do OOM. |
 | **Keycloak sập hiệu năng khi số lượng Realms tăng vượt quá 100 (W5)** | **Nghiêm trọng (High)** | Lập kế hoạch di trú kiến trúc từ Multi-realm sang Keycloak Organizations (v26+) khi số tenant vượt ngưỡng 100 để gom về 1 realm chia sẻ clients, cô lập theo org_id. |
@@ -140,6 +155,7 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 | **Database chính bị chậm do phình to dữ liệu** | **Cao (Medium)** | Thực thi triệt để Data Retention Policy: logs cũ hơn 30 ngày và tin nhắn cũ hơn 90 ngày bắt buộc phải dọn dẹp sạch khỏi database hoạt động để đưa sang file Parquet trên S3. |
 | **Độ trễ đồng nhất thông tin phân quyền giữa các Kong Workers (W3)** | **Trung bình (Medium)** | Thiết lập cơ chế Cache Versioning trên Redis kết hợp Pub/Sub để phát tín hiệu xóa L1 local cache của từng Worker ngay khi phân quyền thay đổi, giảm trễ xuống < 5s. |
 | **Sập đổ dây chuyền (Cascade Failure) khi Config Service offline (W6)** | **Trung bình (Medium)** | Áp dụng Circuit Breaker cho API Fallback của Gateway, tự động chuyển sang degraded mode (dùng L1 local cache cũ) thay vì trả về 503 Fail-Secure ngay lập tức. |
+| **Mất mát dữ liệu hoặc quá tải RAM trên Redis Stack do RediSearch Index (W7)** | **Cao (Medium)** | Thiết lập cấu hình giới hạn kích thước memory tối đa cho index vector và sử dụng thuật toán HNSW với parameters phù hợp (M=16, ef_construction=200) để cân bằng giữa RAM tiêu thụ và độ chính xác search. |
 
 ---
 
@@ -148,3 +164,36 @@ Tách biệt để tăng tính bảo mật, tránh trường hợp container ứ
 1.  **Về kiến trúc**: Hệ thống 18 dịch vụ hiện tại rất đầy đủ và bảo mật tốt, sẵn sàng cho mô hình SaaS sau này.
 2.  **Khuyến nghị về hạ tầng (Phase 1)**: Dựa trên quyết định giữ nguyên các microservices độc lập nhằm triệt tiêu rủi ro quản lý modular monolith chéo, Solavie **PHẢI** chuẩn bị hạ tầng máy chủ tối thiểu **16 GB RAM (Khuyến nghị 32 GB RAM)**, **8 vCPUs** và **150 GB NVMe SSD** để vận hành ổn định 24 containers ở môi trường thực tế (Tham khảo cấu hình chi tiết tại Mục 3).
 3.  **Khuyến nghị tính năng ưu tiên**: Bổ sung đặc tả các trường dữ liệu khảo sát (Site Survey) vào CRM và thiết lập API tích hợp với HelioScope/OpenSolar để tự động hóa khâu tạo Proposal gửi khách hàng ngay trong giai đoạn tiếp theo.
+
+---
+
+## 6. PHÂN TÍCH TÍNH CHỊU LỖI VÀ AN TOÀN DỮ LIỆU CỦA 6 LUỒNG KAFKA
+
+Việc chuyển đổi và thiết lập cơ chế Event-Driven qua Apache Kafka mang lại các thuộc tính chịu lỗi và an toàn dữ liệu vượt trội cho hệ thống Solavie, giải quyết triệt để các rủi ro của cơ chế Redis Pub/Sub thô trước đây:
+
+### 6.1. Chi tiết phân tích từng luồng
+
+1. **Luồng 1: Identity Sync (`auth.events.user`)**
+   * **Rủi ro trước đây:** Sử dụng Redis Pub/Sub thô. Nếu `User Service` bị crash hoặc offline trong lúc Keycloak cập nhật người dùng, sự kiện đồng bộ sẽ bị mất vĩnh viễn, dẫn đến lệch trạng thái tài khoản.
+   * **Giải pháp Kafka:** Kafka lưu trữ log sự kiện bền vững trên đĩa với cấu hình retention 7 ngày. `User Service` sử dụng Consumer Group cố định (`user-identity-sync-group`). Khi `User Service` offline và online trở lại, nó sẽ tự động đọc tiếp từ offset được commit gần nhất, đảm bảo tính nhất quán cuối cùng (Eventual Consistency) mà không mất mát bất kỳ sự kiện nào.
+
+2. **Luồng 2: Token Revocation (`token.revoked`)**
+   * **Tính chịu lỗi:** Sự kiện thu hồi token được `User Service` publish chắc chắn vào Kafka. `Auth Sync Worker` consume và cập nhật vào Redis Blacklist. Nếu Redis bị sập và khởi động lại, `Auth Sync Worker` có thể replay các event trong khoảng thời gian hiệu lực của token từ Kafka để tái thiết lập Blacklist trên Redis, đảm bảo Kong Gateway luôn check đúng.
+
+3. **Luồng 3: Config Sync (`config.updates`)**
+   * **An toàn cấu hình:** Các thay đổi về cấu hình Tenant được gửi an toàn qua Kafka. Nếu Keycloak Admin API bị timeout hoặc rate limit, `Auth Sync Worker` sẽ retry consume với cơ chế Exponential Backoff thay vì drop sự kiện, đảm bảo cấu hình bảo mật cuối cùng luôn được Keycloak cập nhật chính xác.
+
+4. **Luồng 4: Scheduler Queue (`scheduler.post.due`, `content.published`, `scheduler.post.failed`)**
+   * **Bảo đảm đăng tải:** Giảm tải cho Scheduler Service bằng cách đẩy tin đăng bài vào Kafka. Nếu `Content Service` bị quá tải hoặc API mạng xã hội phản hồi chậm, hàng đợi Kafka đóng vai trò là bộ đệm (Backpressure buffer), điều tiết tốc độ consume của consumer mà không làm nghẽn Scheduler.
+
+5. **Luồng 5: Notification Queue (`notification.send`)**
+   * **Không bỏ sót thông báo:** Việc gửi OTP hoặc email khẩn cấp cho khách hàng không được phép thất bại âm thầm. Kafka topic lưu giữ tin nhắn giúp `Notification Service` có thể retry gửi lại nhiều lần thông qua các nhà cung cấp khác nhau nếu nhà cung cấp chính (ví dụ: Twilio) bị gián đoạn.
+
+6. **Luồng 6: Audit Logs (`audit.events`)**
+   * **Độ bền dữ liệu tối đa:** Log bảo mật được ghi nhận bất đồng bộ qua Kafka, không làm ảnh hưởng đến hiệu năng của business transactions. Ngay cả khi cụm ClickHouse/Elasticsearch lưu trữ log bị sập, Kafka broker vẫn lưu trữ logs an toàn để ghi nhận lại sau khi hệ thống lưu trữ phục hồi.
+
+### 6.2. Các cơ chế đảm bảo an toàn & vận hành cụ thể
+* **Manual Offset Commit:** Các consumer được cấu hình `enable.auto.commit = false`. Offset chỉ được commit sau khi consumer đã ghi nhận dữ liệu thành công vào database hoặc dịch vụ đích. Nếu có lỗi xảy ra trong quá trình xử lý, message sẽ không bị mất và sẽ được xử lý lại (At-least-once delivery).
+* **Idempotency Key:** Mỗi message Kafka đều đi kèm một UUID duy nhất trong payload làm key. Consumer sẽ thực hiện kiểm tra trùng lặp (Idempotent check) trước khi xử lý để tránh các lỗi ghi nhận trùng lặp dữ liệu trong trường hợp Kafka gửi lại message do chập chờn mạng.
+* **Dead Letter Queue (DLQ):** Khi một thông điệp bị lỗi định dạng hoặc không thể xử lý sau nhiều lần retry, nó sẽ được định tuyến sang topic DLQ tương ứng (ví dụ: `auth.events.user.dlq`) để quản trị viên kiểm tra thủ công, tránh làm tắc nghẽn (head-of-line blocking) toàn bộ partition.
+

@@ -172,3 +172,43 @@ GET /metrics  → Prometheus format
 | TokenRefreshFailing | token_refresh{status=failed} > 0 for 10m | critical |
 | WebhookProcessingSlow | webhook_processing p95 > 1s | warning |
 | KafkaPublishFailing | kafka_publish{status=failed} > 0 for 5m | critical |
+
+---
+
+## Service Discovery Audit Logs
+
+Khi `ServiceRegistryClient` thực hiện đăng ký hoặc hủy đăng ký trên Redis, nó phải ghi nhận log có cấu trúc JSON như sau:
+
+### 1. Log Đăng ký Thành công (register)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "channel-connector",
+  "message": "Service node registration completed",
+  "action": "register",
+  "node_ip": "172.20.0.10",
+  "node_port": 3001,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:channel-connector"
+  }
+}
+```
+
+### 2. Log Hủy Đăng ký Thành công (deregister)
+```json
+{
+  "timestamp": "2026-06-10T00:00:00.000Z",
+  "level": "info",
+  "service": "channel-connector",
+  "message": "Service node deregistration completed",
+  "action": "deregister",
+  "node_ip": "172.20.0.10",
+  "node_port": 3001,
+  "status": "success",
+  "context": {
+    "redis_key": "registry:service:channel-connector"
+  }
+}
+```
