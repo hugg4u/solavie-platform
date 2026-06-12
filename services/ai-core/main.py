@@ -26,8 +26,10 @@ from db.database import engine, Base
 from core.sync_listener import sync_listener_loop
 from core.dynamic_cost import dynamic_cost_sync_loop
 from api.v1.router import api_router
+from api.v1.endpoints.completions import gateway
 
 logger = logging.getLogger("solavie.ai_core")
+
 
 app = FastAPI(title="Solavie AI-CORE Service", version="1.0.0")
 
@@ -91,6 +93,13 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize semantic cache index: {e}")
 
+    # 7. Start Kafka Event Publisher
+    try:
+        await gateway.conversation_publisher.start()
+    except Exception as e:
+        logger.error(f"Failed to start conversation publisher: {e}")
+
+
 
 
 @app.on_event("shutdown")
@@ -117,6 +126,13 @@ async def shutdown_event():
         await stop_grpc()
     except Exception as e:
         logger.error(f"Error stopping gRPC server on shutdown: {e}")
+
+    # 3. Stop Kafka Event Publisher
+    try:
+        await gateway.conversation_publisher.stop()
+    except Exception as e:
+        logger.error(f"Error stopping conversation publisher on shutdown: {e}")
+
 
 
 # ── System endpoints ──

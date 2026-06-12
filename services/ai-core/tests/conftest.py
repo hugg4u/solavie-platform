@@ -2,9 +2,9 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock
 
-# Globally mock redis clients to prevent network requests during tests
 import core.redis_client
 core.redis_client.redis_client = AsyncMock()
+core.redis_client.redis_client.get.return_value = None
 core.redis_client.redis_pubsub_client = AsyncMock()
 
 from db.database import engine

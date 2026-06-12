@@ -51,6 +51,7 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
                 content=result.get("final_response", ""),
                 model_used=result.get("model_used", "routed"),
                 confidence=result.get("confidence", 1.0),
+                max_similarity_score=result.get("max_similarity_score", 0.0),
                 usage=ai_core_pb2.TokenUsage(
                     prompt_tokens=result.get("total_tokens_used", 0) // 2,
                     completion_tokens=result.get("total_tokens_used", 0) // 2,
@@ -58,6 +59,7 @@ class AICoreServicer(ai_core_pb2_grpc.AICoreServicer):
                     cache_hit=False
                 )
             )
+
         except Exception as e:
             logger.error(f"gRPC Complete method failed: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)

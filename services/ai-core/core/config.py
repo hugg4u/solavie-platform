@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Encryption & Sync Configuration
     ENCRYPTION_SECRET_KEY: str | None = "solavie_super_secret_master_key_change_me_in_production"
     TENANT_CONFIG_SERVICE_URL: str = "http://tenant-config-service:3006"
+    KAFKA_BROKERS: str = "localhost:9092"
+
     
     # External Service URLs
     TAVILY_API_URL: str = "https://api.tavily.com/search"

@@ -126,3 +126,11 @@ ai_core_semantic_cache_misses_total = Counter(
     []
 )
 
+# ── Event Publisher Metrics ───────────────────────────────────────────────────
+ai_core_publisher_failures_total = Counter(
+    "ai_core_publisher_failures_total",
+    "Total number of Kafka message publishing failures after retries",
+    ["tenant_id", "topic"]
+)
+
+

@@ -53,6 +53,9 @@ class AgentState(TypedDict):
     trace_id: str
     nli_grounding_score: float
     nli_status: str
+    standalone_query: str
+    query_rewritten: bool
+
 
 
 class AgentOrchestrator:
@@ -171,7 +174,9 @@ class AgentOrchestrator:
             tenant_id=tenant_id,
             use_case=use_case,
             messages=masked_messages,
-            tools=tools if tools else None
+            tools=tools if tools else None,
+            publish_event=False,
+            conversation_id=trace_id
         )
 
         prompt_tokens_added = llm_result.get("prompt_tokens", 0)
@@ -198,6 +203,11 @@ class AgentOrchestrator:
             "model_used": llm_result.get("model_used", "routed"),
             "provider": llm_result.get("provider", "openai")
         }
+
+        if iteration_count == 0:
+            update["standalone_query"] = llm_result.get("standalone_query", last_user_msg)
+            update["query_rewritten"] = llm_result.get("query_rewritten", False)
+
 
         # ── If no tool calls: finalize response ──
         tool_calls = llm_result.get("tool_calls")
@@ -607,8 +617,11 @@ class AgentOrchestrator:
             "pii_map": {},
             "trace_id": trace_id,
             "nli_grounding_score": 1.0,
-            "nli_status": "skip"
+            "nli_status": "skip",
+            "standalone_query": "",
+            "query_rewritten": False
         }
+
 
         # Inject system prompt
         if system_prompt:
@@ -663,6 +676,66 @@ class AgentOrchestrator:
                 }
             )
 
+            # Publish Conversation Event for chatbot usecase
+            rag_sim = 0.0
+            if use_case == "chatbot":
+                original_user_query = ""
+                for msg in messages:
+                    if msg.get("role") == "user":
+                        original_user_query = msg.get("content", "")
+                        break
+                
+                rag_count = 0
+                for msg in final_state.get("messages", []):
+                    if msg.get("role") == "tool" and msg.get("name") == "knowledge_base_search":
+                        content_str = msg.get("content", "")
+                        if content_str:
+                            try:
+                                data = json.loads(content_str)
+                                if isinstance(data, dict):
+                                    if "max_similarity_score" in data:
+                                        rag_sim = max(rag_sim, float(data["max_similarity_score"]))
+                                    docs = data.get("documents", [])
+                                    if isinstance(docs, list):
+                                        rag_count = max(rag_count, len(docs))
+                                        for doc in docs:
+                                            if isinstance(doc, dict) and "similarity_score" in doc:
+                                                rag_sim = max(rag_sim, float(doc["similarity_score"]))
+                            except Exception:
+                                if "matching documents" in content_str or "brochure" in content_str:
+                                    rag_sim = max(rag_sim, 0.75)
+                                    rag_count = max(rag_count, 2)
+
+                tools_called = final_state.get("tools_called", [])
+                chatbot_action = "reply"
+                handoff_reason = None
+                if "handoff_to_agent" in tools_called:
+                    chatbot_action = "handoff"
+                    for msg in final_state.get("messages", []):
+                        if msg.get("role") == "tool" and msg.get("name") == "handoff_to_agent":
+                            handoff_reason = msg.get("content", "")
+                elif "create_lead_deal" in tools_called:
+                    chatbot_action = "lead_capture"
+                elif final_response and ("xác nhận" in final_response.lower() or "confirm" in final_response.lower()):
+                    chatbot_action = "clarify"
+
+                await self.gateway.publish_conversation_event(
+                    tenant_id=tenant_id,
+                    conversation_id=trace_id,
+                    user_query=original_user_query,
+                    standalone_query=final_state.get("standalone_query") or original_user_query,
+                    query_rewritten=final_state.get("query_rewritten", False),
+                    rag_similarity_score=rag_sim,
+                    rag_docs_count=rag_count,
+                    nli_grounding_score=final_state.get("nli_grounding_score", 1.0),
+                    confidence_score=final_state.get("confidence", 1.0),
+                    chatbot_action=chatbot_action,
+                    handoff_reason=handoff_reason,
+                    cache_hit=final_state.get("cache_hit", False),
+                    model_used=final_state.get("model_used", "routed"),
+                    latency_ms=final_state.get("latency_ms", 0)
+                )
+
             return {
                 "final_response": final_response,
                 "tools_called": final_state.get("tools_called", []),
@@ -678,8 +751,11 @@ class AgentOrchestrator:
                 "provider": final_state.get("provider", "openai"),
                 "nli_grounding_score": final_state.get("nli_grounding_score", 1.0),
                 "nli_status": final_state.get("nli_status", "skip"),
-                "trace_id": trace_id
+                "trace_id": trace_id,
+                "max_similarity_score": rag_sim
             }
+
+
 
         except Exception as e:
             logger.error(

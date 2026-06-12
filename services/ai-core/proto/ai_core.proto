@@ -38,6 +38,7 @@ message CompletionResponse {
   TokenUsage usage = 3;
   float latency_ms = 4;
   float confidence = 5;
+  float max_similarity_score = 6;
 }
 
 message CompletionChunk {
