@@ -267,6 +267,20 @@ async def fetch_and_sync_config(tenant_id: str, use_case: str | None = None) -> 
 
         await db.commit()
 
+        # Sync LLM Cost Limits to Redis
+        cost_limit_usd = config_data.get("cost_limit_usd")
+        cost_alert_threshold_percent = config_data.get("cost_alert_threshold_percent", 80)
+        cost_limit_policy = config_data.get("cost_limit_policy", "notify_only")
+        
+        limits_key = f"tenant:{tenant_uuid}:limits"
+        limits_data = {
+            "cost_limit_usd": cost_limit_usd,
+            "cost_alert_threshold_percent": cost_alert_threshold_percent,
+            "cost_limit_policy": cost_limit_policy
+        }
+        await redis_client.set(limits_key, json.dumps(limits_data))
+        logger.info(f"Synchronized cost limits to Redis for tenant {tenant_uuid}: {limits_data}")
+
         if active_keys_before == 0:
             stmt_count_after = select(APIKeyConfig).where(
                 APIKeyConfig.tenant_id == tenant_uuid,

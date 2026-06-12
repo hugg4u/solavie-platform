@@ -17,7 +17,7 @@ from core.crypto import decrypt_key
 from core.circuit_breaker import call_async
 from core.redis_client import redis_client
 from db.database import SessionLocal
-from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig
+from db.models import LLMRouteConfig, APIKeyConfig, SystemDefaultRouteConfig, LLMUsageLog
 from core.utils import is_vietnamese
 from gateway.semantic_cache import SemanticCacheManager
 
@@ -148,6 +148,147 @@ class LLMGateway:
         if settings.ENVIRONMENT == "development":
             litellm._turn_on_debug()
 
+        # Local Memory Cache for optimization and resiliency
+        self._local_routes_cache = {}
+        self._local_credentials_cache = {}
+        self._local_limits_cache = {}
+        self._local_accumulated_cost_cache = {}
+        self._active_sync_tasks = set()
+
+    async def _get_accumulated_cost(self, tenant_uuid: uuid.UUID) -> float:
+        """Calculates 30-day accumulated cost for the tenant, cached for 10 seconds."""
+        tenant_str = str(tenant_uuid)
+        now = time.time()
+        
+        # 1. Đọc từ Local Memory Cache
+        if tenant_str in self._local_accumulated_cost_cache:
+            cache_data = self._local_accumulated_cost_cache[tenant_str]
+            if now < cache_data["expires_at"]:
+                return cache_data["data"]
+
+        cache_key = f"tenant:{tenant_uuid}:accumulated_cost"
+        
+        # 2. Đọc từ Redis Cache
+        try:
+            cached = await redis_client.get(cache_key)
+            if cached is not None:
+                cost_val = float(cached)
+                # Cập nhật Local Memory Cache
+                self._local_accumulated_cost_cache[tenant_str] = {
+                    "data": cost_val,
+                    "expires_at": now + 10.0
+                }
+                return cost_val
+        except Exception as e:
+            logger.error(f"Redis error getting accumulated cost: {e}")
+            # Nếu Redis sập, dùng giá trị cũ trong Local Memory Cache (Grace Period)
+            if tenant_str in self._local_accumulated_cost_cache:
+                logger.info(f"Redis down. Fallback to expired local accumulated cost for tenant {tenant_str}")
+                return self._local_accumulated_cost_cache[tenant_str]["data"]
+
+        # 3. Đọc từ PostgreSQL Database
+        try:
+            from datetime import datetime, timezone, timedelta
+            from sqlalchemy import func
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            async with SessionLocal() as db:
+                stmt = select(func.sum(LLMUsageLog.cost_usd)).where(
+                    LLMUsageLog.tenant_id == tenant_uuid,
+                    LLMUsageLog.created_at >= cutoff
+                )
+                res = await db.execute(stmt)
+                cost = float(res.scalar() or 0.0)
+                
+                # Lưu Local Cache
+                self._local_accumulated_cost_cache[tenant_str] = {
+                    "data": cost,
+                    "expires_at": now + 10.0
+                }
+                
+                # Lưu Redis Cache (try-except)
+                try:
+                    await redis_client.setex(cache_key, 10, str(cost))
+                except Exception as re:
+                    logger.error(f"Failed to set accumulated cost in Redis: {re}")
+                    
+                return cost
+        except Exception as e:
+            logger.error(f"Database error getting accumulated cost: {e}")
+            if tenant_str in self._local_accumulated_cost_cache:
+                return self._local_accumulated_cost_cache[tenant_str]["data"]
+            return 0.0
+
+    def _trigger_background_sync(self, tenant_id: str) -> None:
+        """Triggers a background task to sync tenant config from Tenant Config Service."""
+        if tenant_id in self._active_sync_tasks:
+            return
+            
+        logger.info(f"Cache miss limits for tenant {tenant_id}. Triggering non-blocking background sync...")
+        self._active_sync_tasks.add(tenant_id)
+        
+        from core.sync_listener import fetch_and_sync_config
+        
+        task = asyncio.create_task(fetch_and_sync_config(tenant_id))
+        
+        def _on_sync_complete(t):
+            self._active_sync_tasks.discard(tenant_id)
+            if t.exception():
+                logger.error(f"Background sync failed for tenant {tenant_id}: {t.exception()}")
+            else:
+                logger.info(f"Background sync completed successfully for tenant {tenant_id}")
+                
+        task.add_done_callback(_on_sync_complete)
+
+    async def check_cost_limit(self, tenant_id: str) -> None:
+        """Helper to check cost limits and raise ValueError if policy is block."""
+        if not tenant_id:
+            return
+            
+        now = time.time()
+        limits_json = None
+        
+        # 1. Đọc từ Local Memory Cache
+        if tenant_id in self._local_limits_cache:
+            cache_data = self._local_limits_cache[tenant_id]
+            if now < cache_data["expires_at"]:
+                limits_json = cache_data["data"]
+
+        # 2. Đọc từ Redis Cache
+        if limits_json is None:
+            limits_key = f"tenant:{tenant_id}:limits"
+            try:
+                limits_raw = await redis_client.get(limits_key)
+                if limits_raw:
+                    try:
+                        val_str = limits_raw.decode("utf-8") if isinstance(limits_raw, bytes) else limits_raw
+                        limits_json = json.loads(val_str)
+                        self._local_limits_cache[tenant_id] = {
+                            "data": limits_json,
+                            "expires_at": now + 10.0
+                        }
+                    except Exception as le:
+                        logger.error(f"Error parsing limits JSON: {le}")
+                else:
+                    # Cache Miss limits (limits_raw is None)
+                    # Kích hoạt background sync
+                    self._trigger_background_sync(tenant_id)
+            except Exception as re:
+                logger.error(f"Redis error getting limits for tenant {tenant_id}: {re}")
+                # Fallback dùng Local Cache cũ (Grace Period)
+                if tenant_id in self._local_limits_cache:
+                    logger.info(f"Redis down. Fallback to expired local limits cache for tenant {tenant_id}")
+                    limits_json = self._local_limits_cache[tenant_id]["data"]
+
+        if limits_json and limits_json.get("cost_limit_usd") is not None:
+            cost_limit = float(limits_json["cost_limit_usd"])
+            cost_policy = limits_json.get("cost_limit_policy", "notify_only")
+            
+            tenant_uuid = safe_uuid(tenant_id)
+            accumulated_cost = await self._get_accumulated_cost(tenant_uuid)
+            if accumulated_cost >= cost_limit and cost_policy == "block":
+                raise ValueError("LLM usage limit exceeded for this tenant.")
+
+
 
     def _is_model_in_registry(self, model_name: str, provider: str) -> bool:
         """Checks if a model name is active/registered in the LiteLLM registry."""
@@ -276,54 +417,152 @@ class LLMGateway:
     async def get_routing(self, tenant_id: str, use_case: str) -> Dict[str, Any]:
         """Gets routing configuration from Redis cache, database, or fallback map."""
         tenant_uuid = safe_uuid(tenant_id)
-        if not tenant_uuid:
-            return DEFAULT_MODEL_ROUTING.get(use_case, DEFAULT_MODEL_ROUTING["chatbot"])
-
-        cache_key = f"{tenant_uuid}:config:llm_model_routing:{use_case}"
+        now = time.time()
         
-        # 1. Check Redis Cache
-        try:
-            cached = await redis_client.get(cache_key)
-            if cached:
-                return json.loads(cached)
-        except Exception as e:
-            logger.error(f"Redis get routing error: {e}")
+        async def _get_base_route():
+            if not tenant_uuid:
+                return DEFAULT_MODEL_ROUTING.get(use_case, DEFAULT_MODEL_ROUTING["chatbot"]).copy()
 
-        # 2. Query Postgres
-        try:
-            async with SessionLocal() as db:
-                stmt = select(LLMRouteConfig).where(
-                    LLMRouteConfig.tenant_id == tenant_uuid,
-                    LLMRouteConfig.use_case == use_case,
-                    LLMRouteConfig.is_active == True
-                )
-                result = await db.execute(stmt)
-                config = result.scalar_one_or_none()
-                
-                if config:
-                    route_dict = {
-                        "primary_model": config.primary_model,
-                        "fallback_model": config.fallback_model,
-                        "provider": config.provider,
-                        "fallback_provider": config.fallback_provider,
-                        "temperature": float(config.temperature),
-                        "max_tokens": config.max_tokens
+            local_cache_key = f"{tenant_id}:{use_case}"
+            # 1. Check Local Memory Cache
+            if local_cache_key in self._local_routes_cache:
+                cache_data = self._local_routes_cache[local_cache_key]
+                if now < cache_data["expires_at"]:
+                    return cache_data["data"].copy()
+
+            cache_key = f"{tenant_uuid}:config:llm_model_routing:{use_case}"
+            
+            # 2. Check Redis Cache
+            route_dict = None
+            try:
+                cached = await redis_client.get(cache_key)
+                if cached:
+                    route_dict = json.loads(cached)
+                    self._local_routes_cache[local_cache_key] = {
+                        "data": route_dict,
+                        "expires_at": now + 30.0
                     }
-                    # Save to Redis Cache (TTL 5 minutes)
-                    await redis_client.setex(cache_key, 300, json.dumps(route_dict))
-                    return route_dict
-        except Exception as e:
-            logger.error(f"Database query routing error: {e}")
+                    return route_dict.copy()
+            except Exception as e:
+                logger.error(f"Redis get routing error: {e}")
+                # Fallback to expired local cache if Redis is down
+                if local_cache_key in self._local_routes_cache:
+                    logger.info(f"Redis down. Fallback to expired local routes cache for {local_cache_key}")
+                    return self._local_routes_cache[local_cache_key]["data"].copy()
 
-        # 3. Fallback to default route configuration from system defaults DB
-        try:
-            fallback_route = await self.get_system_default_route(tenant_id, use_case)
-            await redis_client.setex(cache_key, 300, json.dumps(fallback_route))
-            return fallback_route
-        except Exception as e:
-            logger.error(f"Error resolving dynamic fallback route: {e}")
-            fallback_route = DEFAULT_MODEL_ROUTING.get(use_case, DEFAULT_MODEL_ROUTING["chatbot"])
-            return fallback_route
+            # 3. Query Postgres
+            try:
+                async with SessionLocal() as db:
+                    stmt = select(LLMRouteConfig).where(
+                        LLMRouteConfig.tenant_id == tenant_uuid,
+                        LLMRouteConfig.use_case == use_case,
+                        LLMRouteConfig.is_active == True
+                    )
+                    result = await db.execute(stmt)
+                    config = result.scalar_one_or_none()
+                    
+                    if config:
+                        route_dict = {
+                            "primary_model": config.primary_model,
+                            "fallback_model": config.fallback_model,
+                            "provider": config.provider,
+                            "fallback_provider": config.fallback_provider,
+                            "temperature": float(config.temperature),
+                            "max_tokens": config.max_tokens
+                        }
+                        
+                        # Save to Local Cache
+                        self._local_routes_cache[local_cache_key] = {
+                            "data": route_dict,
+                            "expires_at": now + 30.0
+                        }
+                        
+                        # Save to Redis Cache (TTL 5 minutes)
+                        try:
+                            await redis_client.setex(cache_key, 300, json.dumps(route_dict))
+                        except Exception as re:
+                            logger.error(f"Failed to set route config in Redis: {re}")
+                            
+                        return route_dict.copy()
+            except Exception as e:
+                logger.error(f"Database query routing error: {e}")
+
+            # 4. Fallback to default route configuration from system defaults DB
+            try:
+                fallback_route = await self.get_system_default_route(tenant_id, use_case)
+                
+                # Save to Local Cache
+                self._local_routes_cache[local_cache_key] = {
+                    "data": fallback_route,
+                    "expires_at": now + 30.0
+                }
+                
+                # Save to Redis Cache
+                try:
+                    await redis_client.setex(cache_key, 300, json.dumps(fallback_route))
+                except Exception as re:
+                    logger.error(f"Failed to set fallback route in Redis: {re}")
+                    
+                return fallback_route.copy()
+            except Exception as e:
+                logger.error(f"Error resolving dynamic fallback route: {e}")
+                fallback_route = DEFAULT_MODEL_ROUTING.get(use_case, DEFAULT_MODEL_ROUTING["chatbot"])
+                return fallback_route.copy()
+
+        route_dict = await _get_base_route()
+        
+        # Apply cost limits & policies check
+        if tenant_id:
+            limits_json = None
+            
+            # 1. Đọc từ Local Memory Cache
+            if tenant_id in self._local_limits_cache:
+                cache_data = self._local_limits_cache[tenant_id]
+                if now < cache_data["expires_at"]:
+                    limits_json = cache_data["data"]
+
+            # 2. Đọc từ Redis Cache
+            if limits_json is None:
+                limits_key = f"tenant:{tenant_id}:limits"
+                try:
+                    limits_raw = await redis_client.get(limits_key)
+                    if limits_raw:
+                        try:
+                            val_str = limits_raw.decode("utf-8") if isinstance(limits_raw, bytes) else limits_raw
+                            limits_json = json.loads(val_str)
+                            self._local_limits_cache[tenant_id] = {
+                                "data": limits_json,
+                                "expires_at": now + 10.0
+                            }
+                        except Exception as le:
+                            logger.error(f"Error parsing limits JSON: {le}")
+                    else:
+                        # Cache Miss limits (limits_raw is None)
+                        # Kích hoạt background sync
+                        self._trigger_background_sync(tenant_id)
+                except Exception as re:
+                    logger.error(f"Redis error getting limits for tenant {tenant_id}: {re}")
+                    # Fallback dùng Local Cache cũ (Grace Period)
+                    if tenant_id in self._local_limits_cache:
+                        logger.info(f"Redis down. Fallback to expired local limits cache for tenant {tenant_id}")
+                        limits_json = self._local_limits_cache[tenant_id]["data"]
+
+            if limits_json and limits_json.get("cost_limit_usd") is not None:
+                cost_limit = float(limits_json["cost_limit_usd"])
+                cost_policy = limits_json.get("cost_limit_policy", "notify_only")
+                
+                t_uuid = safe_uuid(tenant_id)
+                accumulated_cost = await self._get_accumulated_cost(t_uuid)
+                if accumulated_cost >= cost_limit:
+                    if cost_policy == "block":
+                        raise ValueError("LLM usage limit exceeded for this tenant.")
+                    elif cost_policy == "auto_downgrade":
+                        # Force model to fallback model
+                        route_dict["primary_model"] = route_dict.get("fallback_model") or self._get_cheapest_model_from_registry(route_dict["provider"])
+                        route_dict["provider"] = route_dict.get("fallback_provider") or route_dict["provider"]
+                        logger.warning(f"Cost limit exceeded. Auto-downgraded routing to model '{route_dict['primary_model']}' for tenant {tenant_id}")
+                        
+        return route_dict
 
 
     # ── Sentinel UUID representing system-level (global) config ──
@@ -364,23 +603,41 @@ class LLMGateway:
         self, tenant_uuid: uuid.UUID, provider: str
     ) -> Dict[str, Any] | None:
         """
-        Internal helper: look up credentials from Redis cache then Postgres
-        for a specific (tenant_uuid, provider) pair.
-        Returns dict with api_key/api_base, or None if not found.
+        Internal helper: look up credentials from Local Memory Cache, Redis cache, then Postgres.
         """
+        tenant_str = str(tenant_uuid)
+        local_cache_key = f"{tenant_str}:{provider}"
+        now = time.time()
+        
+        # 1. Check Local Memory Cache
+        if local_cache_key in self._local_credentials_cache:
+            cache_data = self._local_credentials_cache[local_cache_key]
+            if now < cache_data["expires_at"]:
+                return cache_data["data"]
+
         cache_key = f"{tenant_uuid}:config:api_keys:{provider}"
 
-        # Check Redis Cache
+        # 2. Check Redis Cache
         try:
             cached = await redis_client.get(cache_key)
             if cached:
                 cached_data = json.loads(cached)
                 decrypted = decrypt_key(cached_data.get("api_key_encrypted"))
-                return {"api_key": decrypted, "api_base": cached_data.get("api_base")}
+                res_data = {"api_key": decrypted, "api_base": cached_data.get("api_base")}
+                
+                self._local_credentials_cache[local_cache_key] = {
+                    "data": res_data,
+                    "expires_at": now + 30.0
+                }
+                return res_data
         except Exception as e:
             logger.error(f"Redis get credentials error for {cache_key}: {e}")
+            # Fallback to expired local cache if Redis is down
+            if local_cache_key in self._local_credentials_cache:
+                logger.info(f"Redis down. Fallback to expired local credentials cache for {local_cache_key}")
+                return self._local_credentials_cache[local_cache_key]["data"]
 
-        # Query Postgres
+        # 3. Query Postgres
         try:
             async with SessionLocal() as db:
                 stmt = select(APIKeyConfig).where(
@@ -396,13 +653,28 @@ class LLMGateway:
                         "api_key_encrypted": config.api_key_encrypted,
                         "api_base": config.api_base
                     }
-                    await redis_client.setex(cache_key, 300, json.dumps(cache_dict))
+                    
                     decrypted = decrypt_key(config.api_key_encrypted)
-                    return {"api_key": decrypted, "api_base": config.api_base}
+                    res_data = {"api_key": decrypted, "api_base": config.api_base}
+                    
+                    # Save to Local Cache
+                    self._local_credentials_cache[local_cache_key] = {
+                        "data": res_data,
+                        "expires_at": now + 30.0
+                    }
+                    
+                    # Save to Redis Cache (TTL 5 minutes)
+                    try:
+                        await redis_client.setex(cache_key, 300, json.dumps(cache_dict))
+                    except Exception as re:
+                        logger.error(f"Failed to set credentials in Redis: {re}")
+                        
+                    return res_data
         except Exception as e:
             logger.error(f"Database query credentials error for {cache_key}: {e}")
 
         return None
+
 
     async def compress_history(self, tenant_id: str, messages: List[Dict[str, Any]], keep_recent: int = 5) -> List[Dict[str, Any]]:
         """Compress older chat history to save tokens using a background LLM summarizer with Redis caching."""

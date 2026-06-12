@@ -25,10 +25,49 @@ import json
 async def check_and_trigger_cost_alert(tenant_uuid: uuid.UUID, db: AsyncSession):
     """
     AC 5.4: Monitor accumulated 30-day LLM cost for the tenant, compare it with 
-    their cost limit config, and trigger system alerts if usage is >= 80% of limit.
+    their cost limit config, and trigger system alerts if usage is >= threshold.
     """
+    import time
+    tenant_str = str(tenant_uuid)
+    now = time.time()
+    limits_json = None
+    
+    # 1. Get tenant limits config from Local Memory Cache of gateway or Redis
+    if tenant_str in gateway._local_limits_cache:
+        cache_data = gateway._local_limits_cache[tenant_str]
+        if now < cache_data["expires_at"]:
+            limits_json = cache_data["data"]
+
+    if limits_json is None:
+        try:
+            limits_raw = await redis_client.get(f"tenant:{tenant_uuid}:limits")
+            if limits_raw:
+                val_str = limits_raw.decode("utf-8") if isinstance(limits_raw, bytes) else limits_raw
+                limits_json = json.loads(val_str)
+                gateway._local_limits_cache[tenant_str] = {
+                    "data": limits_json,
+                    "expires_at": now + 10.0
+                }
+        except Exception as re:
+            logger.error(f"Cost Alert: Redis error reading limits: {re}")
+            if tenant_str in gateway._local_limits_cache:
+                limits_json = gateway._local_limits_cache[tenant_str]["data"]
+
+    if not limits_json:
+        logger.info(f"Cost Alert: No limit configured or error reading limits for tenant {tenant_uuid}. Skipping check.")
+        return
+        
     try:
-        # 1. Calculate 30-day accumulated cost
+        cost_limit = limits_json.get("cost_limit_usd")
+        if cost_limit is None:
+            logger.info(f"Cost Alert: Limit is null (unlimited) for tenant {tenant_uuid}. Skipping check.")
+            return
+            
+        cost_limit = float(cost_limit)
+        warning_threshold = float(limits_json.get("cost_alert_threshold_percent", 80))
+        cost_policy = limits_json.get("cost_limit_policy", "notify_only")
+
+        # 2. Calculate 30-day accumulated cost
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         stmt = select(func.sum(LLMUsageLog.cost_usd)).where(
             LLMUsageLog.tenant_id == tenant_uuid,
@@ -36,45 +75,40 @@ async def check_and_trigger_cost_alert(tenant_uuid: uuid.UUID, db: AsyncSession)
         )
         result = await db.execute(stmt)
         total_cost = float(result.scalar() or 0.0)
-        
-        # 2. Get tenant limits / tier to determine cost_limit_usd
-        tier = "standard"
+
+        # 3. Update Redis accumulated cost cache (10s TTL)
         try:
-            tier_bytes = await redis_client.get(f"tenant:{tenant_uuid}:tier")
-            if tier_bytes:
-                tier = tier_bytes.decode("utf-8").strip().lower()
+            await redis_client.setex(f"tenant:{tenant_uuid}:accumulated_cost", 10, str(total_cost))
         except Exception as re:
-            logger.error(f"Cost Alert: Error reading tier from Redis: {re}")
+            logger.error(f"Failed to set accumulated cost in Redis for alert: {re}")
             
-        tier_defaults = {
-            "free": 10.0,
-            "standard": 100.0,
-            "enterprise": 1000.0
+        # Update Local Cache
+        gateway._local_accumulated_cost_cache[tenant_str] = {
+            "data": total_cost,
+            "expires_at": now + 10.0
         }
-        cost_limit = tier_defaults.get(tier, 100.0)
         
-        # Look up custom cost limit from Redis limits config
-        try:
-            limits_raw = await redis_client.get(f"tenant:{tenant_uuid}:limits")
-            if limits_raw:
-                limits_json = json.loads(limits_raw.decode("utf-8"))
-                if "cost_limit_usd" in limits_json:
-                    cost_limit = float(limits_json["cost_limit_usd"])
-        except Exception:
-            pass
-            
-        # 3. Check threshold (80%)
-        if total_cost >= 0.8 * cost_limit:
+        # 4. Check warning threshold
+        if total_cost >= (warning_threshold / 100.0) * cost_limit:
+            tier = "standard"
+            try:
+                tier_bytes = await redis_client.get(f"tenant:{tenant_uuid}:tier")
+                if tier_bytes:
+                    tier = tier_bytes.decode("utf-8").strip().lower()
+            except Exception as re:
+                logger.error(f"Cost Alert: Error reading tier from Redis: {re}")
+                
             logger.warning(
                 f"[Cost Alert] Tenant {tenant_uuid} (tier: {tier}) has reached "
                 f"{total_cost/cost_limit:.1%} of their 30-day cost limit: "
-                f"{total_cost:.4f} / {cost_limit:.2f} USD"
+                f"{total_cost:.4f} / {cost_limit:.2f} USD (Policy: {cost_policy})"
             )
             # Increment Prometheus counter
             ai_core_cost_alerts_total.labels(tenant_id=str(tenant_uuid), tier=tier).inc()
             
     except Exception as e:
         logger.error(f"Error in cost alert verification: {e}")
+
 
 
 
@@ -122,6 +156,8 @@ async def completions(
         return result
     except ValueError as e:
         logger.warning(f"Validation/Configuration error: {e}")
+        if "LLM usage limit exceeded" in str(e):
+            raise HTTPException(status_code=429, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Completions endpoint error: {e}")
@@ -136,6 +172,9 @@ async def generate_embeddings(
 ):
     tenant_uuid = get_effective_tenant(x_tenant_id, request.tenant_id)
     model = request.model or "text-embedding-3-small"
+    
+    # Check cost limit first
+    await gateway.check_cost_limit(str(tenant_uuid))
     
     # Determine provider (default to openai for text-embedding)
     provider = "openai"
@@ -174,6 +213,8 @@ async def generate_embeddings(
         }
     except ValueError as e:
         logger.warning(f"Validation/Configuration error in embeddings: {e}")
+        if "LLM usage limit exceeded" in str(e):
+            raise HTTPException(status_code=429, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Embeddings API error: {e}")
@@ -241,6 +282,8 @@ async def summarize_text(
         }
     except ValueError as e:
         logger.warning(f"Validation/Configuration error in summarize: {e}")
+        if "LLM usage limit exceeded" in str(e):
+            raise HTTPException(status_code=429, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Summarization API error: {e}")
